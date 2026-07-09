@@ -1,0 +1,158 @@
+"""Outbound message router — overrides WhatsAppMessage.notify() to route via OpenWA."""
+import frappe
+import requests
+import json
+
+from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message import (
+    WhatsAppMessage,
+)
+from frappe_whatsapp.utils import format_number
+
+
+class OverrideWhatsAppMessage(WhatsAppMessage):
+    """Intercepts all outbound messages and routes OpenWA-enabled accounts through the gateway."""
+
+    def notify(self, data: dict) -> None:
+        """Intercept before Meta API call. ``data`` is the fully-built Meta payload."""
+        account = frappe.get_doc("WhatsApp Account", self.whatsapp_account)
+
+        if account and account.get("openwa_enabled"):
+            # Interactive / flow have no OpenWA equivalent — fall back to Meta
+            if self.content_type in ("interactive", "flow"):
+                frappe.log_error(
+                    title="OpenWA Bridge: Fallback to Meta",
+                    message=(
+                        f"Msg {self.name}: '{self.content_type}' unsupported by OpenWA. "
+                        "Routing via Meta API."
+                    ),
+                )
+                return super().notify(data)
+
+            try:
+                return self._send_via_openwa(account, data)
+            except Exception as e:
+                frappe.log_error(
+                    title="OpenWA Transmission Failure",
+                    message=f"Failed sending message {self.name}: {str(e)}",
+                )
+                frappe.throw(f"OpenWA Routing Failed: {str(e)}")
+
+        return super().notify(data)
+
+    # ------------------------------------------------------------------
+    # OpenWA dispatchers
+    # ------------------------------------------------------------------
+
+    def _send_via_openwa(self, account: "WhatsAppAccount", meta_payload: dict) -> None:  # noqa: F821
+        """Translate and dispatch the payload to the OpenWA Gateway REST API."""
+        base_url = account.get("openwa_base_url").strip("/")
+        session_id = account.get("openwa_session_id")
+        api_key = account.get_password("openwa_api_key")
+
+        raw_number = format_number(self.to)
+        chat_id = f"{raw_number}@c.us" if "@c.us" not in raw_number else raw_number
+
+        headers = {
+            "Content-Type": "application/json",
+            "X-API-Key": api_key,
+        }
+
+        message_body = self.message
+        if self.template:
+            message_body = self._translate_template_payload()
+
+        # --- routing by content type + reply context ---
+        if self.is_reply and self.reply_to_message_id:
+            if self.content_type != "text" and not self.template:
+                frappe.throw(
+                    "OpenWA bridge does not support media replies. "
+                    "Send the media and reply separately, or use a Meta account."
+                )
+            resp = requests.post(
+                f"{base_url}/api/sessions/{session_id}/messages/reply",
+                json={
+                    "chatId": chat_id,
+                    "quotedMessageId": self.reply_to_message_id,
+                    "text": message_body,
+                },
+                headers=headers,
+                timeout=15,
+            )
+
+        elif self.content_type == "text" or self.template:
+            resp = requests.post(
+                f"{base_url}/api/sessions/{session_id}/messages/send-text",
+                json={"chatId": chat_id, "text": message_body},
+                headers=headers,
+                timeout=15,
+            )
+
+        elif self.content_type in ("image", "video", "audio", "document"):
+            link = meta_payload.get(self.content_type, {}).get("link", "")
+            payload: dict = {"chatId": chat_id, "url": link}
+            if self.content_type != "audio":
+                payload["caption"] = message_body
+            endpoint = f"send-{self.content_type}"
+            resp = requests.post(
+                f"{base_url}/api/sessions/{session_id}/messages/{endpoint}",
+                json=payload,
+                headers=headers,
+                timeout=30,
+            )
+
+        elif self.content_type == "reaction":
+            resp = requests.post(
+                f"{base_url}/api/sessions/{session_id}/messages/react",
+                json={
+                    "chatId": chat_id,
+                    "messageId": meta_payload.get("reaction", {}).get("message_id"),
+                    "emoji": self.message,
+                },
+                headers=headers,
+                timeout=15,
+            )
+
+        elif self.content_type == "location":
+            frappe.throw(
+                "Location bridging is currently a stub — requires latitude/longitude payload mapping."
+            )
+
+        elif self.content_type == "contact":
+            frappe.throw(
+                "Contact bridging is currently a stub — requires vCard payload mapping."
+            )
+
+        else:
+            frappe.throw(
+                f"Content type '{self.content_type}' cannot be routed via OpenWA."
+            )
+
+        resp.raise_for_status()
+        res_data = resp.json()
+
+        if "messageId" in res_data:
+            frappe.db.set_value(
+                "WhatsApp Message",
+                self.name,
+                {"message_id": res_data["messageId"], "status": "Sent"},
+            )
+
+    # ------------------------------------------------------------------
+    # Template translation
+    # ------------------------------------------------------------------
+
+    def _translate_template_payload(self) -> str:
+        """Convert structured Meta templates into substituted OpenWA strings."""
+        template_doc = frappe.get_doc("WhatsApp Template", self.template)
+        body_text = template_doc.template
+
+        params: list[str] = []
+        if self.body_param:
+            params = list(json.loads(self.body_param).values())
+        elif self.template_parameters:
+            params = json.loads(self.template_parameters)
+
+        for i, val in enumerate(params, 1):
+            body_text = body_text.replace(f"{{{{{i}}}}}", str(val))
+
+        return body_text

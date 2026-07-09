@@ -198,6 +198,25 @@ use_json_request_body = True
 # 	"Task": "openwa_bridge.task.get_dashboard_data"
 # }
 
+# Override DocType Classes
+# -------------------------
+# Routes outbound messages through OpenWA when the account is configured for it.
+
+override_doctype_class = {
+	"WhatsApp Message": "openwa_bridge.whatsapp_message.OverrideWhatsAppMessage"
+}
+
+# Fixtures
+# --------
+# Track custom fields injected into upstream DocTypes so they survive migrations.
+
+fixtures = [
+	{
+		"dt": "Custom Field",
+		"filters": [["dt", "=", "WhatsApp Account"]],
+	}
+]
+
 # exempt linked doctypes from being automatically cancelled
 #
 # auto_cancel_exempted_doctypes = ["Auto Repeat"]
