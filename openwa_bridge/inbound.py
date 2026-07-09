@@ -28,7 +28,7 @@ def receive_openwa_message() -> dict[str, str]:
     payload = frappe.request.get_json()
 
     if not payload or "event" not in payload:
-        frappe.throw("Invalid webhook payload", statusCode=400)
+        frappe.throw("Invalid webhook payload")
 
     session_id: str = payload.get("sessionId", "")
     event_type: str = payload.get("event", "")
@@ -44,9 +44,9 @@ def receive_openwa_message() -> dict[str, str]:
             if not verify_openwa_signature(raw_body, secret, signature):
                 frappe.log_error(
                     title="OpenWA HMAC Verification Failed",
-                    message=f"Session: {session_id}, Sig prefix: {signature[:30]}...",
+                    message=f"Session: {session_id}, Sig: '{signature}', Body prefix: {raw_body[:100]}",
                 )
-                frappe.throw("Signature verification failed", statusCode=403)
+                frappe.throw("Signature verification failed")
 
     # ── Idempotency check ──
     idempotency_key = frappe.request.headers.get("X-OpenWA-Idempotency-Key", "")
@@ -54,7 +54,7 @@ def receive_openwa_message() -> dict[str, str]:
         cache_key = f"openwa_idempotent:{idempotency_key}"
         if frappe.cache().get(cache_key):
             return {"status": "duplicate"}
-        frappe.cache().set(cache_key, 1, expires_in=3600)
+        frappe.cache().set(cache_key, 1, ex=3600)
 
     # ── Route to handler ──
     try:

@@ -113,13 +113,66 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             )
 
         elif self.content_type == "location":
-            frappe.throw(
-                "Location bridging is currently a stub — requires latitude/longitude payload mapping."
+            location_data = json.loads(message_body) if message_body else {}
+            lat = location_data.get("latitude")
+            lng = location_data.get("longitude")
+            if lat is None or lng is None:
+                frappe.throw(
+                    "Location messages require JSON in the message field: "
+                    '{"latitude": -6.2088, "longitude": 106.8456, "description": "...", "address": "..."}'
+                )
+            resp = requests.post(
+                f"{base_url}/api/sessions/{session_id}/messages/send-location",
+                json={
+                    "chatId": chat_id,
+                    "latitude": float(lat),
+                    "longitude": float(lng),
+                    "description": location_data.get("description", ""),
+                    "address": location_data.get("address", ""),
+                },
+                headers=headers,
+                timeout=15,
             )
 
         elif self.content_type == "contact":
-            frappe.throw(
-                "Contact bridging is currently a stub — requires vCard payload mapping."
+            contact_data = json.loads(message_body) if message_body else {}
+            contact_name = contact_data.get("contact_name", "")
+            contact_number = contact_data.get("contact_number", "")
+            if not contact_name or not contact_number:
+                frappe.throw(
+                    "Contact messages require JSON in the message field: "
+                    '{"contact_name": "John Doe", "contact_number": "+1234567890"}'
+                )
+            resp = requests.post(
+                f"{base_url}/api/sessions/{session_id}/messages/send-contact",
+                json={
+                    "chatId": chat_id,
+                    "contactName": contact_name,
+                    "contactNumber": contact_number,
+                },
+                headers=headers,
+                timeout=15,
+            )
+
+        elif self.content_type == "order":
+            poll_data = json.loads(message_body) if message_body else {}
+            poll_name = poll_data.get("name", "")
+            poll_options = poll_data.get("options", [])
+            if not poll_name or len(poll_options) < 2:
+                frappe.throw(
+                    "Poll messages require JSON in the message field: "
+                    '{"name": "Question?", "options": ["Option 1", "Option 2"], "allowMultipleAnswers": false}'
+                )
+            resp = requests.post(
+                f"{base_url}/api/sessions/{session_id}/messages/send-poll",
+                json={
+                    "chatId": chat_id,
+                    "name": poll_name,
+                    "options": poll_options,
+                    "allowMultipleAnswers": poll_data.get("allowMultipleAnswers", False),
+                },
+                headers=headers,
+                timeout=15,
             )
 
         else:
@@ -143,8 +196,13 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
 
     def _translate_template_payload(self) -> str:
         """Convert structured Meta templates into substituted OpenWA strings."""
-        template_doc = frappe.get_doc("WhatsApp Template", self.template)
-        body_text = template_doc.template
+        try:
+            template_doc = frappe.get_doc("WhatsApp Templates", self.template)
+            body_text = template_doc.template
+        except Exception:
+            body_text = frappe.db.get_value(
+                "WhatsApp Templates", self.template, "template"
+            ) or ""
 
         params: list[str] = []
         if self.body_param:

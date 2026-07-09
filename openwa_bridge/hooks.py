@@ -203,7 +203,9 @@ use_json_request_body = True
 # Routes outbound messages through OpenWA when the account is configured for it.
 
 override_doctype_class = {
-	"WhatsApp Message": "openwa_bridge.whatsapp_message.OverrideWhatsAppMessage"
+	"WhatsApp Message": "openwa_bridge.whatsapp_message.OverrideWhatsAppMessage",
+	"WhatsApp Templates": "openwa_bridge.whatsapp_templates.OverrideWhatsAppTemplates",
+	"WhatsApp Notification": "openwa_bridge.whatsapp_notification.OverrideWhatsAppNotification",
 }
 
 # Fixtures
