@@ -7,6 +7,7 @@ from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message i
     WhatsAppMessage,
 )
 from frappe_whatsapp.utils import format_number
+from openwa_bridge.utils import openwa_api, frappe_to_openwa_vars
 
 
 class OverrideWhatsAppMessage(WhatsAppMessage):
@@ -57,13 +58,42 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             "X-API-Key": api_key,
         }
 
-        message_body = self.message
+        # --- template via OpenWA send-template endpoint ---
         if self.template:
-            message_body = self._translate_template_payload()
+            openwa_tid = frappe.db.get_value("WhatsApp Templates", self.template, "openwa_template_id")
+            if openwa_tid:
+                params: dict[str, str] = {}
+                if self.body_param:
+                    try:
+                        params = {f"param{k}": v for k, v in json.loads(self.body_param).items()}
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                elif self.template_parameters:
+                    try:
+                        raw = json.loads(self.template_parameters)
+                        params = {f"param{i + 1}": v for i, v in enumerate(raw)}
+                    except (json.JSONDecodeError, TypeError):
+                        pass
 
-        # --- routing by content type + reply context ---
-        if self.is_reply and self.reply_to_message_id:
-            if self.content_type != "text" and not self.template:
+                send_payload = {"chatId": chat_id, "templateId": openwa_tid, "vars": params}
+                frappe.logger().info(f"OpenWA send-template payload: {json.dumps(send_payload, default=str)}")
+                resp = requests.post(
+                    f"{base_url}/api/sessions/{session_id}/messages/send-template",
+                    json=send_payload,
+                    headers=headers,
+                    timeout=15,
+                )
+            else:
+                message_body = self._translate_template_payload()
+                resp = requests.post(
+                    f"{base_url}/api/sessions/{session_id}/messages/send-text",
+                    json={"chatId": chat_id, "text": message_body},
+                    headers=headers,
+                    timeout=15,
+                )
+
+        elif self.is_reply and self.reply_to_message_id:
+            if self.content_type != "text":
                 frappe.throw(
                     "OpenWA bridge does not support media replies. "
                     "Send the media and reply separately, or use a Meta account."
@@ -73,16 +103,16 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 json={
                     "chatId": chat_id,
                     "quotedMessageId": self.reply_to_message_id,
-                    "text": message_body,
+                    "text": self.message,
                 },
                 headers=headers,
                 timeout=15,
             )
 
-        elif self.content_type == "text" or self.template:
+        elif self.content_type == "text":
             resp = requests.post(
                 f"{base_url}/api/sessions/{session_id}/messages/send-text",
-                json={"chatId": chat_id, "text": message_body},
+                json={"chatId": chat_id, "text": self.message},
                 headers=headers,
                 timeout=15,
             )
@@ -91,7 +121,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             link = meta_payload.get(self.content_type, {}).get("link", "")
             payload: dict = {"chatId": chat_id, "url": link}
             if self.content_type != "audio":
-                payload["caption"] = message_body
+                payload["caption"] = self.message
             endpoint = f"send-{self.content_type}"
             resp = requests.post(
                 f"{base_url}/api/sessions/{session_id}/messages/{endpoint}",
@@ -113,7 +143,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             )
 
         elif self.content_type == "location":
-            location_data = json.loads(message_body) if message_body else {}
+            location_data = json.loads(self.message) if self.message else {}
             lat = location_data.get("latitude")
             lng = location_data.get("longitude")
             if lat is None or lng is None:
@@ -135,7 +165,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             )
 
         elif self.content_type == "contact":
-            contact_data = json.loads(message_body) if message_body else {}
+            contact_data = json.loads(self.message) if self.message else {}
             contact_name = contact_data.get("contact_name", "")
             contact_number = contact_data.get("contact_number", "")
             if not contact_name or not contact_number:
@@ -155,7 +185,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             )
 
         elif self.content_type == "order":
-            poll_data = json.loads(message_body) if message_body else {}
+            poll_data = json.loads(self.message) if self.message else {}
             poll_name = poll_data.get("name", "")
             poll_options = poll_data.get("options", [])
             if not poll_name or len(poll_options) < 2:
@@ -180,7 +210,21 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 f"Content type '{self.content_type}' cannot be routed via OpenWA."
             )
 
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            try:
+                err_body = resp.text
+            except Exception:
+                err_body = "(no body)"
+            frappe.log_error(
+                title="OpenWA API Error",
+                message=(
+                    f"POST {resp.url} returned {resp.status_code}\n"
+                    f"Request body: {json.dumps(resp.request.body.decode() if resp.request.body else '', default=str)}\n"
+                    f"Response: {err_body}"
+                ),
+            )
+            resp.raise_for_status()
+
         res_data = resp.json()
 
         if "messageId" in res_data:

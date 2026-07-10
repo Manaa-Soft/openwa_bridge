@@ -61,5 +61,65 @@
   "fieldtype": "Password",
   "insert_after": "openwa_api_key",
   "label": "OpenWA Webhook Secret"
+ },
+ {
+  "name": "WhatsApp Templates-openwa_sync_section",
+  "doctype": "Custom Field",
+  "dt": "WhatsApp Templates",
+  "fieldname": "openwa_sync_section",
+  "fieldtype": "Section Break",
+  "label": "OpenWA Sync",
+  "collapsible": 1
+ },
+ {
+  "name": "WhatsApp Templates-openwa_synced",
+  "doctype": "Custom Field",
+  "dt": "WhatsApp Templates",
+  "fieldname": "openwa_synced",
+  "fieldtype": "Check",
+  "insert_after": "openwa_sync_section",
+  "label": "Synced to OpenWA",
+  "read_only": 1
+ },
+ {
+  "name": "WhatsApp Templates-openwa_template_id",
+  "doctype": "Custom Field",
+  "dt": "WhatsApp Templates",
+  "fieldname": "openwa_template_id",
+  "fieldtype": "Data",
+  "insert_after": "openwa_synced",
+  "label": "OpenWA Template ID",
+  "read_only": 1
+ },
+ {
+  "name": "WhatsApp Templates-openwa_dynamic_header",
+  "doctype": "Custom Field",
+  "dt": "WhatsApp Templates",
+  "fieldname": "openwa_dynamic_header",
+  "fieldtype": "Check",
+  "insert_after": "header_type",
+  "label": "Dynamic Image Header"
+ },
+ {
+  "name": "WhatsApp Templates-openwa_print_format",
+  "doctype": "Custom Field",
+  "dt": "WhatsApp Templates",
+  "fieldname": "openwa_print_format",
+  "fieldtype": "Link",
+  "options": "Print Format",
+  "insert_after": "openwa_dynamic_header",
+  "label": "Print Format for Header",
+  "depends_on": "openwa_dynamic_header",
+  "mandatory_depends_on": "openwa_dynamic_header"
+ },
+ {
+  "name": "WhatsApp Notification-openwa_send_type",
+  "doctype": "Custom Field",
+  "dt": "WhatsApp Notification",
+  "fieldname": "openwa_send_type",
+  "fieldtype": "Select",
+  "options": "\nJinja\nTemplate",
+  "insert_after": "code",
+  "label": "OpenWA Send Type"
  }
 ]

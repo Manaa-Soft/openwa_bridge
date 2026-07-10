@@ -215,7 +215,7 @@ override_doctype_class = {
 fixtures = [
 	{
 		"dt": "Custom Field",
-		"filters": [["dt", "=", "WhatsApp Account"]],
+		"filters": [["dt", "in", ["WhatsApp Account", "WhatsApp Templates"]]],
 	}
 ]
 
