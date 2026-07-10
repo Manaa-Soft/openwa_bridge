@@ -321,6 +321,6 @@ Common causes:
 
 OpenWA blocks requests to private IPs by default. Fix:
 ```bash
-# In OpenWA's .env
+# In OpenWA's .env file (typically OpenWA/data/.env.generated)
 SSRF_ALLOWED_HOSTS=192.168.1.15,localhost
 ```

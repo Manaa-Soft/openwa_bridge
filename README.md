@@ -182,7 +182,7 @@ Create a webhook in OpenWA to forward inbound messages to Frappe:
 If OpenWA and Frappe are on the same server, allow the Frappe IP in OpenWA's `.env`:
 
 ```bash
-# In OpenWA's .env file
+# In OpenWA's .env file (typically OpenWA/data/.env.generated)
 SSRF_ALLOWED_HOSTS=192.168.1.15,localhost
 ```
 

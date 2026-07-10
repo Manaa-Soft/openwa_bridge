@@ -116,6 +116,6 @@ Also replaced `openwa_api()` call with direct `requests.post()` for better error
 1. **send-template is text-only**: It renders header+body+footer → joins with `\n\n` → sends as plain text via `sendText()`. No media support.
 2. **Template vars are `Record<string, string>`**: Keys must match `{{key}}` in the template body.
 3. **Template uniqueness**: Names are unique per session (not globally).
-4. **SSRF blocks private IPs**: Must set `SSRF_ALLOWED_HOSTS` in OpenWA `.env`.
+4. **SSRF blocks private IPs**: Must set `SSRF_ALLOWED_HOSTS` in `OpenWA/data/.env.generated`.
 5. **Webhook signature header**: `X-Openwa-Signature` (lowercase 'wa').
 6. **HMAC format**: `sha256=<hex-digest>` of `HMAC-SHA256(secret, JSON.stringify(payload))`.

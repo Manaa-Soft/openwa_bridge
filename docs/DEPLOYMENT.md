@@ -64,7 +64,7 @@ npm run build
 
 ### 2. Configure OpenWA
 
-Create/edit `.env` in OpenWA directory:
+Create/edit `.env.generated` in OpenWA's `data/` directory:
 
 ```bash
 PORT=2785
