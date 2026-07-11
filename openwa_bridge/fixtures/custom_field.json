@@ -64,6 +64,15 @@
         "label":  "OpenWA Webhook Secret"
     },
     {
+        "name":  "WhatsApp Account-openwa_meta_separator",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Account",
+        "fieldname":  "openwa_meta_separator",
+        "fieldtype":  "Section Break",
+        "insert_after":  "openwa_webhook_secret",
+        "label":  "Meta Cloud API"
+    },
+    {
         "name":  "WhatsApp Templates-openwa_sync_section",
         "doctype":  "Custom Field",
         "dt":  "WhatsApp Templates",
