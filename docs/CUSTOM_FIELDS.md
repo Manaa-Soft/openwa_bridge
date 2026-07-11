@@ -2,40 +2,46 @@
 
 All custom fields are defined in `fixtures/custom_field.json` and auto-created on `bench migrate`.
 
-Client Scripts are also defined in `fixtures/custom_field.json` as `Client Script` records and applied via Frappe's fixture mechanism.
+Property Setters (also in `custom_field.json`) set `depends_on` on Meta fields to toggle visibility.
 
 ---
 
-## WhatsApp Account Client Script
+## WhatsApp Account UI Toggle
 
-**Fixture**: `fixtures/custom_field.json` → `Client Script` record targeting `WhatsApp Account`
+Uses Frappe's built-in `depends_on` mechanism — zero JavaScript needed.
 
-Toggles field visibility based on `openwa_enabled`:
+- **OpenWA section**: `depends_on: "eval:doc.openwa_enabled"` on the Section Break → hides entire section when unchecked
+- **Meta fields**: Property Setters set `depends_on: "eval:!doc.openwa_enabled"` on token, url, version, webhook_verify_token, phone_id, app_id, business_id → only show when OpenWA is unchecked
+- **Separator**: A "Meta Cloud API" Section Break after the OpenWA section prevents the OpenWA `depends_on` from hiding Meta fields
 
-| Mode | Visible Fields | Hidden Fields |
+| Mode | Visible | Hidden |
 |---|---|---|
 | **OpenWA enabled** | OpenWA fields (Base URL, Session ID, API Key, Webhook Secret) | Meta fields (Token, URL, Version, Phone ID, App ID, Business ID) |
 | **OpenWA disabled** | Meta fields | OpenWA fields |
-
-**Always visible in both modes**: Account Name, Status, Is Default Incoming, Is Default Outgoing, Allow Auto Read Receipt, OpenWA Enabled toggle
-
-The "Subscribe App to Webhooks" button is also hidden when OpenWA is enabled (it's a Meta-only action).
-
-A green banner appears: "OpenWA Mode is active. Meta Cloud API fields are hidden."
+| **Both modes** | Account Name, Status, Is Default Incoming, Is Default Outgoing, Allow Auto Read Receipt, OpenWA Enabled toggle | — |
 
 ---
 
-## WhatsApp Account (5 fields)
+## WhatsApp Account (8 fields)
 
 Added to the `WhatsApp Account` DocType.
 
 | # | Field Name | Fieldtype | Label | Description |
 |---|---|---|---|---|
-| 1 | `openwa_section` | Section Break | OpenWA Gateway | Section header |
+| 1 | `openwa_gateway_section` | Section Break | OpenWA Gateway | Section header (collapsible, depends_on: openwa_enabled) |
 | 2 | `openwa_enabled` | Check | OpenWA Enabled | Check to route messages through OpenWA instead of Meta API |
 | 3 | `openwa_base_url` | Data | OpenWA Base URL | Gateway URL, e.g. `http://localhost:2785` |
 | 4 | `openwa_session_id` | Data | OpenWA Session ID | Connected session UUID from OpenWA |
-| 5 | `openwa_api_key` | Password | OpenWA API Key | Encrypted API key for OpenWA REST API authentication |
+| 5 | `openwa_column_break` | Column Break | | Visual separator |
+| 6 | `openwa_api_key` | Password | OpenWA API Key | Encrypted API key for OpenWA REST API authentication |
+| 7 | `openwa_webhook_secret` | Password | OpenWA Webhook Secret | Secret for HMAC webhook verification |
+| 8 | `openwa_meta_separator` | Section Break | Meta Cloud API | Separator between OpenWA and Meta fields |
+
+### Meta Fields (via Property Setters)
+
+7 Property Setters set `depends_on: "eval:!doc.openwa_enabled"` on these Meta-only fields:
+
+`token`, `url`, `version`, `webhook_verify_token`, `phone_id`, `app_id`, `business_id`
 
 ---
 

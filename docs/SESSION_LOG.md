@@ -210,17 +210,21 @@ else:
 **Goal**: Conditional field visibility on WhatsApp Account based on OpenWA mode
 
 ### What was built:
-1. **Client Script** (fixture in `custom_field.json` → `Client Script` record):
-   - Targets `WhatsApp Account` DocType
-   - Toggles Meta vs OpenWA fields based on `openwa_enabled` checkbox
-   - Hides "Subscribe App to Webhooks" button when OpenWA is enabled
-   - Green banner: "OpenWA Mode is active. Meta Cloud API fields are hidden."
-   - Always visible: Account Name, Status, Is Default Incoming, Is Default Outgoing, Allow Auto Read Receipt
+1. **Custom Fields** (8 fields on WhatsApp Account):
+   - OpenWA section with `depends_on: "eval:doc.openwa_enabled"` on the Section Break
+   - "Meta Cloud API" Section Break separator between OpenWA and Meta fields
+2. **Property Setters** (7 entries):
+   - `depends_on: "eval:!doc.openwa_enabled"` on: token, url, version, webhook_verify_token, phone_id, app_id, business_id
+
+### What was tried and abandoned:
+- **File-based Client Script** (`client_scripts/openwa_toggle.js`) — Frappe only auto-discovers for same-app DocTypes
+- **Client Script fixture** — Frappe asset bundling caching prevented the script from loading
+- Both approaches were abandoned in favor of pure declarative `depends_on`
 
 ### Key discovery:
-- Frappe only auto-discovers `client_scripts/` directories for DocTypes owned by the **same app**
-- `WhatsApp Account` is owned by `frappe_whatsapp`, not `openwa_bridge`
-- Solution: Use a `Client Script` DocType record via fixtures (not file-based)
+- Frappe's `depends_on` on a Section Break hides ALL fields until the next Section Break
+- Without a separator, hiding the OpenWA section also hid Meta fields, Account Name, Status, etc.
+- Fix: added `openwa_meta_separator` Section Break between the two groups
 
 ### Field visibility rules:
 
@@ -228,7 +232,7 @@ else:
 |---|---|---|
 | OpenWA enabled | OpenWA fields (Base URL, Session ID, API Key, Webhook Secret) | Meta fields (Token, URL, Version, Phone ID, App ID, Business ID) |
 | OpenWA disabled | Meta fields | OpenWA fields |
-| Both modes | Account Name, Status, Is Default Incoming/Outgoing, Allow Auto Read Receipt | — |
+| Both modes | Account Name, Status, Is Default Incoming/Outgoing, Allow Auto Read Receipt, OpenWA Enabled | — |
 
 ---
 
@@ -242,13 +246,14 @@ else:
 | `whatsapp_templates.py` | ~200 | Template sync to OpenWA |
 | `whatsapp_notification.py` | ~315 | Notification routing + dynamic image + letterhead |
 | `inbound.py` | ~300 | Inbound webhook handler |
-| `fixtures/custom_field.json` | ~400 | 14 custom fields |
+| `fixtures/custom_field.json` | ~450 | 16 custom fields + 7 Property Setters |
 
-## Summary of Custom Fields
+## Summary of Custom Fields & Property Setters
 
 | DocType | Count | Fields |
 |---|---|---|
-| WhatsApp Account | 7 | section, enabled, base_url, session_id, column_break, api_key, webhook_secret |
+| WhatsApp Account | 8 | section, enabled, base_url, session_id, column_break, api_key, webhook_secret, meta_separator |
 | WhatsApp Templates | 8 | sync section, synced, template_id, dynamic_header, print_format, include_letterhead, letterhead |
 | WhatsApp Notification | 1 | openwa_send_type |
-| **Total** | **16** | |
+| Property Setters | 7 | depends_on for: token, url, version, webhook_verify_token, phone_id, app_id, business_id |
+| **Total** | **24** | |

@@ -381,23 +381,23 @@ When sending a WhatsApp Message with a template:
 
 ## Custom Fields Reference
 
-The bridge adds custom fields to three DocTypes via fixtures, plus a Client Script for UI toggling:
+The bridge adds custom fields to three DocTypes plus Property Setters for UI toggling:
 
 ### WhatsApp Account UI Toggle
 
-A Client Script fixture (in `custom_field.json`) conditionally shows/hides fields:
+Uses Frappe's built-in `depends_on` mechanism — zero JavaScript needed.
+
+- OpenWA Section Break: `depends_on: "eval:doc.openwa_enabled"` → hides when unchecked
+- Meta fields: Property Setters set `depends_on: "eval:!doc.openwa_enabled"` → only show when unchecked
+- "Meta Cloud API" Section Break separates the two groups
 
 | Mode | Visible | Hidden |
 |---|---|---|
 | **OpenWA enabled** | OpenWA fields (Base URL, Session ID, API Key, Webhook Secret) | Meta fields (Token, URL, Version, Phone ID, App ID, Business ID) |
 | **OpenWA disabled** | Meta fields | OpenWA fields |
-| **Both modes** | Account Name, Status, Is Default Incoming, Is Default Outgoing, Allow Auto Read Receipt | — |
+| **Both modes** | Account Name, Status, Is Default Incoming, Is Default Outgoing, Allow Auto Read Receipt, OpenWA Enabled | — |
 
-A green banner appears: "OpenWA Mode is active. Meta Cloud API fields are hidden."
-
-The "Subscribe App to Webhooks" button is also hidden in OpenWA mode (Meta-only action).
-
-### WhatsApp Account (7 fields)
+### WhatsApp Account (8 fields)
 
 | Field | Type | Description |
 |---|---|---|
