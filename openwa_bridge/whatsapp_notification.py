@@ -113,6 +113,13 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
         # 2) Explicit "Jinja" → render code and send as free text
         if send_type == "Jinja" and self.code and doc_data:
             doc = self._resolve_document(doc_data)
+
+            # Dynamic image header (same as Template path)
+            if self.template:
+                tmpl = frappe.get_doc("WhatsApp Templates", self.template)
+                if getattr(tmpl, "openwa_dynamic_header", False) and getattr(tmpl, "openwa_print_format", None):
+                    self._send_dynamic_header_image(doc, tmpl, data)
+
             rendered_message = frappe.render_template(self.code, {"doc": doc}).strip()
             if not rendered_message:
                 return
@@ -131,7 +138,9 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
     def _send_dynamic_header_image(self, doc, template, data):
         """Render doc as image via print format and send before template text."""
         print_format = template.openwa_print_format
-        letterhead = getattr(template, "openwa_include_letterhead", True)
+        letterhead = None
+        if getattr(template, "openwa_include_letterhead", False):
+            letterhead = getattr(template, "openwa_letterhead", None) or None
         doctype = doc.doctype if hasattr(doc, "doctype") else data.get("template", {}).get("name", "")
         name = doc.name if hasattr(doc, "name") else ""
 

@@ -124,6 +124,17 @@
    "default": "1"
   },
   {
+   "name": "WhatsApp Templates-openwa_letterhead",
+   "doctype": "Custom Field",
+   "dt": "WhatsApp Templates",
+   "fieldname": "openwa_letterhead",
+   "fieldtype": "Link",
+   "options": "Letter Head",
+   "insert_after": "openwa_include_letterhead",
+   "label": "Letter Head for Image",
+   "depends_on": "eval:doc.openwa_dynamic_header && doc.openwa_include_letterhead"
+  },
+  {
   "name": "WhatsApp Notification-openwa_send_type",
   "doctype": "Custom Field",
   "dt": "WhatsApp Notification",

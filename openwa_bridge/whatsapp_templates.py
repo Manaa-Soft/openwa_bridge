@@ -78,9 +78,7 @@ class OverrideWhatsAppTemplates(WhatsAppTemplates):
     def _build_openwa_payload(self) -> dict:
         """Build the OpenWA template payload from this doc."""
         body = frappe_to_openwa_vars(self.template or "")
-        header = None
-        if not getattr(self, "openwa_dynamic_header", False):
-            header = self.header or None
+        header = frappe_to_openwa_vars(self.header) if self.header else None
         return {
             "name": self.actual_name or self.template_name.lower().replace(" ", "_"),
             "body": body,

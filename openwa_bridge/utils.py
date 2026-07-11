@@ -117,7 +117,8 @@ def openwa_to_frappe_vars(text: str) -> str:
 
 
 def render_doc_as_image(
-    doctype: str, name: str, print_format: str = "Standard", letterhead: bool = True
+    doctype: str, name: str, print_format: str = "Standard",
+    letterhead: str | None = None,
 ) -> bytes | None:
     """Render a Frappe document as a PNG image using a print format.
 
@@ -138,6 +139,7 @@ def render_doc_as_image(
         pdf_bytes = frappe.get_print(
             doctype, name, print_format, as_pdf=True,
             no_letterhead=0 if letterhead else 1,
+            letterhead=letterhead,
             pdf_generator="chrome",
         )
         if not pdf_bytes:
