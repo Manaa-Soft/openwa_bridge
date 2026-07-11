@@ -65,6 +65,13 @@ OpenWA Bridge is a Frappe app that intercepts `frappe_whatsapp` DocType operatio
 │  │                          + letterhead control)             │  │
 │  │  WhatsApp Notification: 1 field  (openwa_send_type)        │  │
 │  └────────────────────────────────────────────────────────────┘  │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │              Client Scripts (fixtures)                      │  │
+│  │  WhatsApp Account: openwa_toggle                           │  │
+│  │    - Toggles Meta vs OpenWA fields based on openwa_enabled │  │
+│  │    - Green banner when OpenWA mode active                  │  │
+│  │    - Hides "Subscribe App to Webhooks" in OpenWA mode      │  │
+│  └────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────┬─────────────────────────────────────┘
                                │
                      HTTP REST API

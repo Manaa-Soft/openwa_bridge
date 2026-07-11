@@ -1,6 +1,27 @@
-# Custom Fields Reference
+# Custom Fields & UI Reference
 
 All custom fields are defined in `fixtures/custom_field.json` and auto-created on `bench migrate`.
+
+Client Scripts are also defined in `fixtures/custom_field.json` as `Client Script` records and applied via Frappe's fixture mechanism.
+
+---
+
+## WhatsApp Account Client Script
+
+**Fixture**: `fixtures/custom_field.json` → `Client Script` record targeting `WhatsApp Account`
+
+Toggles field visibility based on `openwa_enabled`:
+
+| Mode | Visible Fields | Hidden Fields |
+|---|---|---|
+| **OpenWA enabled** | OpenWA fields (Base URL, Session ID, API Key, Webhook Secret) | Meta fields (Token, URL, Version, Phone ID, App ID, Business ID) |
+| **OpenWA disabled** | Meta fields | OpenWA fields |
+
+**Always visible in both modes**: Account Name, Status, Is Default Incoming, Is Default Outgoing, Allow Auto Read Receipt, OpenWA Enabled toggle
+
+The "Subscribe App to Webhooks" button is also hidden when OpenWA is enabled (it's a Meta-only action).
+
+A green banner appears: "OpenWA Mode is active. Meta Cloud API fields are hidden."
 
 ---
 

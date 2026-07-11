@@ -204,6 +204,34 @@ else:
 
 ---
 
+## Session 7: WhatsApp Account UI Toggle
+
+**Date**: 2026-07-12  
+**Goal**: Conditional field visibility on WhatsApp Account based on OpenWA mode
+
+### What was built:
+1. **Client Script** (fixture in `custom_field.json` → `Client Script` record):
+   - Targets `WhatsApp Account` DocType
+   - Toggles Meta vs OpenWA fields based on `openwa_enabled` checkbox
+   - Hides "Subscribe App to Webhooks" button when OpenWA is enabled
+   - Green banner: "OpenWA Mode is active. Meta Cloud API fields are hidden."
+   - Always visible: Account Name, Status, Is Default Incoming, Is Default Outgoing, Allow Auto Read Receipt
+
+### Key discovery:
+- Frappe only auto-discovers `client_scripts/` directories for DocTypes owned by the **same app**
+- `WhatsApp Account` is owned by `frappe_whatsapp`, not `openwa_bridge`
+- Solution: Use a `Client Script` DocType record via fixtures (not file-based)
+
+### Field visibility rules:
+
+| Mode | Visible | Hidden |
+|---|---|---|
+| OpenWA enabled | OpenWA fields (Base URL, Session ID, API Key, Webhook Secret) | Meta fields (Token, URL, Version, Phone ID, App ID, Business ID) |
+| OpenWA disabled | Meta fields | OpenWA fields |
+| Both modes | Account Name, Status, Is Default Incoming/Outgoing, Allow Auto Read Receipt | — |
+
+---
+
 ## Summary of All Files Modified
 
 | File | Lines | Purpose |
