@@ -18,7 +18,7 @@ Added to the `WhatsApp Account` DocType.
 
 ---
 
-## WhatsApp Templates (5 fields)
+## WhatsApp Templates (6 fields)
 
 Added to the `WhatsApp Templates` DocType.
 
@@ -27,8 +27,10 @@ Added to the `WhatsApp Templates` DocType.
 | 1 | `openwa_sync_section` | Section Break | OpenWA Sync | | Section header |
 | 2 | `openwa_synced` | Check | Synced to OpenWA | | Auto-checked when template is synced |
 | 3 | `openwa_template_id` | Data | OpenWA Template ID | `openwa_synced` | UUID assigned by OpenWA (read-only, set by sync) |
-| 4 | `openwa_dynamic_header` | Check | Dynamic Header | | Enable dynamic image header rendering |
-| 5 | `openwa_print_format` | Link (Print Format) | Print Format | `openwa_dynamic_header` | Print Format to render as image for header |
+| 4 | `openwa_dynamic_header` | Check | Dynamic Image Header | | Enable dynamic image header rendering |
+| 5 | `openwa_print_format` | Link (Print Format) | Print Format for Header | `openwa_dynamic_header` | Print Format to render as image for header |
+| 6a | `openwa_include_letterhead` | Check | Include Letter Head | `openwa_dynamic_header` | Toggle on/off (default: checked) |
+| 6b | `openwa_letterhead` | Link (Letter Head) | Letter Head for Image | `eval:doc.openwa_dynamic_header && doc.openwa_include_letterhead` | Which Letter Head doc to use |
 
 ### Field Position Notes
 
@@ -36,6 +38,8 @@ Added to the `WhatsApp Templates` DocType.
 - `openwa_template_id` is placed **after** `openwa_synced`
 - `openwa_dynamic_header` is placed **after** `header_type`
 - `openwa_print_format` is placed **after** `openwa_dynamic_header` and depends on it
+- `openwa_include_letterhead` is placed **after** `openwa_print_format`
+- `openwa_letterhead` is placed **after** `openwa_include_letterhead` and depends on both dynamic header AND include toggle
 
 ---
 
@@ -52,7 +56,7 @@ Added to the `WhatsApp Notification` DocType.
 | Value | Behavior |
 |---|---|
 | `Template` | Sends via OpenWA `send-template` endpoint with live doc values from `fields` child table |
-| `Jinja` | Renders `code` field as Jinja template, sends as plain text via `send-text` |
+| `Jinja` | Renders `code` field as Jinja template, sends as plain text via `send-text`. Dynamic image header also sent if configured on the linked template |
 | _(empty)_ | Falls back: if `template` is set, sends as template; otherwise uses parent behavior (Meta API) |
 
 ---
@@ -93,7 +97,9 @@ Values are read at send time using `doc.get_formatted(field_name)` for live data
 | `openwa_synced` | `whatsapp_templates.py` | Sync status |
 | `openwa_template_id` | `whatsapp_message.py:63` | Template lookup for send-template |
 | `openwa_template_id` | `whatsapp_templates.py` | UUID storage after sync |
-| `openwa_dynamic_header` | `whatsapp_templates.py` | Skip header in sync payload |
-| `openwa_dynamic_header` | `whatsapp_notification.py:88` | Trigger image send |
-| `openwa_print_format` | `whatsapp_notification.py:88` | Print Format for image rendering |
+| `openwa_dynamic_header` | `whatsapp_templates.py` | Always sync header to OpenWA (regardless of toggle) |
+| `openwa_dynamic_header` | `whatsapp_notification.py:88` | Trigger image send (Template + Jinja paths) |
+| `openwa_print_format` | `whatsapp_notification.py:88` | Print Format for image rendering (forced Chrome) |
+| `openwa_include_letterhead` | `whatsapp_notification.py:134` | Toggle: include/exclude letterhead from image |
+| `openwa_letterhead` | `whatsapp_notification.py:135` | Which Letter Head doc to pass to `frappe.get_print()` |
 | `openwa_send_type` | `whatsapp_notification.py:106` | Routing decision in `notify()` |

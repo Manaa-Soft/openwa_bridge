@@ -134,11 +134,73 @@ if resp.status_code == 404:
 - `docs/ARCHITECTURE.md` — System design, override mechanism, credential flow
 - `docs/API_REFERENCE.md` — All OpenWA endpoints with payloads and DTOs
 - `docs/FLOWS.md` — 5 message flow diagrams (outbound, template, notification, sync, inbound)
-- `docs/CUSTOM_FIELDS.md` — All 11 custom fields across 3 DocTypes
+- `docs/CUSTOM_FIELDS.md` — All 14 custom fields across 3 DocTypes
 - `docs/KNOWN_ISSUES.md` — Active bugs, resolved bugs, server environment
 - `docs/DEPLOYMENT.md` — Server setup, install, testing checklist
 - `docs/SESSION_LOG.md` — This file
 - `README.md` — Updated with all features
+
+---
+
+## Session 6: Letterhead & Jinja Dynamic Image
+
+**Date**: 2026-07-11  
+**Goal**: Add letterhead control and extend dynamic image to Jinja path
+
+### Changes applied:
+
+1. **Letter head dual control** (on WhatsApp Templates):
+   - `openwa_include_letterhead` (Check, default 1) — toggle on/off
+   - `openwa_letterhead` (Link to Letter Head doctype) — which letterhead to use
+   - Both fields only visible when `openwa_dynamic_header` is enabled
+
+2. **`render_doc_as_image()` updated**:
+   - Accepts `letterhead` parameter (string name or None)
+   - If `letterhead` is provided: `frappe.get_print(doctype, name, print_format, no_letterhead=0)` → letterhead included
+   - If `letterhead` is None: `no_letterhead=1` → no letterhead
+   - PDF generator hardcoded to Chrome (overrides whatever Print Format record says)
+
+3. **Jinja path now sends dynamic image header**:
+   - Before: Jinja path only sent text via `send-text`
+   - After: If template has `openwa_dynamic_header` enabled, sends image via `send-image` first, then text
+   - Both `Template` and `Jinja` send types now support dynamic image headers
+
+4. **Header always synced to OpenWA**:
+   - Before: `openwa_dynamic_header=1` caused header to be skipped in sync payload
+   - After: Header always synced (with `frappe_to_openwa_vars()` conversion)
+   - OpenWA stores the header with `{{1}}`→`{{param1}}` conversion for use in template matching
+
+### Field count updated:
+- WhatsApp Account: 7 fields (section, enabled, base_url, session_id, column_break, api_key, webhook_secret)
+- WhatsApp Templates: 8 fields (sync section, synced, template_id, dynamic_header, print_format, include_letterhead, letterhead, column_break)
+- WhatsApp Notification: 1 field (openwa_send_type)
+
+### Key code changes:
+```python
+# whatsapp_notification.py - Jinja path
+if doc.template and doc.openwa_template_doc.openwa_dynamic_header:
+    self._send_dynamic_header_image(doc, doc.openwa_template_doc)
+
+# whatsapp_notification.py - _send_dynamic_header_image()
+if self.openwa_include_letterhead and self.openwa_letterhead:
+    letterhead = self.openwa_letterhead
+else:
+    letterhead = None
+image_bytes = render_doc_as_image(..., letterhead=letterhead)
+
+# utils.py - render_doc_as_image()
+if letterhead:
+    print_doc = frappe.get_print(doctype, name, print_format, no_letterhead=0, letterhead=letterhead)
+else:
+    print_doc = frappe.get_print(doctype, name, print_format, no_letterhead=1)
+```
+
+### Template synced:
+- Name: `sales-invoice-en-2`
+- OpenWA ID: `85f89390-6054-4d79-a4f0-15b973a38c60`
+- `openwa_dynamic_header`: 1
+- `openwa_print_format`: "Sales Invoice Standard"
+- Header synced to OpenWA with `{{1}}`→`{{param1}}` conversion
 
 ---
 
@@ -150,15 +212,15 @@ if resp.status_code == 404:
 | `utils.py` | ~165 | Shared utilities (HMAC, API, JID, rendering) |
 | `whatsapp_message.py` | ~260 | Outbound message router |
 | `whatsapp_templates.py` | ~200 | Template sync to OpenWA |
-| `whatsapp_notification.py` | ~315 | Notification routing + dynamic image |
+| `whatsapp_notification.py` | ~315 | Notification routing + dynamic image + letterhead |
 | `inbound.py` | ~300 | Inbound webhook handler |
-| `fixtures/custom_field.json` | ~400 | 11 custom fields |
+| `fixtures/custom_field.json` | ~400 | 14 custom fields |
 
 ## Summary of Custom Fields
 
 | DocType | Count | Fields |
 |---|---|---|
-| WhatsApp Account | 5 | enabled, base_url, session_id, api_key, section |
-| WhatsApp Templates | 5 | synced, template_id, dynamic_header, print_format, section |
+| WhatsApp Account | 7 | section, enabled, base_url, session_id, column_break, api_key, webhook_secret |
+| WhatsApp Templates | 8 | sync section, synced, template_id, dynamic_header, print_format, include_letterhead, letterhead |
 | WhatsApp Notification | 1 | openwa_send_type |
-| **Total** | **11** | |
+| **Total** | **16** | |

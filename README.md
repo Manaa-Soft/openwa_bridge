@@ -233,6 +233,8 @@ Due Date: {{ doc.due_date }}
 Thank you!
 ```
 
+> **Note**: Jinja path also supports dynamic image headers. If the linked template has **Dynamic Image Header** enabled, the image is sent before the text message.
+
 #### Option B: OpenWA Template (variable-based)
 
 1. First, create a template at **WhatsApp > WhatsApp Templates**
@@ -250,15 +252,19 @@ Total: {{3}} {{4}}
 #### Option C: Template with Dynamic Image Header
 
 1. Create a template at **WhatsApp > WhatsApp Templates** as in Option B
-2. Check **Dynamic Header** on the template
+2. Check **Dynamic Image Header** on the template
 3. Set **Print Format** to the format you want rendered as an image (e.g., `Sales Invoice Standard`)
-4. In the notification, configure the **Fields** child table to map template placeholders to document fields (e.g., `grand_total` -> `grand_total`)
-5. Set **Send Type** to `Template`
+4. Optionally configure **Letter Head**:
+   - **Include Letter Head** (default: checked) — toggle on/off
+   - **Letter Head for Image** — select which Letter Head doc to use from the dropdown
+5. In the notification, configure the **Fields** child table to map template placeholders to document fields (e.g., `grand_total` -> `grand_total`)
+6. Set **Send Type** to `Template` (or `Jinja` — both support dynamic image headers)
 
 When triggered:
-1. The doc is rendered as a PNG image via the Print Format
-2. The image is sent first via `send-image`
-3. The template text (with resolved variables) is sent immediately after
+1. The doc is rendered as a PNG image via the Print Format (Chrome PDF generator)
+2. Letter Head is included in the image only if **Include Letter Head** is checked AND a Letter Head is selected
+3. The image is sent first via `send-image` with `mimetype: "image/png"`
+4. The template text (with resolved variables) is sent immediately after
 
 > **Note**: Dynamic image headers require **PyMuPDF** (`bench pip install PyMuPDF`).
 
@@ -377,7 +383,7 @@ When sending a WhatsApp Message with a template:
 
 The bridge adds custom fields to three DocTypes via fixtures:
 
-### WhatsApp Account (5 fields)
+### WhatsApp Account (7 fields)
 
 | Field | Type | Description |
 |---|---|---|
@@ -385,17 +391,22 @@ The bridge adds custom fields to three DocTypes via fixtures:
 | **OpenWA Enabled** | Check | Enable OpenWA routing |
 | **OpenWA Base URL** | Data | Gateway URL (e.g., `http://localhost:2785`) |
 | **OpenWA Session ID** | Data | Connected session UUID |
+| Column Break | Column Break | Visual separator |
 | **OpenWA API Key** | Password | API key for authentication |
+| **OpenWA Webhook Secret** | Password | Secret for HMAC verification |
 
-### WhatsApp Templates (5 fields)
+### WhatsApp Templates (8 fields)
 
 | Field | Type | Description |
 |---|---|---|
 | **OpenWA Sync** | Section Break | Section header |
 | **Synced to OpenWA** | Check | Indicates template is synced |
 | **OpenWA Template ID** | Data (read-only) | UUID assigned by OpenWA |
-| **Dynamic Header** | Check | Enable dynamic image header |
-| **Print Format** | Link (Print Format) | Print Format for image rendering |
+| **Dynamic Image Header** | Check | Enable dynamic image header |
+| **Print Format for Header** | Link (Print Format) | Print Format for image rendering |
+| **Include Letter Head** | Check | Toggle letterhead on/off (default: on) |
+| **Letter Head for Image** | Link (Letter Head) | Which Letter Head doc to use |
+| Column Break | Column Break | Visual separator |
 
 ### WhatsApp Notification (1 field)
 
@@ -423,10 +434,12 @@ The bridge adds custom fields to three DocTypes via fixtures:
 ### Dynamic image header not working
 
 1. Verify **PyMuPDF** is installed: `bench pip install PyMuPDF`
-2. Check that the **Print Format** field is set on the template
-3. Verify the **Dynamic Header** checkbox is checked
-4. Look for "OpenWA: Dynamic header image failed" in error logs -- the full response body is now logged
-5. OpenWA's `send-image` endpoint requires `mimetype: "image/png"` in the payload
+2. Check that the **Print Format for Header** field is set on the template
+3. Verify the **Dynamic Image Header** checkbox is checked
+4. If you want letterhead: check **Include Letter Head** is on AND **Letter Head for Image** is selected
+5. Look for "OpenWA: Dynamic header image failed" in error logs -- the full response body is now logged
+6. OpenWA's `send-image` endpoint requires `mimetype: "image/png"` in the payload
+7. Both **Template** and **Jinja** send types support dynamic image headers
 
 ### Inbound messages not received
 

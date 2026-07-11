@@ -53,7 +53,7 @@ payload = {
 
 Also replaced `openwa_api()` call with direct `requests.post()` for better error logging.
 
-**Next step**: Deploy to server and test.
+**Next step**: Deploy to server and test. This fix now applies to BOTH Template and Jinja send types.
 
 ---
 

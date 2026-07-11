@@ -96,18 +96,25 @@ OverrideWhatsAppNotification.send_template_message(doc)
      5. Build data dict with template name, language, components
      6. Extract parameters from fields child table (live doc values)
        │
-       ├─ Dynamic header enabled?
-       │    │
-       │    ▼
-       │  _send_dynamic_header_image(doc, template, data)
-       │    │
-       │    ├─ render_doc_as_image(doctype, name, print_format)
-       │    │    ├─ frappe.get_print() → PDF bytes
-       │    │    └─ fitz.open() → page 0 → pixmap → PNG bytes
-       │    │
-       │    └─ POST /messages/send-image
-       │       { chatId, base64: <png>, mimetype: "image/png" }
-       │       (errors are caught and logged, don't block template send)
+        ├─ Dynamic header enabled?
+        │    │
+        │    ▼
+        │  _send_dynamic_header_image(doc, template, data)
+        │    │
+        │    ├─ openwa_include_letterhead = 1?
+        │    │    └─ Read openwa_letterhead → pass letterhead name to render_doc_as_image()
+        │    │
+        │    ├─ openwa_include_letterhead = 0?
+        │    │    └─ Pass no_letterhead=1 → no letterhead in image
+        │    │
+        │    ├─ render_doc_as_image(doctype, name, print_format, letterhead)
+        │    │    ├─ frappe.get_print(doctype, name, print_format, no_letterhead=0)
+        │    │    ├─ fitz.open() → page 0 → pixmap → PNG bytes
+        │    │    └─ (Chrome PDF generator, no fallback)
+        │    │
+        │    └─ POST /messages/send-image
+        │       { chatId, base64: <png>, mimetype: "image/png" }
+        │       (errors are caught and logged, don't block template send)
        │
        ▼
      7. notify(data, doc_data)
@@ -134,14 +141,37 @@ OverrideWhatsAppNotification.send_template_message(doc)
        │    ▼
        │  _send_via_openwa() → POST /messages/send-template
        │
-       ├─ "Jinja" → _send_openwa_text(account, data, rendered_message, doc_data)
-       │    │
-       │    ▼
-       │  frappe.render_template(self.code, {"doc": doc})
-       │  Create WhatsApp Message doc with rendered text
-       │  → OverrideWhatsAppMessage.notify() → POST /messages/send-text
-       │
-       └─ (empty) → fallback to _send_openwa_template()
+        ├─ "Jinja" → notify() with rendered message
+        │    │
+        │    ▼
+        │  1. Template linked AND has dynamic header?
+        │       │
+        │       ├─ YES → _send_dynamic_header_image(doc, template)
+        │       │    │
+        │       │    ├─ openwa_include_letterhead=1?
+        │       │    │    └─ Read openwa_letterhead → pass name to frappe.get_print()
+        │       │    ├─ openwa_include_letterhead=0 → no_letterhead=1
+        │       │    ├─ render_doc_as_image(doctype, name, print_format, letterhead)
+        │       │    │    ├─ frappe.get_print(doctype, name, print_format, no_letterhead=0)
+        │       │    │    ├─ fitz.open() → page 0 → pixmap → PNG bytes
+        │       │    │    └─ (Chrome PDF generator, no fallback)
+        │       │    ├─ POST /messages/send-image
+        │       │    │   { chatId, base64: <png>, mimetype: "image/png" }
+        │       │    │   (errors caught and logged, don't block send)
+        │       │    │
+        │       │    └─ Continue to text send
+        │       │
+        │       └─ NO → skip image, go to text send
+        │    │
+        │    ▼
+        │  2. _send_openwa_text(account, data, rendered_message, doc_data)
+        │    │
+        │    ▼
+        │  frappe.render_template(self.code, {"doc": doc})
+        │  Create WhatsApp Message doc with rendered text
+        │  → OverrideWhatsAppMessage.notify() → POST /messages/send-text
+        │
+        └─ (empty) → fallback to _send_openwa_template()
 ```
 
 ## Flow 4: Template Sync (Save on WhatsApp Templates)
@@ -157,12 +187,12 @@ OverrideWhatsAppTemplates.before_save()
   └─ OpenWA path → _sync_to_openwa()
        │
        ▼
-     Build payload: { name, body, header, footer }
-       │
-       ├─ openwa_dynamic_header enabled?
-       │    └─ Set header=None in payload (skip syncing header)
-       │
-       ├─ openwa_template_id exists?
+      Build payload: { name, body, header, footer }
+        │
+        ├─ openwa_dynamic_header enabled?
+        │    └─ Still sync header to OpenWA (with {{1}}→{{param1}} conversion)
+        │
+        ├─ openwa_template_id exists?
        │    │
        │    ├─ Try PUT /templates/:id
        │    │    │
