@@ -142,6 +142,14 @@
   "fieldtype": "Select",
   "options": "\nJinja\nTemplate",
   "insert_after": "code",
-  "label": "OpenWA Send Type"
- }
+   "label": "OpenWA Send Type"
+  },
+  {
+  "name": "WhatsApp Account-openwa-toggle",
+  "doctype": "Client Script",
+  "dt": "WhatsApp Account",
+  "script_type": "Client",
+  "enabled": 1,
+  "script": "frappe.ui.form.on(\"WhatsApp Account\", {\n    refresh(frm) {\n        toggle_openwa_fields(frm);\n    },\n    openwa_enabled(frm) {\n        toggle_openwa_fields(frm);\n    },\n});\n\nfunction toggle_openwa_fields(frm) {\n    var is_openwa = frm.doc.openwa_enabled;\n\n    var meta_fields = [\n        \"token\", \"url\", \"version\", \"webhook_verify_token\",\n        \"phone_id\", \"app_id\", \"business_id\", \"column_break_byyq\",\n    ];\n\n    var openwa_fields = [\n        \"openwa_gateway_section\", \"openwa_base_url\", \"openwa_session_id\",\n        \"openwa_column_break\", \"openwa_api_key\", \"openwa_webhook_secret\",\n    ];\n\n    meta_fields.forEach(function (fieldname) {\n        frm.set_df_property(fieldname, \"hidden\", is_openwa);\n    });\n\n    openwa_fields.forEach(function (fieldname) {\n        frm.set_df_property(fieldname, \"hidden\", !is_openwa);\n    });\n\n    if (is_openwa) {\n        frm.clear_custom_buttons();\n        frm.set_intro(\"OpenWA Mode is active. Meta Cloud API fields are hidden.\", \"green\");\n    } else {\n        frm.set_intro(\"\");\n    }\n}"
+  }
 ]
