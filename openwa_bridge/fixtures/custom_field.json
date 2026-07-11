@@ -152,7 +152,8 @@
         "field_name":  "token",
         "property":  "depends_on",
         "property_type":  "Data",
-        "value":  "eval:!doc.openwa_enabled"
+        "value":  "eval:!doc.openwa_enabled",
+        "doctype_or_field":  "Field"
     },
     {
         "name":  "WhatsApp Account-url-depends_on",
@@ -161,7 +162,8 @@
         "field_name":  "url",
         "property":  "depends_on",
         "property_type":  "Data",
-        "value":  "eval:!doc.openwa_enabled"
+        "value":  "eval:!doc.openwa_enabled",
+        "doctype_or_field":  "Field"
     },
     {
         "name":  "WhatsApp Account-version-depends_on",
@@ -170,7 +172,8 @@
         "field_name":  "version",
         "property":  "depends_on",
         "property_type":  "Data",
-        "value":  "eval:!doc.openwa_enabled"
+        "value":  "eval:!doc.openwa_enabled",
+        "doctype_or_field":  "Field"
     },
     {
         "name":  "WhatsApp Account-webhook_verify_token-depends_on",
@@ -179,7 +182,8 @@
         "field_name":  "webhook_verify_token",
         "property":  "depends_on",
         "property_type":  "Data",
-        "value":  "eval:!doc.openwa_enabled"
+        "value":  "eval:!doc.openwa_enabled",
+        "doctype_or_field":  "Field"
     },
     {
         "name":  "WhatsApp Account-phone_id-depends_on",
@@ -188,7 +192,8 @@
         "field_name":  "phone_id",
         "property":  "depends_on",
         "property_type":  "Data",
-        "value":  "eval:!doc.openwa_enabled"
+        "value":  "eval:!doc.openwa_enabled",
+        "doctype_or_field":  "Field"
     },
     {
         "name":  "WhatsApp Account-app_id-depends_on",
@@ -197,7 +202,8 @@
         "field_name":  "app_id",
         "property":  "depends_on",
         "property_type":  "Data",
-        "value":  "eval:!doc.openwa_enabled"
+        "value":  "eval:!doc.openwa_enabled",
+        "doctype_or_field":  "Field"
     },
     {
         "name":  "WhatsApp Account-business_id-depends_on",
@@ -206,6 +212,7 @@
         "field_name":  "business_id",
         "property":  "depends_on",
         "property_type":  "Data",
-        "value":  "eval:!doc.openwa_enabled"
+        "value":  "eval:!doc.openwa_enabled",
+        "doctype_or_field":  "Field"
     }
 ]
