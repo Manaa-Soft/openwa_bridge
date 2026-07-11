@@ -131,13 +131,14 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
     def _send_dynamic_header_image(self, doc, template, data):
         """Render doc as image via print format and send before template text."""
         print_format = template.openwa_print_format
+        letterhead = getattr(template, "openwa_include_letterhead", True)
         doctype = doc.doctype if hasattr(doc, "doctype") else data.get("template", {}).get("name", "")
         name = doc.name if hasattr(doc, "name") else ""
 
         if not doctype or not name:
             return
 
-        image_bytes = render_doc_as_image(doctype, name, print_format)
+        image_bytes = render_doc_as_image(doctype, name, print_format, letterhead=letterhead)
         if not image_bytes:
             return
 

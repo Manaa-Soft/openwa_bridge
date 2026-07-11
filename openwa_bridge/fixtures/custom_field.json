@@ -101,18 +101,29 @@
   "label": "Dynamic Image Header"
  },
  {
-  "name": "WhatsApp Templates-openwa_print_format",
-  "doctype": "Custom Field",
-  "dt": "WhatsApp Templates",
-  "fieldname": "openwa_print_format",
-  "fieldtype": "Link",
-  "options": "Print Format",
-  "insert_after": "openwa_dynamic_header",
-  "label": "Print Format for Header",
-  "depends_on": "openwa_dynamic_header",
-  "mandatory_depends_on": "openwa_dynamic_header"
- },
- {
+   "name": "WhatsApp Templates-openwa_print_format",
+   "doctype": "Custom Field",
+   "dt": "WhatsApp Templates",
+   "fieldname": "openwa_print_format",
+   "fieldtype": "Link",
+   "options": "Print Format",
+   "insert_after": "openwa_dynamic_header",
+   "label": "Print Format for Header",
+   "depends_on": "openwa_dynamic_header",
+   "mandatory_depends_on": "openwa_dynamic_header"
+  },
+  {
+   "name": "WhatsApp Templates-openwa_include_letterhead",
+   "doctype": "Custom Field",
+   "dt": "WhatsApp Templates",
+   "fieldname": "openwa_include_letterhead",
+   "fieldtype": "Check",
+   "insert_after": "openwa_print_format",
+   "label": "Include Letter Head",
+   "depends_on": "openwa_dynamic_header",
+   "default": "1"
+  },
+  {
   "name": "WhatsApp Notification-openwa_send_type",
   "doctype": "Custom Field",
   "dt": "WhatsApp Notification",
