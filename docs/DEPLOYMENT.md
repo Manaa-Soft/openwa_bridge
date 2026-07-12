@@ -8,7 +8,7 @@
 | **OS** | Linux (Ubuntu/Debian) |
 | **Frappe bench** | ~/frappe-bench |
 | **Site** | your-site.local |
-| **OpenWA** | /path/to/OpenWA-main (npm-based) |
+| **OpenWA** | ~/OpenWA (git clone) |
 
 ---
 
@@ -53,60 +53,94 @@ bench restart
 ### 1. Install OpenWA
 
 ```bash
-# On server
-npm install -g @open-wa/wa-automate
-
-# Or if using the source:
-cd /path/to/OpenWA-main
+cd ~
+git clone https://github.com/Open-WA/whatsapp-web.js.git OpenWA
+cd OpenWA
 npm install
 npm run build
 ```
 
-### 2. Configure OpenWA
+### 2. Configure OpenWA Environment
 
-Create/edit `.env.generated` in OpenWA's `data/` directory:
+OpenWA uses `.env` files for configuration. The key settings:
 
 ```bash
+# ~/OpenWA/.env (create or edit)
+AUTO_START_SESSIONS=true
 PORT=2785
 SSRF_ALLOWED_HOSTS=192.168.1.15,localhost
 ```
 
-### 3. Start OpenWA
+**Important**: If `~/OpenWA/data/.env.generated` exists, delete it -- it overrides your `.env` and may force `AUTO_START_SESSIONS=false`:
 
 ```bash
-cd /path/to/OpenWA-main
-npm run start
-# Or: node dist/main.js
+rm ~/OpenWA/data/.env.generated
 ```
 
-Scan QR code with WhatsApp to connect.
+### 3. Start OpenWA with PM2 (Production)
 
-### 4. Get Session Info
+PM2 keeps OpenWA running across server reboots:
 
-After connecting, get the session ID:
+```bash
+# Install PM2 globally
+npm install -g pm2
+
+# Start OpenWA in production mode
+cd ~/OpenWA
+pm2 start dist/main.js --name "openwa-gateway"
+
+# Set up PM2 to auto-start on boot
+pm2 startup systemd
+# Copy and run the sudo command it prints (see note below)
+
+# Save the current process list
+pm2 save
+```
+
+**The `pm2 startup systemd` step**: PM2 will print a `sudo env PATH=...` command. Copy and run that exact command. It hooks PM2 into Ubuntu's boot system so OpenWA restarts automatically after reboots.
+
+```bash
+# Verify it works
+pm2 list
+
+# Test reboot persistence
+sudo reboot
+# Wait 30 seconds, SSH back in, run:
+pm2 list  # should show "openwa-gateway" as "online"
+```
+
+### 4. Connect WhatsApp
+
+Scan the QR code with your phone:
+- OpenWA dashboard: http://localhost:2886
+- Or start manually: `cd ~/OpenWA && npm run start`
+
+### 5. Get Session Info
+
 ```bash
 curl http://localhost:2785/api/sessions
-# Find your session in the response, copy the sessionId (UUID)
+# Copy the sessionId (UUID) from the response
 ```
 
-Get the API key from OpenWA dashboard (localhost:2886) or config.
+Get the API key from the OpenWA dashboard (localhost:2886).
 
-### 5. Create Webhook in OpenWA
+### 6. Create Webhook in OpenWA
 
 Via dashboard or API:
 - URL: `https://your-site.local/api/method/openwa_bridge.inbound.receive_openwa_message`
 - Events: message, message.any, message.reaction
 
-### 6. Configure Frappe
+### 7. Configure Frappe
 
 1. Go to **WhatsApp > WhatsApp Account**
 2. Enable OpenWA section:
-   - OpenWA Enabled: ✓
+   - OpenWA Enabled: checked
    - OpenWA Base URL: `http://localhost:2785`
    - OpenWA Session ID: `<your-session-uuid>`
    - OpenWA API Key: `<your-api-key>`
+   - OpenWA Webhook Secret: `<your-shared-secret>`
 
-### 7. Install Dependencies
+### 8. Install Dependencies
 
 ```bash
 bench pip install PyMuPDF  # For dynamic image headers
@@ -114,37 +148,58 @@ bench pip install PyMuPDF  # For dynamic image headers
 
 ---
 
+## Why These Steps Matter
+
+| Problem | Cause | Fix |
+|---|---|---|
+| Sessions don't auto-start on boot | `AUTO_START_SESSIONS=false` in `.env.generated` | Delete `.env.generated`, set `AUTO_START_SESSIONS=true` in `.env` |
+| OpenWA dies after server reboot | No PM2/systemd setup | `pm2 startup` + `pm2 save` |
+| Frappe can't reach OpenWA | SSRF blocks private IPs | `SSRF_ALLOWED_HOSTS=192.168.1.15,localhost` |
+
+### PM2 Boot Chain
+
+```
+[VM Boots] -> [systemd launches PM2] -> [PM2 launches OpenWA] -> [OpenWA auto-starts WhatsApp sessions]
+```
+
+- `pm2 startup systemd` -- registers PM2 as a systemd service
+- The generated `sudo` command -- creates the permanent boot hook
+- `pm2 start dist/main.js` -- runs production code (not dev server)
+- `pm2 save` -- snapshots running processes for boot recovery
+
+---
+
 ## Testing Checklist
 
 ### Basic Message Flow
-- [ ] Send plain text from Desk → verify received on phone
-- [ ] Send image from Desk → verify received on phone
-- [ ] Reply to a message → verify quoted context shows
-- [ ] React to a message → verify emoji shows
+- [ ] Send plain text from Desk -> verify received on phone
+- [ ] Send image from Desk -> verify received on phone
+- [ ] Reply to a message -> verify quoted context shows
+- [ ] React to a message -> verify emoji shows
 
 ### Template Sync
-- [ ] Create WhatsApp Template → verify `Synced to OpenWA` checked
+- [ ] Create WhatsApp Template -> verify `Synced to OpenWA` checked
 - [ ] Verify `OpenWA Template ID` populated
-- [ ] Update template → verify sync succeeds
-- [ ] Delete template from OpenWA dashboard → re-save in Frappe → verify recovery
+- [ ] Update template -> verify sync succeeds
+- [ ] Delete template from OpenWA dashboard -> re-save in Frappe -> verify recovery
 
 ### Notification Flow
 - [ ] Configure WhatsApp Notification with `openwa_send_type=Template`
 - [ ] Set Fields child table with correct field names
-- [ ] Submit Sales Invoice via POS → verify template received on phone
+- [ ] Submit Sales Invoice via POS -> verify template received on phone
 - [ ] Check Error Logs for any failures
 
 ### Dynamic Image Header
 - [ ] Check `Dynamic Header` on template
 - [ ] Set Print Format (e.g., "Sales Invoice Standard")
 - [ ] Verify PyMuPDF installed: `bench pip install PyMuPDF`
-- [ ] Submit Sales Invoice → verify image received, then template text
+- [ ] Submit Sales Invoice -> verify image received, then template text
 
 ### Inbound Messages
-- [ ] Send message from phone → verify WhatsApp Message doc created
+- [ ] Send message from phone -> verify WhatsApp Message doc created
 - [ ] Verify Communication record created
 - [ ] Verify new contact/lead created for unknown numbers
-- [ ] Send reaction → verify reaction recorded
+- [ ] Send reaction -> verify reaction recorded
 
 ---
 
@@ -152,7 +207,7 @@ bench pip install PyMuPDF  # For dynamic image headers
 
 ### Check Error Logs
 ```
-Frappe Desk → Setup → Error Log
+Frappe Desk -> Setup -> Error Log
 Filter by: "OpenWA"
 ```
 
