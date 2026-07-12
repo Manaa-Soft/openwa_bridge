@@ -6,8 +6,7 @@
         "fieldname":  "openwa_gateway_section",
         "fieldtype":  "Section Break",
         "label":  "OpenWA Gateway",
-        "collapsible":  1,
-        "depends_on":  "eval:doc.openwa_enabled"
+        "collapsible":  1
     },
     {
         "name":  "WhatsApp Account-openwa_enabled",
@@ -26,7 +25,8 @@
         "fieldtype":  "Data",
         "insert_after":  "openwa_enabled",
         "label":  "OpenWA Base URL",
-        "default":  "http://localhost:2785"
+        "default":  "http://localhost:2785",
+        "depends_on":  "eval:doc.openwa_enabled"
     },
     {
         "name":  "WhatsApp Account-openwa_session_id",
@@ -35,7 +35,9 @@
         "fieldname":  "openwa_session_id",
         "fieldtype":  "Data",
         "insert_after":  "openwa_base_url",
-        "label":  "OpenWA Session ID"
+        "label":  "OpenWA Session ID",
+        "depends_on":  "eval:doc.openwa_enabled",
+        "read_only":  1
     },
     {
         "name":  "WhatsApp Account-openwa_column_break",
@@ -43,7 +45,8 @@
         "dt":  "WhatsApp Account",
         "fieldname":  "openwa_column_break",
         "fieldtype":  "Column Break",
-        "insert_after":  "openwa_session_id"
+        "insert_after":  "openwa_session_id",
+        "depends_on":  "eval:doc.openwa_enabled"
     },
     {
         "name":  "WhatsApp Account-openwa_api_key",
@@ -52,7 +55,8 @@
         "fieldname":  "openwa_api_key",
         "fieldtype":  "Password",
         "insert_after":  "openwa_column_break",
-        "label":  "OpenWA API Key"
+        "label":  "OpenWA API Key",
+        "depends_on":  "eval:doc.openwa_enabled"
     },
     {
         "name":  "WhatsApp Account-openwa_webhook_secret",
@@ -61,7 +65,17 @@
         "fieldname":  "openwa_webhook_secret",
         "fieldtype":  "Password",
         "insert_after":  "openwa_api_key",
-        "label":  "OpenWA Webhook Secret"
+        "label":  "OpenWA Webhook Secret",
+        "depends_on":  "eval:doc.openwa_enabled"
+    },
+    {
+        "name":  "WhatsApp Account-openwa_qr_html",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Account",
+        "fieldname":  "openwa_qr_html",
+        "fieldtype":  "HTML",
+        "insert_after":  "openwa_webhook_secret",
+        "label":  "QR Code"
     },
     {
         "name":  "WhatsApp Account-openwa_meta_separator",
@@ -69,7 +83,7 @@
         "dt":  "WhatsApp Account",
         "fieldname":  "openwa_meta_separator",
         "fieldtype":  "Section Break",
-        "insert_after":  "openwa_webhook_secret",
+        "insert_after":  "openwa_qr_html",
         "label":  "Meta Cloud API"
     },
     {

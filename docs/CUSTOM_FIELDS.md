@@ -10,38 +10,50 @@ Property Setters (also in `custom_field.json`) set `depends_on` on Meta fields t
 
 Uses Frappe's built-in `depends_on` mechanism — zero JavaScript needed.
 
-- **OpenWA section**: `depends_on: "eval:doc.openwa_enabled"` on the Section Break → hides entire section when unchecked
-- **Meta fields**: Property Setters set `depends_on: "eval:!doc.openwa_enabled"` on token, url, version, webhook_verify_token, phone_id, app_id, business_id → only show when OpenWA is unchecked
+- **OpenWA section**: Always visible (collapsible), no `depends_on`
+- **OpenWA fields** (base_url, session_id, column_break, api_key, webhook_secret): `depends_on: "eval:doc.openwa_enabled"` → only show when checked
+- **OpenWA Enabled checkbox**: Always visible (no `depends_on`)
+- **Meta fields**: Property Setters set `depends_on: "eval:!doc.openwa_enabled"` → only show when unchecked
 - **Separator**: A "Meta Cloud API" Section Break after the OpenWA section prevents the OpenWA `depends_on` from hiding Meta fields
 
 | Mode | Visible | Hidden |
 |---|---|---|
-| **OpenWA enabled** | OpenWA fields (Base URL, Session ID, API Key, Webhook Secret) | Meta fields (Token, URL, Version, Phone ID, App ID, Business ID) |
+| **OpenWA enabled** | OpenWA fields (Base URL, Session ID, API Key, Webhook Secret, QR Code) | Meta fields (Token, URL, Version, Phone ID, App ID, Business ID) |
 | **OpenWA disabled** | Meta fields | OpenWA fields |
 | **Both modes** | Account Name, Status, Is Default Incoming, Is Default Outgoing, Allow Auto Read Receipt, OpenWA Enabled toggle | — |
 
 ---
 
-## WhatsApp Account (8 fields)
+## WhatsApp Account (9 fields)
 
 Added to the `WhatsApp Account` DocType.
 
 | # | Field Name | Fieldtype | Label | Description |
 |---|---|---|---|---|
-| 1 | `openwa_gateway_section` | Section Break | OpenWA Gateway | Section header (collapsible, depends_on: openwa_enabled) |
+| 1 | `openwa_gateway_section` | Section Break | OpenWA Gateway | Section header (always visible, collapsible) |
 | 2 | `openwa_enabled` | Check | OpenWA Enabled | Check to route messages through OpenWA instead of Meta API |
-| 3 | `openwa_base_url` | Data | OpenWA Base URL | Gateway URL, e.g. `http://localhost:2785` |
-| 4 | `openwa_session_id` | Data | OpenWA Session ID | Connected session UUID from OpenWA |
-| 5 | `openwa_column_break` | Column Break | | Visual separator |
-| 6 | `openwa_api_key` | Password | OpenWA API Key | Encrypted API key for OpenWA REST API authentication |
-| 7 | `openwa_webhook_secret` | Password | OpenWA Webhook Secret | Secret for HMAC webhook verification |
-| 8 | `openwa_meta_separator` | Section Break | Meta Cloud API | Separator between OpenWA and Meta fields |
+| 3 | `openwa_base_url` | Data | OpenWA Base URL | Gateway URL, e.g. `http://localhost:2785`. depends_on: openwa_enabled |
+| 4 | `openwa_session_id` | Data | OpenWA Session ID | Connected session UUID (read-only, auto-populated by Setup button). depends_on: openwa_enabled |
+| 5 | `openwa_column_break` | Column Break | | Visual separator. depends_on: openwa_enabled |
+| 6 | `openwa_api_key` | Password | OpenWA API Key | Encrypted API key for OpenWA REST API authentication. depends_on: openwa_enabled |
+| 7 | `openwa_webhook_secret` | Password | OpenWA Webhook Secret | Secret for HMAC webhook verification. depends_on: openwa_enabled |
+| 8 | `openwa_qr_html` | HTML | QR Code | QR code display area (auto-populated by Setup button or Show QR button) |
+| 9 | `openwa_meta_separator` | Section Break | Meta Cloud API | Separator between OpenWA and Meta fields |
 
 ### Meta Fields (via Property Setters)
 
 7 Property Setters set `depends_on: "eval:!doc.openwa_enabled"` on these Meta-only fields:
 
 `token`, `url`, `version`, `webhook_verify_token`, `phone_id`, `app_id`, `business_id`
+
+### QR Code Setup Flow
+
+The `openwa_qr_html` HTML field is used by the client script to display:
+- QR code image (auto-refreshes every 55 seconds)
+- Connection status messages
+- Error messages
+
+The QR is populated by clicking "Setup OpenWA" (creates session + fetches QR) or "Show QR Code" (fetches QR for existing session).
 
 ---
 
@@ -121,6 +133,7 @@ Values are read at send time using `doc.get_formatted(field_name)` for live data
 | `openwa_session_id` | `whatsapp_message.py:50` | Session ID for API calls |
 | `openwa_api_key` | `whatsapp_message.py:51` | Authentication header |
 | `openwa_webhook_secret` | `inbound.py` | HMAC verification |
+| `openwa_qr_html` | `public/js/whatsapp_account.js` | QR code display area |
 | `openwa_synced` | `whatsapp_templates.py` | Sync status |
 | `openwa_template_id` | `whatsapp_message.py:63` | Template lookup for send-template |
 | `openwa_template_id` | `whatsapp_templates.py` | UUID storage after sync |
@@ -130,3 +143,8 @@ Values are read at send time using `doc.get_formatted(field_name)` for live data
 | `openwa_include_letterhead` | `whatsapp_notification.py:134` | Toggle: include/exclude letterhead from image |
 | `openwa_letterhead` | `whatsapp_notification.py:135` | Which Letter Head doc to pass to `frappe.get_print()` |
 | `openwa_send_type` | `whatsapp_notification.py:106` | Routing decision in `notify()` |
+| `on_account_trash` | `whatsapp_account.py` | Delete OpenWA session when WhatsApp Account is deleted |
+| `setup_openwa_session` | `whatsapp_account.py` | One-click: create session, start, fetch QR |
+| `get_openwa_qr` | `whatsapp_account.py` | Fetch QR code for existing session |
+| `get_openwa_session_status` | `whatsapp_account.py` | Get session status |
+| `stop_openwa_session` | `whatsapp_account.py` | Disconnect session |

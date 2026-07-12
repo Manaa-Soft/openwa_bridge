@@ -70,7 +70,7 @@ def openwa_type_to_frappe(openwa_type: str) -> str:
 # ------------------------------------------------------------------
 
 
-def openwa_api(account, method: str, path: str, json_data=None, timeout: int = 15) -> dict:
+def openwa_api(account, method: str, path: str, json_data=None, timeout: int = 30) -> dict:
     """Call the OpenWA REST API with proper auth headers.
 
     Parameters

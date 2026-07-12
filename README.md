@@ -153,20 +153,25 @@ bench pip install PyMuPDF
 
 ## Configuration
 
-### WhatsApp Account Setup
+### WhatsApp Account Setup (One-Click)
 
 1. Go to **WhatsApp > WhatsApp Account** in Frappe Desk
 2. Open your existing account (or create one)
 3. Scroll to the **OpenWA Gateway** section
-4. Fill in:
+4. Check **OpenWA Enabled**
+5. Fill in:
 
 | Field | Description | Example |
 |---|---|---|
 | **OpenWA Enabled** | Check to route messages through OpenWA | `Yes` |
 | **OpenWA Base URL** | OpenWA gateway URL | `http://localhost:2785` |
-| **OpenWA Session ID** | The connected session ID from OpenWA | `your-session-id` |
 | **OpenWA API Key** | Your OpenWA API key | `owa_k1_...` |
 | **OpenWA Webhook Secret** | Shared secret for HMAC verification | `my-shared-secret-123` |
+
+6. Click **Setup OpenWA** button — this auto-creates a session in OpenWA, starts it, and displays a QR code
+7. Scan the QR code with your phone — status changes to "Connected"
+
+> **Note**: The Session ID is auto-populated by the Setup button. You don't need to create sessions manually in OpenWA.
 
 ### OpenWA Webhook Setup
 
@@ -387,27 +392,31 @@ The bridge adds custom fields to three DocTypes plus Property Setters for UI tog
 
 Uses Frappe's built-in `depends_on` mechanism — zero JavaScript needed.
 
-- OpenWA Section Break: `depends_on: "eval:doc.openwa_enabled"` → hides when unchecked
+- OpenWA Section Break: always visible (collapsible)
+- OpenWA fields (Base URL, Session ID, API Key, Webhook Secret): `depends_on: "eval:doc.openwa_enabled"` → only show when checked
+- OpenWA Enabled checkbox: always visible
 - Meta fields: Property Setters set `depends_on: "eval:!doc.openwa_enabled"` → only show when unchecked
 - "Meta Cloud API" Section Break separates the two groups
 
 | Mode | Visible | Hidden |
 |---|---|---|
-| **OpenWA enabled** | OpenWA fields (Base URL, Session ID, API Key, Webhook Secret) | Meta fields (Token, URL, Version, Phone ID, App ID, Business ID) |
+| **OpenWA enabled** | OpenWA fields (Base URL, Session ID, API Key, Webhook Secret, QR Code) | Meta fields (Token, URL, Version, Phone ID, App ID, Business ID) |
 | **OpenWA disabled** | Meta fields | OpenWA fields |
 | **Both modes** | Account Name, Status, Is Default Incoming, Is Default Outgoing, Allow Auto Read Receipt, OpenWA Enabled | — |
 
-### WhatsApp Account (8 fields)
+### WhatsApp Account (9 fields)
 
 | Field | Type | Description |
 |---|---|---|
-| **OpenWA Gateway** | Section Break | Section header |
+| **OpenWA Gateway** | Section Break | Section header (always visible) |
 | **OpenWA Enabled** | Check | Enable OpenWA routing |
 | **OpenWA Base URL** | Data | Gateway URL (e.g., `http://localhost:2785`) |
-| **OpenWA Session ID** | Data | Connected session UUID |
+| **OpenWA Session ID** | Data (read-only) | Auto-populated by Setup button |
 | Column Break | Column Break | Visual separator |
 | **OpenWA API Key** | Password | API key for authentication |
 | **OpenWA Webhook Secret** | Password | Secret for HMAC verification |
+| **QR Code** | HTML | QR code display area (auto-populated) |
+| **Meta Cloud API** | Section Break | Separator between OpenWA and Meta fields |
 
 ### WhatsApp Templates (8 fields)
 
@@ -455,6 +464,13 @@ Uses Frappe's built-in `depends_on` mechanism — zero JavaScript needed.
 6. OpenWA's `send-image` endpoint requires `mimetype: "image/png"` in the payload
 7. Both **Template** and **Jinja** send types support dynamic image headers
 
+### Setup timeout / "Cannot connect to OpenWA"
+
+1. Verify OpenWA is running: `curl http://localhost:2785/api/sessions`
+2. If OpenWA is down, restart it: `cd ~/OpenWA && pm2 restart openwa-gateway`
+3. The setup flow has increased timeouts (30s for API calls, 60s for session start)
+4. Check that `openwa_base_url` in the WhatsApp Account matches your OpenWA address
+
 ### Inbound messages not received
 
 1. Test the HMAC signature: the `X-Openwa-Signature` header must match `sha256=<hex>`
@@ -472,14 +488,18 @@ The app includes fallback logic -- if `frappe.get_doc()` fails, it falls back to
 
 ```
 openwa_bridge/
-├── hooks.py                    # App hooks, DocType overrides, fixtures
+├── hooks.py                    # App hooks, DocType overrides, fixtures, doc_events
 ├── utils.py                    # HMAC verification, JID helpers, type mapping,
 │                               #   OpenWA API helper, render_doc_as_image()
+├── whatsapp_account.py         # QR code display, one-click setup, session management
 ├── whatsapp_message.py         # Outbound message routing (OverrideWhatsAppMessage)
 ├── whatsapp_templates.py       # Template sync to OpenWA (OverrideWhatsAppTemplates)
 ├── whatsapp_notification.py    # Notification: Jinja OR template, dynamic image header
 │                               #   (OverrideWhatsAppNotification)
 ├── inbound.py                  # Inbound webhook endpoint + message handlers
+├── public/
+│   └── js/
+│       └── whatsapp_account.js # Client script: QR display, setup button, status
 └── fixtures/
     └── custom_field.json       # Custom fields on Account, Templates, Notification
 ```
@@ -493,6 +513,11 @@ openwa_bridge/
 | `utils.py` | `strip_jid_suffix()` | Strip `@c.us` / `@g.us` / `@lid` from JIDs |
 | `utils.py` | `frappe_to_openwa_vars()` | Convert `{{1}}` to `{{param1}}` |
 | `utils.py` | `render_doc_as_image()` | PDF -> PNG via PyMuPDF for dynamic headers |
+| `whatsapp_account.py` | `setup_openwa_session()` | One-click: create session, start, fetch QR |
+| `whatsapp_account.py` | `get_openwa_qr()` | Fetch QR code for existing session |
+| `whatsapp_account.py` | `get_openwa_session_status()` | Get session status (ready/disconnected/etc) |
+| `whatsapp_account.py` | `stop_openwa_session()` | Disconnect session |
+| `whatsapp_account.py` | `on_account_trash()` | Delete OpenWA session when account is deleted |
 | `whatsapp_message.py` | `_send_via_openwa()` | Routes outbound messages by content type |
 | `whatsapp_templates.py` | `_sync_to_openwa()` | Create/update/delete templates on OpenWA |
 | `whatsapp_notification.py` | `send_template_message()` | Override: skip parent header/attachment logic |

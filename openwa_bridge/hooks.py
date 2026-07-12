@@ -47,7 +47,9 @@ use_json_request_body = True
 # page_js = {"page" : "public/js/file.js"}
 
 # include js in doctype views
-# doctype_js = {"doctype" : "public/js/doctype.js"}
+doctype_js = {
+	"WhatsApp Account": "public/js/whatsapp_account.js"
+}
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
@@ -142,13 +144,11 @@ use_json_request_body = True
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+doc_events = {
+	"WhatsApp Account": {
+		"on_trash": "openwa_bridge.whatsapp_account.on_account_trash"
+	}
+}
 
 # Scheduled Tasks
 # ---------------

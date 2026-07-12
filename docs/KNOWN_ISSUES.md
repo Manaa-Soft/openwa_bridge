@@ -57,6 +57,34 @@ Also replaced `openwa_api()` call with direct `requests.post()` for better error
 
 ---
 
+### 3. OpenWA Enabled checkbox not visible on new account
+
+**Status**: Fixed  
+**Root cause**: The OpenWA Gateway Section Break had `depends_on: "eval:doc.openwa_enabled"`, which hid the entire section — including the checkbox itself.  
+**Fix**: Removed `depends_on` from the Section Break. Added `depends_on: "eval:doc.openwa_enabled"` to individual fields instead.  
+**File**: `fixtures/custom_field.json`
+
+---
+
+### 4. API timeout during setup (read timeout=15)
+
+**Status**: Fixed  
+**Error**: `HTTPConnectionPool(host='localhost', port=2785): Read timed out. (read timeout=15)`  
+**Root cause**: Default 15s timeout was too short for session creation + start (Chromium launch can be slow).  
+**Fix**: Increased `openwa_api` timeout from 15s to 30s, `_start_session` timeout to 60s. Added connectivity check at start of setup with clear error messages.  
+**Files**: `utils.py`, `whatsapp_account.py`
+
+---
+
+### 5. Deleting WhatsApp Account doesn't delete OpenWA session
+
+**Status**: Fixed  
+**Root cause**: No cleanup hook on WhatsApp Account deletion.  
+**Fix**: Added `doc_events` hook with `on_trash` handler that calls `DELETE /api/sessions/:id` on OpenWA. Best-effort — logs error if OpenWA unreachable.  
+**File**: `whatsapp_account.py`, `hooks.py`
+
+---
+
 ## Resolved Issues
 
 ### 3. jinja `doc.items` AttributeError

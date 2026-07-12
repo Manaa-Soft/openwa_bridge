@@ -324,3 +324,74 @@ OpenWA blocks requests to private IPs by default. Fix:
 # In OpenWA's .env file (typically OpenWA/data/.env.generated)
 SSRF_ALLOWED_HOSTS=192.168.1.15,localhost
 ```
+
+---
+
+## Frappe Whitelisted Methods (openwa_bridge)
+
+These are called from the client JS on the WhatsApp Account form.
+
+### setup_openwa_session
+
+One-click setup: create session in OpenWA, start it, fetch QR code.
+
+**Method**: `openwa_bridge.whatsapp_account.setup_openwa_session`
+
+**Args**: `{ account_name: string }`
+
+**Returns**:
+```json
+{
+  "qr_code": "data:image/png;base64,...",
+  "status": "qr_ready",
+  "session_id": "uuid"
+}
+```
+
+Or on error:
+```json
+{
+  "status": "error",
+  "error": "Cannot connect to OpenWA at http://localhost:2785"
+}
+```
+
+Or if already connected:
+```json
+{
+  "status": "ready",
+  "session_id": "uuid",
+  "phone": "967777713637",
+  "push_name": "manaa mnaa"
+}
+```
+
+### get_openwa_qr
+
+Fetch QR code for an existing session.
+
+**Method**: `openwa_bridge.whatsapp_account.get_openwa_qr`
+
+**Args**: `{ account_name: string }`
+
+**Returns**: `{ qr_code: "data:image/png;base64,...", status: "qr_ready" }`
+
+### get_openwa_session_status
+
+Get current session status.
+
+**Method**: `openwa_bridge.whatsapp_account.get_openwa_session_status`
+
+**Args**: `{ account_name: string }`
+
+**Returns**: `{ status, phone, push_name, connected_at, last_active }`
+
+### stop_openwa_session
+
+Disconnect the session.
+
+**Method**: `openwa_bridge.whatsapp_account.stop_openwa_session`
+
+**Args**: `{ account_name: string }`
+
+**Returns**: `{ status: "disconnected" }`

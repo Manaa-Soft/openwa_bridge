@@ -60,8 +60,8 @@ OpenWA Bridge is a Frappe app that intercepts `frappe_whatsapp` DocType operatio
 │                                                                    │
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │                 Custom Fields (fixtures)                    │  │
-│  │  WhatsApp Account:     8 fields (OpenWA section +          │  │
-│  │                          separator)                        │  │
+│  │  WhatsApp Account:     9 fields (OpenWA section +          │  │
+│  │                          QR HTML + separator)              │  │
 │  │  WhatsApp Templates:   8 fields (sync + dynamic header     │  │
 │  │                          + letterhead control)             │  │
 │  │  WhatsApp Notification: 1 field  (openwa_send_type)        │  │
@@ -72,6 +72,10 @@ OpenWA Bridge is a Frappe app that intercepts `frappe_whatsapp` DocType operatio
 │  │    - token, url, version, webhook_verify_token             │  │
 │  │    - phone_id, app_id, business_id                         │  │
 │  │    - depends_on: "eval:!doc.openwa_enabled"                │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │              doc_events (hooks.py)                          │  │
+│  │  WhatsApp Account on_trash → delete OpenWA session         │  │
 │  └────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────┬─────────────────────────────────────┘
                                │
@@ -130,6 +134,19 @@ Each override class extends the parent and selectively intercepts methods:
 - **OverrideWhatsAppMessage**: Intercepts `notify()` — if OpenWA enabled, routes via OpenWA; otherwise falls back to parent (Meta API).
 - **OverrideWhatsAppTemplates**: Intercepts `before_save()` — skips Meta API calls for OpenWA accounts, syncs to OpenWA REST API instead.
 - **OverrideWhatsAppNotification**: Overrides `send_template_message()` and `notify()` — routes by `openwa_send_type` (Template/Jinja/fallback).
+- **whatsapp_account.py**: Not an override class — provides whitelisted methods for QR code display and one-click session setup. Registered via `doc_events` for `on_trash` cleanup.
+
+### doc_events Hooks
+
+```python
+doc_events = {
+    "WhatsApp Account": {
+        "on_trash": "openwa_bridge.whatsapp_account.on_account_trash"
+    }
+}
+```
+
+When a WhatsApp Account is deleted in Frappe, `on_account_trash()` calls `DELETE /api/sessions/:id` on OpenWA to clean up the session.
 
 ## hooks.py Constraints
 

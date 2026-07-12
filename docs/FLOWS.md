@@ -267,3 +267,76 @@ receive_openwa_message()
   ▼
   Return "OK" (200)
 ```
+
+## Flow 6: One-Click Session Setup (WhatsApp Account → OpenWA)
+
+```
+User opens WhatsApp Account form
+  │
+  ▼
+refresh() → get_openwa_session_status()
+  │
+  ├─ openwa_session_id empty?
+  │    │
+  │    ▼
+  │  Show "Setup OpenWA" button
+  │    │
+  │    ▼
+  │  User clicks "Setup OpenWA"
+  │    │
+  │    ▼
+  │  setup_openwa_session(account_name)
+  │    │
+  │    ├─ 1. Connectivity check: GET /api/sessions (10s timeout)
+  │    │      ├─ ConnectionError → "Cannot connect to OpenWA"
+  │    │      └─ Timeout → "OpenWA did not respond in time"
+  │    │
+  │    ├─ 2. Sanitize account name → session name
+  │    │      "My Shop" → "my-shop"
+  │    │
+  │    ├─ 3. GET /api/sessions → find existing session by name
+  │    │
+  │    ├─ 4. If not found → POST /api/sessions { name: "my-shop" }
+  │    │      (409 Conflict → re-fetch list to find existing)
+  │    │
+  │    ├─ 5. Save openwa_session_id to WhatsApp Account doc
+  │    │
+  │    ├─ 6. Check session status
+  │    │      ├─ ready → return (already connected)
+  │    │      └─ disconnected/created/failed → POST /start (60s timeout)
+  │    │
+  │    └─ 7. GET /qr → return QR data URL
+  │
+  │    ▼
+  │  JS renders QR in openwa_qr_html field
+  │  Auto-refreshes every 55 seconds
+  │    │
+  │    ▼
+  │  User scans QR with phone
+  │    │
+  │    ▼
+  │  Session status → "ready"
+  │  Form reloads → green indicator + "Disconnect" button
+  │
+  └─ openwa_session_id exists?
+       │
+       ▼
+     Check live status → show QR / Connected / Disconnected
+```
+
+## Flow 7: Account Deletion (Frappe → OpenWA)
+
+```
+User deletes WhatsApp Account in Frappe Desk
+  │
+  ▼
+doc_events["on_trash"] → on_account_trash(doc, method)
+  │
+  ├─ openwa_enabled = 0? → return (no session to delete)
+  ├─ openwa_session_id empty? → return (no session to delete)
+  │
+  └─ DELETE /api/sessions/:session_id
+       │
+       ├─ 204 No Content → session deleted from OpenWA
+       └─ Error → log error, don't block Frappe delete
+```
