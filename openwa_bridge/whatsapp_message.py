@@ -30,8 +30,12 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 )
                 return super().notify(data)
 
-            # Enqueue to persistent outbox for background processing with retry.
-            # Messages survive server restarts because the Outbox is MariaDB-backed.
+            # Create outbox entry — do NOT commit or enqueue here.
+            # We may be inside before_insert() where the WhatsApp Message doc
+            # has not been db_insert()-ed yet.  The outer transaction from
+            # _send_whatsapp_notification() will persist both records atomically.
+            # The safety-net scheduler (process_pending_outbox) or the explicit
+            # enqueue from whatsapp_notification.py will pick this up.
             outbox = frappe.get_doc({
                 "doctype": "OpenWA Outbox",
                 "whatsapp_message": self.name,
@@ -41,16 +45,23 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 "max_attempts": 5,
             })
             outbox.insert(ignore_permissions=True)
-            frappe.db.commit()
 
-            frappe.enqueue(
-                "openwa_bridge.tasks.process_outbox_entry",
-                queue="long",
-                timeout=300,
-                job_id=f"openwa_outbox::{outbox.name}",
-                deduplicate=True,
-                outbox_name=outbox.name,
-            )
+            # Best-effort immediate enqueue — safe to call even if Redis is
+            # down; the scheduler safety-net will catch orphaned entries.
+            try:
+                frappe.enqueue(
+                    "openwa_bridge.tasks.process_outbox_entry",
+                    queue="long",
+                    timeout=300,
+                    job_id=f"openwa_outbox::{outbox.name}",
+                    deduplicate=True,
+                    outbox_name=outbox.name,
+                )
+            except Exception:
+                frappe.log_error(
+                    title="OpenWA: Failed to enqueue outbox entry",
+                    message=f"Outbox {outbox.name} will be picked up by scheduler safety-net.",
+                )
             return
 
         return super().notify(data)

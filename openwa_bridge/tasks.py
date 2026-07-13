@@ -264,7 +264,8 @@ def _fail_outbox(outbox_name: str, error: str) -> None:
     except Exception:
         return
 
-    attempts = (outbox.attempts or 0) + 1
+    # attempts was already incremented by process_outbox_entry() before calling us
+    attempts = outbox.attempts or 0
     max_attempts = outbox.max_attempts or 5
     error_msg = str(error)[:65000]
 
@@ -309,7 +310,6 @@ def process_pending_outbox() -> None:
         filters={
             "status": "Pending",
             "attempts": ["<", frappe.db.get_single_value("System Settings", "max_auto_retry_count") or 5],
-            "|next_retry_at": ["is", "sentinel"],  # placeholder
         },
         fields=["name", "next_retry_at"],
         limit=50,
