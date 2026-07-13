@@ -30,41 +30,48 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 )
                 return super().notify(data)
 
-            # Create outbox entry — do NOT commit or enqueue here.
-            # We may be inside before_insert() where the WhatsApp Message doc
-            # has not been db_insert()-ed yet.  The outer transaction from
-            # _send_whatsapp_notification() will persist both records atomically.
-            # The safety-net scheduler (process_pending_outbox) or the explicit
-            # enqueue from whatsapp_notification.py will pick this up.
-            outbox = frappe.get_doc({
-                "doctype": "OpenWA Outbox",
-                "whatsapp_message": self.name,
-                "whatsapp_account": self.whatsapp_account,
-                "content_type": self.content_type,
-                "status": "Pending",
-                "max_attempts": 5,
-            })
-            outbox.insert(ignore_permissions=True)
-
-            # Best-effort immediate enqueue — safe to call even if Redis is
-            # down; the scheduler safety-net will catch orphaned entries.
-            try:
-                frappe.enqueue(
-                    "openwa_bridge.tasks.process_outbox_entry",
-                    queue="long",
-                    timeout=300,
-                    job_id=f"openwa_outbox::{outbox.name}",
-                    deduplicate=True,
-                    outbox_name=outbox.name,
-                )
-            except Exception:
-                frappe.log_error(
-                    title="OpenWA: Failed to enqueue outbox entry",
-                    message=f"Outbox {outbox.name} will be picked up by scheduler safety-net.",
-                )
+            # Do NOT create the outbox entry here — we are inside before_insert()
+            # where self.name is still None (db_insert hasn't run yet).  Instead,
+            # set a flag so after_insert() can create the entry with the real name.
+            self._openwa_outbox_needed = True
             return
 
         return super().notify(data)
+
+    def after_insert(self):
+        """Create the outbox entry now that self.name is assigned.
+
+        ``notify()`` sets ``_openwa_outbox_needed`` during ``before_insert()``
+        when ``self.name`` is still ``None``.  We create the outbox entry here
+        so the background worker can find the linked WhatsApp Message.
+        """
+        if not getattr(self, "_openwa_outbox_needed", False):
+            return
+
+        outbox = frappe.get_doc({
+            "doctype": "OpenWA Outbox",
+            "whatsapp_message": self.name,
+            "whatsapp_account": self.whatsapp_account,
+            "content_type": self.content_type,
+            "status": "Pending",
+            "max_attempts": 5,
+        })
+        outbox.insert(ignore_permissions=True)
+
+        try:
+            frappe.enqueue(
+                "openwa_bridge.tasks.process_outbox_entry",
+                queue="long",
+                timeout=300,
+                job_id=f"openwa_outbox::{outbox.name}",
+                deduplicate=True,
+                outbox_name=outbox.name,
+            )
+        except Exception:
+            frappe.log_error(
+                title="OpenWA: Failed to enqueue outbox entry",
+                message=f"Outbox {outbox.name} will be picked up by scheduler safety-net.",
+            )
 
     # ------------------------------------------------------------------
     # OpenWA dispatchers
