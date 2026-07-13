@@ -496,6 +496,14 @@ Uses Frappe's built-in `depends_on` mechanism — zero JavaScript needed.
 3. Verify `SSRF_ALLOWED_HOSTS` includes your Frappe server IP
 4. Review OpenWA webhook logs for delivery status
 
+### Sessions don't reconnect after VM restart
+
+1. Enable Frappe scheduler: `bench --site erp.manaasoft.com scheduler enable`
+2. Verify scheduler is running: `bench --site erp.manaasoft.com doctor`
+3. Check OpenWA is running: `curl http://localhost:2785/api/sessions`
+4. The pre-send check auto-restarts sessions on next message attempt
+5. If session shows "requires QR re-scan", open WhatsApp Account form and scan again
+
 ### Template translation errors
 
 The app includes fallback logic -- if `frappe.get_doc()` fails, it falls back to `frappe.db.get_value()` for template lookup. Check the error log if templates aren't rendering correctly.

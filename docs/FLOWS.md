@@ -340,3 +340,67 @@ doc_events["on_trash"] → on_account_trash(doc, method)
        ├─ 204 No Content → session deleted from OpenWA
        └─ Error → log error, don't block Frappe delete
 ```
+
+## Flow 8: Scheduled Health Check (Auto-Reconnect)
+
+```
+Frappe Scheduler (hourly/daily)
+  │
+  ▼
+tasks.hourly() or tasks.daily()
+  │
+  ▼
+_run_health_check()
+  │
+  ├─ _get_openwa_accounts()
+  │    └─ Query: openwa_enabled=1 AND openwa_session_id IS SET
+  │
+  └─ For each account:
+       │
+       ▼
+     _check_session_status(base_url, session_id, api_key)
+       │
+       ├─ Connection error → _set_account_status(name, "disconnected")
+       │
+       ├─ status = "ready" → _set_account_status(name, "ready")
+       │
+       └─ status in (disconnected, created, failed):
+            │
+            ▼
+          _start_session(base_url, session_id, api_key)
+            │
+            ├─ POST /api/sessions/:id/start (60s timeout)
+            ├─ Wait 3s
+            ├─ Re-check status
+            └─ _set_account_status(name, new_status)
+```
+
+## Flow 9: Pre-Send Session Check (Before Every Send)
+
+```
+_send_via_openwa(account, meta_payload)
+  │
+  ▼
+_ensure_session_ready(account)
+  │
+  ├─ 1. GET /api/sessions/:id (10s timeout)
+  │      │
+  │      ├─ status = "ready" → return (all good)
+  │      └─ status != "ready" → continue to restart
+  │
+  ├─ 2. POST /api/sessions/:id/start (60s timeout)
+  │      │
+  │      ├─ 200/201/400 → continue (400 = already started)
+  │      └─ Other → throw "restart failed: HTTP {code}"
+  │
+  ├─ 3. Wait 5s for initialization
+  │
+  ├─ 4. GET /api/sessions/:id (10s timeout)
+  │      │
+  │      ├─ status = "ready" → return (recovered!)
+  │      ├─ status = "qr_ready" → throw "requires QR re-scan"
+  │      └─ Other → continue
+  │
+  └─ 5. throw "session is {status} and could not be recovered"
+       → User must open WhatsApp Account form and click "Reconnect"
+```

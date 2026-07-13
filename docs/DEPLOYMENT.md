@@ -31,20 +31,26 @@ ssh user@192.168.1.15 "cd ~/frappe-bench && bench restart"
 ## Full Git Deploy (Preferred)
 
 ```bash
-# On local machine
-cd openwa_bridge-develop
-git add -A
-git commit -m "description of changes"
-git push origin develop
-
 # On server
-cd ~/frappe-bench
-bench get-app https://github.com/Manaa-Soft/openwa_bridge.git --branch develop
-bench --site your-site.local migrate
+cd ~/frappe-bench/apps/openwa_bridge
+
+# Discard any local changes (use remote version)
+git checkout -- .
+git clean -fd openwa_bridge/public/
+
+# Pull latest from GitHub
+git pull --no-rebase origin develop
+
+# Migrate + build + restart
+bench migrate --site erp.manaasoft.com
+bench build --app openwa_bridge
 bench restart
+
+# Enable Frappe scheduler (one-time, for auto-reconnect tasks)
+bench --site erp.manaasoft.com scheduler enable
 ```
 
-**Note**: GitHub PAT may be required for push (password auth disabled).
+**Note**: GitHub PAT may be required for push (password auth disabled). Use `git pull --no-rebase` to avoid merge conflicts.
 
 ---
 
