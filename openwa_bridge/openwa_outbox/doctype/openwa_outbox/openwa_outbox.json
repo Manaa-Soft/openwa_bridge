@@ -1,0 +1,166 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-07-14 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "status",
+  "whatsapp_account",
+  "column_break_main",
+  "content_type",
+  "chat_id",
+  "section_break_retry",
+  "attempts",
+  "max_attempts",
+  "column_break_retry",
+  "next_retry_at",
+  "last_error",
+  "section_break_ref",
+  "whatsapp_message",
+  "column_break_ref",
+  "priority"
+ ],
+ "fields": [
+  {
+   "default": "Pending",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Pending\nSending\nSent\nFailed\nCancelled",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "whatsapp_account",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "WhatsApp Account",
+   "options": "WhatsApp Account",
+   "reqd": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_main",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "content_type",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Content Type",
+   "read_only": 1
+  },
+  {
+   "fieldname": "chat_id",
+   "fieldtype": "Data",
+   "label": "Chat ID",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_retry",
+   "fieldtype": "Section Break",
+   "label": "Retry Configuration"
+  },
+  {
+   "default": "0",
+   "fieldname": "attempts",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Attempts",
+   "read_only": 1
+  },
+  {
+   "default": "5",
+   "fieldname": "max_attempts",
+   "fieldtype": "Int",
+   "label": "Max Attempts",
+   "non_negative": 1
+  },
+  {
+   "fieldname": "column_break_retry",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "next_retry_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Next Retry At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_error",
+   "fieldtype": "Long Text",
+   "label": "Last Error",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_ref",
+   "fieldtype": "Section Break",
+   "label": "Reference"
+  },
+  {
+   "fieldname": "whatsapp_message",
+   "fieldtype": "Link",
+   "label": "WhatsApp Message",
+   "options": "WhatsApp Message",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_ref",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "priority",
+   "fieldtype": "Int",
+   "label": "Priority",
+   "non_negative": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-07-14 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "OpenWA Bridge",
+ "name": "OpenWA Outbox",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 0,
+   "delete": 0,
+   "email": 0,
+   "export": 0,
+   "print": 0,
+   "read": 1,
+   "report": 0,
+   "role": "All",
+   "share": 0,
+   "write": 0
+  }
+ ],
+ "quick_entry": 1,
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "whatsapp_message",
+ "track_seen": 0
+}

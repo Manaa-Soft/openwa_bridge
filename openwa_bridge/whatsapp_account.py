@@ -144,6 +144,19 @@ def setup_openwa_session(account_name: str) -> dict:
     if not base_url:
         frappe.throw("OpenWA Base URL is not set.")
 
+    # Warn if using HTTP in production (not localhost)
+    if base_url.startswith("http://"):
+        from urllib.parse import urlparse
+        host = urlparse(base_url).hostname or ""
+        if host not in ("localhost", "127.0.0.1", "::1"):
+            frappe.msgprint(
+                "Warning: OpenWA Base URL uses HTTP instead of HTTPS. "
+                "API keys and messages are transmitted in plaintext. "
+                "Use HTTPS in production environments.",
+                indicator="orange",
+                alert=True,
+            )
+
     # Quick connectivity check — fail fast with a clear message.
     try:
         requests.get(base_url.rstrip("/") + "/api/sessions",

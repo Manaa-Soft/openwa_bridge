@@ -30,6 +30,14 @@ def receive_openwa_message() -> dict[str, str]:
     if not payload or "event" not in payload:
         frappe.throw("Invalid webhook payload")
 
+    # ── Rate limiting (30 req/min per IP) ──
+    client_ip = frappe.request.remote_addr or "unknown"
+    rate_key = f"openwa_rate::{client_ip}"
+    count = frappe.cache().get_value(rate_key) or 0
+    if count >= 30:
+        frappe.throw("Rate limit exceeded", http_status_code=429)
+    frappe.cache().set_value(rate_key, count + 1, expires_in=60)
+
     session_id: str = payload.get("sessionId", "")
     event_type: str = payload.get("event", "")
     event_data: dict = payload.get("data", {})

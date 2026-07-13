@@ -1,7 +1,11 @@
 """Shared utilities for OpenWA Bridge."""
+from __future__ import annotations
+
 import hmac
 import hashlib
 import re
+from datetime import datetime, timedelta
+
 import frappe
 import requests
 
@@ -164,3 +168,82 @@ def render_doc_as_image(
             message=f"Failed to render {doctype} {name} as image",
         )
         return None
+
+
+# ------------------------------------------------------------------
+# Circuit breaker for OpenWA send failures
+# ------------------------------------------------------------------
+
+
+class OpenWACircuitBreaker:
+    """Trip after N consecutive failures per account.  Blocks sends during cooldown.
+
+    State is stored in ``frappe.cache()`` (Redis-backed) so it survives process
+    restarts but resets on Redis restart -- which is the correct behavior since
+    a Redis restart likely means the gateway itself is healthy again.
+    """
+
+    CACHE_PREFIX = "openwa_cb::"
+
+    def __init__(
+        self,
+        account_name: str,
+        threshold: int = 5,
+        cooldown_seconds: int = 300,
+    ) -> None:
+        self.account_name = account_name
+        self.threshold = threshold
+        self.cooldown_seconds = cooldown_seconds
+        self._key_failures = f"{self.CACHE_PREFIX}{account_name}::failures"
+        self._key_tripped = f"{self.CACHE_PREFIX}{account_name}::tripped_at"
+
+    # ------------------------------------------------------------------
+
+    def record_success(self) -> None:
+        """Reset the failure counter (circuit closes)."""
+        frappe.cache().delete_value(self._key_failures)
+        frappe.cache().delete_value(self._key_tripped)
+
+    def record_failure(self) -> None:
+        """Increment consecutive failure count; trip if threshold reached."""
+        count = (frappe.cache().get_value(self._key_failures) or 0) + 1
+        frappe.cache().set_value(
+            self._key_failures, count, expires_in=self.cooldown_seconds * 2,
+        )
+
+        if count >= self.threshold:
+            frappe.cache().set_value(
+                self._key_tripped,
+                datetime.now().isoformat(),
+                expires_in=self.cooldown_seconds * 2,
+            )
+            frappe.logger().warning(
+                f"OpenWA circuit breaker TRIPPED for '{self.account_name}' "
+                f"after {count} consecutive failures"
+            )
+
+    def is_open(self) -> bool:
+        """Return True if the circuit is tripped and sends should be blocked."""
+        tripped_at_str = frappe.cache().get_value(self._key_tripped)
+        if not tripped_at_str:
+            return False
+
+        tripped_at = datetime.fromisoformat(tripped_at_str)
+        if datetime.now() - tripped_at > timedelta(seconds=self.cooldown_seconds):
+            # Cooldown expired -- close the circuit
+            frappe.cache().delete_value(self._key_tripped)
+            frappe.cache().delete_value(self._key_failures)
+            return False
+
+        return True
+
+    def remaining_cooldown(self) -> int:
+        """Seconds remaining until the circuit closes.  0 if closed."""
+        tripped_at_str = frappe.cache().get_value(self._key_tripped)
+        if not tripped_at_str:
+            return 0
+
+        tripped_at = datetime.fromisoformat(tripped_at_str)
+        elapsed = (datetime.now() - tripped_at).total_seconds()
+        remaining = max(0, int(self.cooldown_seconds - elapsed))
+        return remaining

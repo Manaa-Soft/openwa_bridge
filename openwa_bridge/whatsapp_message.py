@@ -30,14 +30,28 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 )
                 return super().notify(data)
 
-            try:
-                return self._send_via_openwa(account, data)
-            except Exception as e:
-                frappe.log_error(
-                    title="OpenWA Transmission Failure",
-                    message=f"Failed sending message {self.name}: {str(e)}",
-                )
-                frappe.throw(f"OpenWA Routing Failed: {str(e)}")
+            # Enqueue to persistent outbox for background processing with retry.
+            # Messages survive server restarts because the Outbox is MariaDB-backed.
+            outbox = frappe.get_doc({
+                "doctype": "OpenWA Outbox",
+                "whatsapp_message": self.name,
+                "whatsapp_account": self.whatsapp_account,
+                "content_type": self.content_type,
+                "status": "Pending",
+                "max_attempts": 5,
+            })
+            outbox.insert(ignore_permissions=True)
+            frappe.db.commit()
+
+            frappe.enqueue(
+                "openwa_bridge.tasks.process_outbox_entry",
+                queue="long",
+                timeout=300,
+                job_id=f"openwa_outbox::{outbox.name}",
+                deduplicate=True,
+                outbox_name=outbox.name,
+            )
+            return
 
         return super().notify(data)
 

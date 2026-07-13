@@ -148,9 +148,9 @@ Also added `_ensure_session_ready()` pre-send check in `whatsapp_message.py` tha
 | OpenWA Dashboard | http://localhost:2886 |
 | OpenWA Session | "manaa" (UUID: 14445ea6-6cb0-486c-ae81-4bd135fb21bd) |
 | OpenWA Phone | +967777713637 |
-| OpenWA API Key | owa_k1_66d53f37a4c26410104a9a20a01555b6084ee115406345ef2a89880adc6432c8 |
-| OpenWA Webhook ID | 2124417e-17ad-4ce5-b84e-d4ee11674d20 |
-| Webhook Secret | my-shared-secret-123 |
+| OpenWA API Key | *(stored in WhatsApp Account Password field)* |
+| OpenWA Webhook ID | *(configured in OpenWA dashboard)* |
+| Webhook Secret | *(stored in WhatsApp Account Password field)* |
 | PyMuPDF | Installed on server (fitz import works) |
 | Git Repo | https://github.com/Manaa-Soft/openwa_bridge.git (branch: develop) |
 | GitHub Auth | PAT required (password auth disabled) |
