@@ -386,6 +386,25 @@ Get current session status.
 
 **Returns**: `{ status, phone, push_name, connected_at, last_active }`
 
+### _ensure_session_ready (internal)
+
+Not whitelisted — called internally by `_send_via_openwa()` before every send.
+
+**Method**: `OverrideWhatsAppMessage._ensure_session_ready()`
+
+**Behavior**:
+1. GET `/api/sessions/:id` — check status
+2. If `ready` → return immediately
+3. If not → POST `/start` with 60s timeout
+4. Wait 5s, re-check status
+5. If still not `ready` → throw error with instructions
+
+**Error messages**:
+- "Session restart failed: HTTP {code}"
+- "Session is {status} and restart failed: {error}"
+- "Session restarted but requires QR re-scan"
+- "Session is {status} and could not be recovered automatically"
+
 ### stop_openwa_session
 
 Disconnect the session.

@@ -56,6 +56,13 @@ OpenWA Bridge is a Frappe app that intercepts `frappe_whatsapp` DocType operatio
 │  │  │  openwa_to_frappe_vars() - {{param1}} → {{1}}        │   │  │
 │  │  │  render_doc_as_image() - PDF → PNG via PyMuPDF       │   │  │
 │  │  └──────────────────────────────────────────────────────┘   │  │
+│  │                                                              │  │
+│  │  ┌──────────────────────────────────────────────────────┐   │  │
+│  │  │                    tasks.py                           │   │  │
+│  │  │  Scheduled health checks (hourly, daily)              │   │  │
+│  │  │  Query all OpenWA-enabled accounts, check status,     │   │  │
+│  │  │  restart disconnected sessions, sync status field     │   │  │
+│  │  └──────────────────────────────────────────────────────┘   │  │
 │  └────────────────────────────────────────────────────────────┘  │
 │                                                                    │
 │  ┌────────────────────────────────────────────────────────────┐  │
@@ -76,6 +83,11 @@ OpenWA Bridge is a Frappe app that intercepts `frappe_whatsapp` DocType operatio
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │              doc_events (hooks.py)                          │  │
 │  │  WhatsApp Account on_trash → delete OpenWA session         │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │           scheduler_events (hooks.py)                      │  │
+│  │  hourly → tasks.hourly → _run_health_check()              │  │
+│  │  daily  → tasks.daily  → _run_health_check()              │  │
 │  └────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────┬─────────────────────────────────────┘
                                │

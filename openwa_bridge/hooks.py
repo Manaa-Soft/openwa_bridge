@@ -152,24 +152,16 @@ doc_events = {
 
 # Scheduled Tasks
 # ---------------
+# Periodic session health check — restarts disconnected OpenWA sessions.
 
-# scheduler_events = {
-# 	"all": [
-# 		"openwa_bridge.tasks.all"
-# 	],
-# 	"daily": [
-# 		"openwa_bridge.tasks.daily"
-# 	],
-# 	"hourly": [
-# 		"openwa_bridge.tasks.hourly"
-# 	],
-# 	"weekly": [
-# 		"openwa_bridge.tasks.weekly"
-# 	],
-# 	"monthly": [
-# 		"openwa_bridge.tasks.monthly"
-# 	],
-# }
+scheduler_events = {
+	"hourly": [
+		"openwa_bridge.tasks.hourly"
+	],
+	"daily": [
+		"openwa_bridge.tasks.daily"
+	],
+}
 
 # Testing
 # -------
@@ -289,4 +281,3 @@ require_type_annotated_api_methods = True
 # ------------
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
-

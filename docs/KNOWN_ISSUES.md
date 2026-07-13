@@ -85,6 +85,24 @@ Also replaced `openwa_api()` call with direct `requests.post()` for better error
 
 ---
 
+### 6. Sessions don't reconnect after VM restart
+
+**Status**: Fixed  
+**Root cause**: OpenWA's `AUTO_START_SESSIONS` defaults to `false`, and openwa_bridge had no scheduled reconnection logic.  
+**Fix**: Added `tasks.py` with `hourly()` and `daily()` scheduler hooks that:
+1. Query all OpenWA-enabled WhatsApp Accounts
+2. Check each session's status via OpenWA API
+3. Restart disconnected/created/failed sessions automatically
+4. Sync WhatsApp Account `status` field (Active/Inactive) with OpenWA
+
+Also added `_ensure_session_ready()` pre-send check in `whatsapp_message.py` that verifies session is ready before every send, auto-restarts if not.
+
+**Files**: `tasks.py` (new), `hooks.py` (scheduler_events), `whatsapp_message.py` (_ensure_session_ready)
+
+**Note**: Frappe scheduler must be enabled: `bench --site erp.manaasoft.com scheduler enable`
+
+---
+
 ## Resolved Issues
 
 ### 3. jinja `doc.items` AttributeError

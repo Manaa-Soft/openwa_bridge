@@ -2,6 +2,7 @@
 import frappe
 import requests
 import json
+import time
 
 from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message import (
     WhatsAppMessage,
@@ -44,8 +45,87 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
     # OpenWA dispatchers
     # ------------------------------------------------------------------
 
+    def _ensure_session_ready(self, account: "WhatsAppAccount") -> None:  # noqa: F821
+        """Verify the OpenWA session is ready; attempt restart if not.
+
+        Raises ``frappe.ValidationError`` if the session cannot be recovered.
+        """
+        base_url = account.get("openwa_base_url").strip("/")
+        session_id = account.get("openwa_session_id")
+        api_key = account.get_password("openwa_api_key")
+
+        headers = {"Content-Type": "application/json", "X-API-Key": api_key}
+
+        # Check current status
+        try:
+            resp = requests.get(
+                f"{base_url}/api/sessions/{session_id}",
+                headers=headers,
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                status = resp.json().get("status", "unknown")
+                if status == "ready":
+                    return  # all good
+            else:
+                status = "disconnected"
+        except Exception:
+            status = "disconnected"
+
+        # Not ready — attempt restart
+        frappe.logger().info(
+            f"OpenWA pre-send: session '{session_id}' status is '{status}' — "
+            f"attempting restart before sending message {self.name}"
+        )
+        try:
+            start_resp = requests.post(
+                f"{base_url}/api/sessions/{session_id}/start",
+                headers=headers,
+                timeout=60,
+            )
+            if start_resp.status_code not in (200, 201, 400):
+                frappe.throw(
+                    f"OpenWA session restart failed: HTTP {start_resp.status_code}"
+                )
+        except Exception as exc:
+            frappe.throw(
+                f"OpenWA session is {status} and restart failed: {exc}"
+            )
+
+        # Give OpenWA a moment to initialize, then verify
+        time.sleep(5)
+        try:
+            verify = requests.get(
+                f"{base_url}/api/sessions/{session_id}",
+                headers=headers,
+                timeout=10,
+            )
+            if verify.status_code == 200:
+                new_status = verify.json().get("status", "unknown")
+                if new_status == "ready":
+                    frappe.logger().info(
+                        f"OpenWA pre-send: session '{session_id}' restarted "
+                        f"successfully — status is now 'ready'"
+                    )
+                    return
+                if new_status == "qr_ready":
+                    frappe.throw(
+                        "OpenWA session restarted but requires QR re-scan. "
+                        "Please open the WhatsApp Account form and scan the QR code."
+                    )
+        except Exception:
+            pass
+
+        frappe.throw(
+            f"OpenWA session is {status} and could not be recovered automatically. "
+            "Please open the WhatsApp Account form and click 'Reconnect'."
+        )
+
     def _send_via_openwa(self, account: "WhatsAppAccount", meta_payload: dict) -> None:  # noqa: F821
         """Translate and dispatch the payload to the OpenWA Gateway REST API."""
+        # Ensure session is ready before attempting to send
+        self._ensure_session_ready(account)
+
         base_url = account.get("openwa_base_url").strip("/")
         session_id = account.get("openwa_session_id")
         api_key = account.get_password("openwa_api_key")

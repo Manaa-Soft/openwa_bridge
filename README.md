@@ -153,6 +153,24 @@ bench pip install PyMuPDF
 
 ## Configuration
 
+### Auto-Reconnect (Scheduled Tasks)
+
+The app includes scheduled tasks that automatically restart disconnected OpenWA sessions:
+
+- **Hourly**: Checks all OpenWA accounts — restarts any disconnected sessions
+- **Daily**: Backup health check
+
+The scheduler is enabled in `hooks.py`. Frappe's worker must be running for scheduled tasks to execute:
+
+```bash
+bench --site erp.manaasoft.com scheduler enable
+bench restart
+```
+
+**Pre-send check**: Before every outbound message, the system verifies the session is `ready`. If not, it automatically attempts a restart and waits for the session to recover. If recovery fails (e.g., requires QR re-scan), the send is blocked with a clear error message.
+
+**Status sync**: The WhatsApp Account `status` field (Active/Inactive) is automatically updated to match the OpenWA session status.
+
 ### WhatsApp Account Setup (One-Click)
 
 1. Go to **WhatsApp > WhatsApp Account** in Frappe Desk
@@ -491,6 +509,7 @@ openwa_bridge/
 ├── hooks.py                    # App hooks, DocType overrides, fixtures, doc_events
 ├── utils.py                    # HMAC verification, JID helpers, type mapping,
 │                               #   OpenWA API helper, render_doc_as_image()
+├── tasks.py                    # Scheduled session health check and auto-reconnect
 ├── whatsapp_account.py         # QR code display, one-click setup, session management
 ├── whatsapp_message.py         # Outbound message routing (OverrideWhatsAppMessage)
 ├── whatsapp_templates.py       # Template sync to OpenWA (OverrideWhatsAppTemplates)
@@ -517,6 +536,9 @@ openwa_bridge/
 | `whatsapp_account.py` | `get_openwa_qr()` | Fetch QR code for existing session |
 | `whatsapp_account.py` | `get_openwa_session_status()` | Get session status (ready/disconnected/etc) |
 | `whatsapp_account.py` | `stop_openwa_session()` | Disconnect session |
+| `tasks.py` | `hourly()` | Scheduled health check — restarts disconnected sessions |
+| `tasks.py` | `daily()` | Daily backup health check |
+| `tasks.py` | `_run_health_check()` | Core: checks all OpenWA sessions, restarts if needed |
 | `whatsapp_account.py` | `on_account_trash()` | Delete OpenWA session when account is deleted |
 | `whatsapp_message.py` | `_send_via_openwa()` | Routes outbound messages by content type |
 | `whatsapp_templates.py` | `_sync_to_openwa()` | Create/update/delete templates on OpenWA |
@@ -524,6 +546,7 @@ openwa_bridge/
 | `whatsapp_notification.py` | `notify()` | Route by `openwa_send_type` (Template/Jinja) |
 | `whatsapp_notification.py` | `_send_dynamic_header_image()` | Render doc as PNG and send via send-image |
 | `whatsapp_notification.py` | `_extract_template_parameters()` | Read live doc values via fields child table |
+| `whatsapp_message.py` | `_ensure_session_ready()` | Pre-send session health check — restarts if not ready |
 
 ---
 
