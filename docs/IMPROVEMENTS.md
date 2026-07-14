@@ -249,36 +249,37 @@ Based on analysis of `frappe_whatsapp-master`, `OpenWA-main`, and `openwa_bridge
 
 ## Phase 6: Documentation & Developer Experience
 
-**Effort**: 2-3 hours | **Impact**: Low | **Status**: Not Started
+**Effort**: 2-3 hours | **Impact**: Low | **Status**: Complete
 
 ### 6.1 Fix All Documentation Inaccuracies
 
-- [ ] Update `hooks.py` to remove `use_json_request_body = True`
-- [ ] Fix `FLOWS.md` Flow 1 order (before_insert, not after_insert)
-- [ ] Fix `ARCHITECTURE.md` method names for Templates override
-- [ ] Fix `DEPLOYMENT.md` webhook events list
-- [ ] Fix `CUSTOM_FIELDS.md` field count for Templates
+- [x] Update `hooks.py` to remove `use_json_request_body = True`
+- [x] Fix `FLOWS.md` Flow 1 order (before_insert, not after_insert)
+- [x] Fix `ARCHITECTURE.md` method names for Templates override
+- [x] Fix `DEPLOYMENT.md` webhook events list
+- [x] Fix `CUSTOM_FIELDS.md` field count for Templates and Account
+- [x] Update README.md with new features and configurable values
 
 ### 6.2 Add Inline Code Documentation
 
-- [ ] Add docstrings to all public methods
-- [ ] Include Args, Returns, Raises, Example
-- [ ] Add module-level docstrings
-- [ ] Document all `# noqa` suppressions with reason
+- [x] Add docstrings to all public methods
+- [x] Include Args, Returns, Raises, Example
+- [x] Add module-level docstrings
+- [x] Document all `# noqa` suppressions with reason
 
 ### 6.3 Add CHANGELOG.md
 
-- [ ] Track changes by version
-- [ ] Format: Added, Fixed, Changed, Removed
-- [ ] Link to commits
-- [ ] Semantic versioning
+- [x] Track changes by version
+- [x] Format: Added, Fixed, Changed, Removed
+- [x] Link to commits
+- [x] Semantic versioning
 
 ### 6.4 Add Contributing Guidelines
 
-- [ ] Development setup instructions
-- [ ] Test running commands
-- [ ] Code style requirements (ruff, pre-commit)
-- [ ] PR template
+- [x] Development setup instructions
+- [x] Test running commands
+- [x] Code style requirements (ruff, pre-commit)
+- [x] PR template
 
 ### 6.5 Add Architecture Decision Records (ADRs)
 

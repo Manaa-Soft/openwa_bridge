@@ -18,13 +18,13 @@ Uses Frappe's built-in `depends_on` mechanism — zero JavaScript needed.
 
 | Mode | Visible | Hidden |
 |---|---|---|
-| **OpenWA enabled** | OpenWA fields (Base URL, Session ID, API Key, Webhook Secret, HMAC Strict, QR Code) | Meta fields (Token, URL, Version, Phone ID, App ID, Business ID) |
+| **OpenWA enabled** | OpenWA fields (Base URL, Session ID, API Key, Webhook Secret, HMAC Strict, API Timeout, Session Start Timeout, Rate Limit, CB Threshold, CB Cooldown, Max Outbox Attempts, QR Code) | Meta fields (Token, URL, Version, Phone ID, App ID, Business ID) |
 | **OpenWA disabled** | Meta fields | OpenWA fields |
 | **Both modes** | Account Name, Status, Is Default Incoming, Is Default Outgoing, Allow Auto Read Receipt, OpenWA Enabled toggle | — |
 
 ---
 
-## WhatsApp Account (10 fields)
+## WhatsApp Account (16 fields)
 
 Added to the `WhatsApp Account` DocType.
 
@@ -38,8 +38,14 @@ Added to the `WhatsApp Account` DocType.
 | 6 | `openwa_api_key` | Password | OpenWA API Key | Encrypted API key for OpenWA REST API authentication. depends_on: openwa_enabled |
 | 7 | `openwa_webhook_secret` | Password | OpenWA Webhook Secret | Secret for HMAC webhook verification. depends_on: openwa_enabled |
 | 8 | `openwa_hmac_strict` | Check | Require HMAC Signature | When checked, incoming webhooks without a valid HMAC signature are rejected. depends_on: openwa_enabled |
-| 9 | `openwa_qr_html` | HTML | QR Code | QR code display area (auto-populated by Setup button or Show QR button) |
-| 10 | `openwa_meta_separator` | Section Break | Meta Cloud API | Separator between OpenWA and Meta fields |
+| 9 | `openwa_api_timeout` | Int | API Timeout (seconds) | HTTP timeout for OpenWA REST API calls. Default: 30s. depends_on: openwa_enabled |
+| 10 | `openwa_session_start_timeout` | Int | Session Start Timeout (seconds) | HTTP timeout when starting an OpenWA session. Default: 60s. depends_on: openwa_enabled |
+| 11 | `openwa_rate_limit` | Int | Webhook Rate Limit (req/min) | Max inbound webhook requests per minute per IP. Default: 60. depends_on: openwa_enabled |
+| 12 | `openwa_cb_threshold` | Int | Circuit Breaker Threshold | Number of consecutive send failures before circuit breaker trips. Default: 5. depends_on: openwa_enabled |
+| 13 | `openwa_cb_cooldown` | Int | Circuit Breaker Cooldown (seconds) | Seconds to wait before retrying after circuit breaker trips. Default: 300. depends_on: openwa_enabled |
+| 14 | `openwa_max_outbox_attempts` | Int | Max Outbox Retry Attempts | Max delivery retries per outbox entry before marking as Failed. Default: 5. depends_on: openwa_enabled |
+| 15 | `openwa_qr_html` | HTML | QR Code | QR code display area (auto-populated by Setup button or Show QR button) |
+| 16 | `openwa_meta_separator` | Section Break | Meta Cloud API | Separator between OpenWA and Meta fields |
 
 ### Meta Fields (via Property Setters)
 

@@ -59,14 +59,17 @@ OpenWA Bridge connects the [frappe\_whatsapp](https://github.com/Shridar2101/fra
 ### Enterprise Reliability
 
 - **Async outbox queue** -- outbound messages are queued via `OpenWA Outbox` and processed by background workers, eliminating form submission delays
-- **Exponential backoff retry** -- failed sends retry with 30s, 60s, 120s, 300s backoff (capped at 1h), up to 5 attempts
-- **Circuit breaker** -- after 5 consecutive failures, the circuit opens for 5 minutes, preventing cascade failures
+- **Exponential backoff retry** -- failed sends retry with 30s, 60s, 120s, 300s backoff (capped at 1h), up to configurable max attempts
+- **Circuit breaker** -- after N consecutive failures (configurable per account), the circuit opens for a cooldown period, preventing cascade failures
 - **Scheduler safety-net** -- hourly sweep catches orphaned outbox entries from worker crashes or Redis restarts
-- **HMAC-SHA256 webhook verification** -- cryptographically verified; lenient mode (no signature = warn, not reject)
-- **Idempotent message handling** -- duplicate messages are automatically rejected
-- **Rate limiting** -- 60 requests/minute per IP on the inbound webhook endpoint
+- **HMAC-SHA256 webhook verification** -- cryptographically verified; configurable strict/lenient mode per account
+- **Idempotent message handling** -- duplicate messages are automatically rejected (configurable TTL)
+- **Rate limiting** -- configurable requests/minute per IP on the inbound webhook endpoint
 - **Auto-sync webhook secret** -- saving a WhatsApp Account auto-syncs the secret to OpenWA webhooks
 - **Credential encryption** -- API keys and secrets stored encrypted in Frappe
+- **Media size limits** -- configurable max inbound media size (default 10MB)
+- **SSRF protection** -- URL validation warns on private/internal IPs
+- **Role-based access** -- whitelisted methods check Frappe permissions
 
 ---
 
@@ -426,11 +429,11 @@ Uses Frappe's built-in `depends_on` mechanism — zero JavaScript needed.
 
 | Mode | Visible | Hidden |
 |---|---|---|
-| **OpenWA enabled** | OpenWA fields (Base URL, Session ID, API Key, Webhook Secret, QR Code) | Meta fields (Token, URL, Version, Phone ID, App ID, Business ID) |
+| **OpenWA enabled** | OpenWA fields (Base URL, Session ID, API Key, Webhook Secret, HMAC Strict, API Timeout, Session Start Timeout, Rate Limit, CB Threshold, CB Cooldown, Max Outbox Attempts, QR Code) | Meta fields (Token, URL, Version, Phone ID, App ID, Business ID) |
 | **OpenWA disabled** | Meta fields | OpenWA fields |
 | **Both modes** | Account Name, Status, Is Default Incoming, Is Default Outgoing, Allow Auto Read Receipt, OpenWA Enabled | — |
 
-### WhatsApp Account (9 fields)
+### WhatsApp Account (16 fields)
 
 | Field | Type | Description |
 |---|---|---|
@@ -441,6 +444,13 @@ Uses Frappe's built-in `depends_on` mechanism — zero JavaScript needed.
 | Column Break | Column Break | Visual separator |
 | **OpenWA API Key** | Password | API key for authentication |
 | **OpenWA Webhook Secret** | Password | Secret for HMAC verification |
+| **Require HMAC Signature** | Check | Reject webhooks without valid HMAC |
+| **API Timeout** | Int | HTTP timeout for API calls (default: 30s) |
+| **Session Start Timeout** | Int | Timeout for session start (default: 60s) |
+| **Rate Limit** | Int | Webhook rate limit per IP (default: 60/min) |
+| **CB Threshold** | Int | Circuit breaker trip threshold (default: 5) |
+| **CB Cooldown** | Int | Circuit breaker cooldown (default: 300s) |
+| **Max Outbox Attempts** | Int | Max retry attempts (default: 5) |
 | **QR Code** | HTML | QR code display area (auto-populated) |
 | **Meta Cloud API** | Section Break | Separator between OpenWA and Meta fields |
 
@@ -531,26 +541,45 @@ openwa_bridge/
 ├── hooks.py                    # App hooks, DocType overrides, fixtures, doc_events
 ├── utils.py                    # HMAC verification, JID helpers, type mapping,
 │                               #   OpenWA API helper, render_doc_as_image(),
-│                               #   OpenWACircuitBreaker
+│                               #   OpenWACircuitBreaker, get_api_key(),
+│                               #   is_openwa_account(), get_cached_account(),
+│                               #   get_account_setting(), validate_openwa_url()
+├── install.py                  # Pre-install dependency check
 ├── tasks.py                    # Session health check, outbox processing (retry),
 │                               #   circuit breaker, scheduler safety-net
 ├── whatsapp_account.py         # QR code display, one-click setup, session management,
-│                               #   webhook auto-sync (on_update)
+│                               #   webhook auto-sync (on_update), SSRF validation
 ├── whatsapp_message.py         # Outbound message routing, outbox creation
 │                               #   (OverrideWhatsAppMessage)
 ├── whatsapp_templates.py       # Template sync to OpenWA (OverrideWhatsAppTemplates)
 ├── whatsapp_notification.py    # Notification: Jinja OR template, dynamic image header
 │                               #   (OverrideWhatsAppNotification)
-├── inbound.py                  # Inbound webhook: HMAC (lenient), idempotency,
+├── inbound.py                  # Inbound webhook: HMAC (lenient/strict), idempotency,
 │                               #   rate limiting, status events, always HTTP 200
 ├── openwa_bridge/
-│   └── doctype/
-│       └── openwa_outbox/      # Async outbox DocType for reliable message delivery
+│   ├── doctype/
+│   │   ├── openwa_outbox/      # Async outbox DocType for reliable message delivery
+│   │   └── openwa_bridge_settings/  # System-wide config (timeouts, limits)
+│   └── workspace/
+│       └── whatsapp/           # Frappe Workspace with shortcuts
 ├── public/
 │   └── js/
 │       └── whatsapp_account.js # Client script: QR display, setup button, status
-└── fixtures/
-    └── custom_field.json       # Custom fields on Account, Templates, Notification
+├── fixtures/
+│   └── custom_field.json       # Custom fields on Account, Templates, Notification
+└── tests/
+    ├── conftest.py             # Shared test fixtures and mocks
+    ├── test_utils.py           # Utility function tests
+    ├── test_utils_new.py       # Additional utility tests
+    ├── test_circuit_breaker.py # Circuit breaker tests
+    ├── test_inbound_rate_limit.py  # Rate limiting tests
+    ├── test_inbound_handlers.py    # Inbound handler tests
+    ├── test_outbound.py        # Outbound message tests
+    ├── test_notification.py    # Notification flow tests
+    ├── test_templates.py       # Template sync tests
+    ├── test_account.py         # Account management tests
+    ├── test_outbox.py          # Outbox DocType tests
+    └── test_process_outbox.py  # Outbox processing tests
 ```
 
 ### Key Methods
