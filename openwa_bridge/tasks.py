@@ -387,10 +387,17 @@ def _fail_outbox(outbox_name: str, error: str) -> None:
         )
 
     frappe.db.commit()
-    frappe.log_error(
-        title=f"OpenWA Outbox Failed: {outbox_name}",
-        message=f"Attempt {attempts}/{max_attempts}: {error_msg}",
-    )
+
+    if attempts >= max_attempts:
+        frappe.log_error(
+            title=f"OpenWA Outbox Failed: {outbox_name}",
+            message=f"Attempt {attempts}/{max_attempts}: {error_msg}",
+        )
+    else:
+        frappe.logger().warning(
+            f"OpenWA outbox {outbox_name}: attempt {attempts}/{max_attempts} "
+            f"failed, retrying in {backoff_seconds}s — {error_msg[:200]}"
+        )
 
 
 def process_pending_outbox() -> None:

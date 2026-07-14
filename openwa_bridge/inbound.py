@@ -70,14 +70,9 @@ def receive_openwa_message() -> dict[str, str]:
                 )
                 return {"status": "error", "message": "Signature verification failed"}
             elif not signature:
-                frappe.log_error(
-                    title="OpenWA: Missing HMAC signature",
-                    message=(
-                        f"Session: {session_id} — webhook_secret is configured "
-                        "but OpenWA sent no signature. Messages are processed "
-                        "but HMAC is NOT verified. Set the same secret in "
-                        "OpenWA webhook config to enable signature verification."
-                    ),
+                frappe.logger().info(
+                    f"OpenWA: No HMAC signature from session {session_id} "
+                    "— messages processed without verification"
                 )
 
     # ── Idempotency check ──
@@ -96,8 +91,11 @@ def receive_openwa_message() -> dict[str, str]:
             _handle_status_update(event_data)
         elif event_type == "session.status":
             _handle_session_status(event_data, session_id)
-    except Exception:
-        frappe.log_error(title="OpenWA Inbound Handler Error")
+    except Exception as e:
+        frappe.log_error(
+            title="OpenWA Inbound Handler Error",
+            message=f"Event: {event_type}, Session: {session_id}\n{frappe.get_traceback()}",
+        )
 
     frappe.db.commit()
     return {"status": "ok"}
@@ -174,6 +172,10 @@ def _handle_inbound_message(
 
     doc = frappe.get_doc(doc_data)
     doc.insert(ignore_permissions=True)
+
+    frappe.logger().info(
+        f"OpenWA inbound: created WhatsApp Message {doc.name} from {phone_number}"
+    )
 
     # Attach media if present
     media_info = msg_data.get("media")
