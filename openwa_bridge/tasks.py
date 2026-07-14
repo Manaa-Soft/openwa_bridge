@@ -250,12 +250,12 @@ def process_outbox_entry(outbox_name: str) -> None:  # noqa: C901
         _fail_outbox(outbox_name, str(exc), account=account)
 
 
-def _send_dynamic_header_for_outbox(msg, account) -> bool:
+def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
     """Send dynamic header image before the main message, if configured.
 
     Checks the linked WhatsApp Templates doc for ``openwa_dynamic_header``
     and ``openwa_print_format``.  Renders the reference doc as an image
-    and sends it via OpenWA send-image endpoint.
+    and sends it via OpenWA send-image endpoint with the text as caption.
 
     Returns True if image was sent successfully, False otherwise.
     """
@@ -308,6 +308,8 @@ def _send_dynamic_header_for_outbox(msg, account) -> bool:
         "base64": base64.b64encode(image_bytes).decode("utf-8"),
         "mimetype": "image/png",
     }
+    if caption:
+        payload["caption"] = caption
 
     try:
         img_resp = _http_session.post(
@@ -339,8 +341,8 @@ def _send_dynamic_header_for_outbox(msg, account) -> bool:
 def _send_outbox_message(msg, account, outbox) -> None:  # noqa: C901
     """Actually send the message via OpenWA. Reuses the dispatcher from whatsapp_message."""
 
-    # Phase 1: Send dynamic header image without caption
-    _send_dynamic_header_for_outbox(msg, account)
+    # Phase 1: Send dynamic header image with rendered text as caption
+    _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
 
     # Phase 2: Always send the text/template message
     from frappe_whatsapp.utils import format_number

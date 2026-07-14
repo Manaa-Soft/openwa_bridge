@@ -46,7 +46,7 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
         send_type = self.openwa_send_type or ""
         if not send_type:
             return
-        if send_type != "Template":
+        if send_type not in ("Template", "Jinja"):
             return super().send_template_message(doc, phone_no, default_template, ignore_condition)
 
         # ── OpenWA Template path (skip parent's header/attachment logic) ──
