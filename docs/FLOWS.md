@@ -9,7 +9,7 @@ User creates WhatsApp Message in Desk
 frappe.get_doc(new_doc).insert()
   │
   ▼
-after_insert → WhatsAppMessage.notify(data)
+after_insert → outbox entry (if OpenWA + outbox needed)
   │
   ▼
 OverrideWhatsAppMessage.notify(data)

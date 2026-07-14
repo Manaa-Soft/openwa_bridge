@@ -111,6 +111,26 @@ def is_openwa_account(account_name: str | None) -> bool:
     return bool(frappe.db.get_value("WhatsApp Account", account_name, "openwa_enabled"))
 
 
+def get_cached_account(account_name: str):
+    """Return a cached WhatsApp Account doc (5-minute TTL).
+
+    Parameters
+    ----------
+    account_name : Name of the WhatsApp Account doc.
+
+    Returns
+    -------
+    Document : The cached WhatsApp Account doc.
+    """
+    cache_key = f"openwa_account:{account_name}"
+    cached = frappe.cache().get_value(cache_key)
+    if cached is not None:
+        return cached
+    doc = frappe.get_doc("WhatsApp Account", account_name)
+    frappe.cache().set_value(cache_key, doc, expires_in_sec=300)
+    return doc
+
+
 # ------------------------------------------------------------------
 # OpenWA REST API helper
 # ------------------------------------------------------------------

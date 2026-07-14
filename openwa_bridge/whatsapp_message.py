@@ -1,4 +1,6 @@
 """Outbound message router — overrides WhatsAppMessage.notify() to route via OpenWA."""
+from __future__ import annotations
+
 import frappe
 import requests
 import json

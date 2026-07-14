@@ -1,4 +1,6 @@
 """Override WhatsAppTemplates — skip Meta API, sync to OpenWA."""
+from __future__ import annotations
+
 import frappe
 from frappe import _
 from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates import (

@@ -134,7 +134,7 @@ Get the API key from the OpenWA dashboard (localhost:2886).
 
 Via dashboard or API:
 - URL: `https://your-site.local/api/method/openwa_bridge.inbound.receive_openwa_message`
-- Events: message, message.any, message.reaction
+- Events: message.received, message.ack, message.failed, session.status
 
 ### 7. Configure Frappe
 

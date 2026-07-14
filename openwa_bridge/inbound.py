@@ -1,4 +1,6 @@
 """Inbound webhook receiver for OpenWA Gateway."""
+from __future__ import annotations
+
 import frappe
 import base64
 

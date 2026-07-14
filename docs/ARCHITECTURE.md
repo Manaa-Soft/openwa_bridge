@@ -28,9 +28,11 @@ OpenWA Bridge is a Frappe app that intercepts `frappe_whatsapp` DocType operatio
 │  │  │                  location/contact/poll/reply/template │   │  │
 │  │  │                                                      │   │  │
 │  │  │  OverrideWhatsAppTemplates                           │   │  │
-│  │  │    └─ before_save() → _sync_to_openwa()              │   │  │
-│  │  │         Creates/updates/deletes on OpenWA            │   │  │
-│  │  │         Stale ID recovery (404 → name lookup → POST) │   │  │
+│  │  │    └─ validate() → set_whatsapp_account()             │   │  │
+│  │  │         after_insert → _sync_to_openwa()              │   │  │
+│  │  │         on_update → _sync_to_openwa() + auto-sync     │   │  │
+│  │  │         Creates/updates/deletes on OpenWA             │   │  │
+│  │  │         Stale ID recovery (404 → name lookup → POST)  │   │  │
 │  │  │                                                      │   │  │
 │  │  │  OverrideWhatsAppNotification                        │   │  │
 │  │  │    └─ send_template_message() → notify()             │   │  │

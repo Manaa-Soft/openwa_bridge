@@ -15,34 +15,34 @@ Based on analysis of `frappe_whatsapp-master`, `OpenWA-main`, and `openwa_bridge
 
 ### 1.1 Extract Duplicated Helpers to `utils.py`
 
-- [ ] **`_get_api_key(account) -> str`** — eliminates 7+ copy-pasted `get_password("openwa_api_key")` patterns
+- [x] **`_get_api_key(account) -> str`** — eliminates 7+ copy-pasted `get_password("openwa_api_key")` patterns
   - Current locations: `utils.py`, `whatsapp_account.py` (2x), `whatsapp_message.py` (2x), `whatsapp_notification.py`, `tasks.py` (2x)
   - Replace all with single helper call
 
-- [ ] **Move `_is_openwa_account(name) -> bool`** to `utils.py`
+- [x] **Move `_is_openwa_account(name) -> bool`** to `utils.py`
   - Currently duplicated in `whatsapp_notification.py:16-19` and `whatsapp_templates.py:10-14`
   - Both files should import from `utils.py`
 
-- [ ] **`_get_cached_account(account_name) -> Document`** — cache WhatsApp Account doc with 5min TTL
+- [x] **`_get_cached_account(account_name) -> Document`** — cache WhatsApp Account doc with 5min TTL
   - Eliminates repeated `frappe.get_doc("WhatsApp Account", ...)` calls
   - Current: loaded 6+ times per message flow
 
 ### 1.2 Fix Documentation Inaccuracies
 
-- [ ] **`hooks.py:10`** — `use_json_request_body = True` still present but KNOWN_ISSUES #17 says removed. Remove it or update docs.
-- [ ] **`FLOWS.md:13`** — Says `after_insert → notify()` but actually `before_insert → notify()`. Correct the flow.
-- [ ] **`ARCHITECTURE.md:31`** — Says `before_save()` for OverrideWhatsAppTemplates but actual hooks are `validate/after_insert/on_update`. Fix method names.
-- [ ] **`DEPLOYMENT.md:137`** — Webhook events list wrong (`message, message.any`) vs actual (`message.received, message.ack, message.failed, session.status`). Fix events list.
-- [ ] **`CUSTOM_FIELDS.md:60`** — Says "6 fields" for Templates but actually 8. Fix count.
+- [x] **`hooks.py:10`** — `use_json_request_body = True` still present but KNOWN_ISSUES #17 says removed. Remove it or update docs.
+- [x] **`FLOWS.md:13`** — Says `after_insert → notify()` but actually `before_insert → notify()`. Correct the flow.
+- [x] **`ARCHITECTURE.md:31`** — Says `before_save()` for OverrideWhatsAppTemplates but actual hooks are `validate/after_insert/on_update`. Fix method names.
+- [x] **`DEPLOYMENT.md:137`** — Webhook events list wrong (`message, message.any`) vs actual (`message.received, message.ack, message.failed, session.status`). Fix events list.
+- [x] **`CUSTOM_FIELDS.md:60`** — Says "6 fields" for Templates but actually 8. Fix count.
 
 ### 1.3 Add `required_apps` to `hooks.py`
 
-- [ ] Add `required_apps = ["frappe_whatsapp"]` — prevents installation without dependency
+- [x] Add `required_apps = ["frappe_whatsapp"]` — prevents installation without dependency
 
 ### 1.4 Add `before_install` Hook
 
-- [ ] Verify `frappe_whatsapp` is installed before app install
-- [ ] Add `before_install` function in `hooks.py`
+- [x] Verify `frappe_whatsapp` is installed before app install
+- [x] Add `before_install` function in `hooks.py`
 
 ### 1.5 Add `before_uninstall` Hook
 
@@ -51,19 +51,19 @@ Based on analysis of `frappe_whatsapp-master`, `OpenWA-main`, and `openwa_bridge
 
 ### 1.6 Fix `frappe.msgprint()` in Background Context
 
-- [ ] `whatsapp_notification.py:234` — `_send_openwa_text()` uses `msgprint` (lost in background)
-- [ ] `whatsapp_notification.py:265` — `_send_openwa_template()` uses `msgprint` (lost in background)
-- [ ] Replace with `frappe.logger().info()` for background-safe logging
+- [x] `whatsapp_notification.py:234` — `_send_openwa_text()` uses `msgprint` (lost in background)
+- [x] `whatsapp_notification.py:265` — `_send_openwa_template()` uses `msgprint` (lost in background)
+- [x] Replace with `frappe.logger().info()` for background-safe logging
 
 ### 1.7 Remove Fragile `__new__()` Instantiation
 
-- [ ] `tasks.py:333-343` — Manual attribute copying is fragile when upstream adds fields
-- [ ] Replace with `frappe.get_doc()` or pass the doc directly
+- [x] `tasks.py:333-343` — Manual attribute copying is fragile when upstream adds fields
+- [x] Replace with direct method calls on the already-overridden `msg` doc
 
 ### 1.8 Consistent `from __future__ import annotations`
 
-- [ ] Add to `inbound.py`, `whatsapp_message.py`, `whatsapp_notification.py`, `whatsapp_templates.py`
-- [ ] Already present in: `utils.py`, `whatsapp_account.py`, `tasks.py`
+- [x] Add to `inbound.py`, `whatsapp_message.py`, `whatsapp_notification.py`, `whatsapp_templates.py`
+- [x] Already present in: `utils.py`, `whatsapp_account.py`, `tasks.py`
 
 ---
 

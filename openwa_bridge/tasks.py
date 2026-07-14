@@ -327,21 +327,9 @@ def _send_outbox_message(msg, account, outbox) -> None:  # noqa: C901
     if image_sent:
         return
 
-    from openwa_bridge.whatsapp_message import OverrideWhatsAppMessage
+    from frappe_whatsapp.utils import format_number
 
-    # Create a lightweight instance to reuse _ensure_session_ready and _send_via_openwa
-    instance = OverrideWhatsAppMessage.__new__(OverrideWhatsAppMessage)
-    instance.name = msg.name
-    instance.to = msg.to
-    instance.message = msg.message
-    instance.content_type = msg.content_type
-    instance.template = msg.template
-    instance.body_param = msg.body_param
-    instance.template_parameters = msg.template_parameters
-    instance.is_reply = msg.is_reply
-    instance.reply_to_message_id = msg.reply_to_message_id
-    instance.whatsapp_account = msg.whatsapp_account
-
+    # msg is already an OverrideWhatsAppMessage instance via override_doctype_class.
     # Build meta payload for media types
     meta_payload: dict = {}
     if msg.content_type in ("image", "video", "audio", "document") and msg.attach:
@@ -350,8 +338,8 @@ def _send_outbox_message(msg, account, outbox) -> None:  # noqa: C901
     elif msg.content_type == "reaction":
         meta_payload = {"reaction": {"message_id": msg.reply_to_message_id, "emoji": msg.message}}
 
-    instance._ensure_session_ready(account)
-    instance._send_via_openwa(account, meta_payload)
+    msg._ensure_session_ready(account)
+    msg._send_via_openwa(account, meta_payload)
 
 
 def _fail_outbox(outbox_name: str, error: str) -> None:

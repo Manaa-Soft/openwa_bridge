@@ -57,7 +57,7 @@ The QR is populated by clicking "Setup OpenWA" (creates session + fetches QR) or
 
 ---
 
-## WhatsApp Templates (6 fields)
+## WhatsApp Templates (8 fields)
 
 Added to the `WhatsApp Templates` DocType.
 
