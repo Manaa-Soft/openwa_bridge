@@ -179,7 +179,11 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 params: dict[str, str] = {}
                 if self.body_param:
                     try:
-                        params = {f"param{k}": v for k, v in json.loads(self.body_param).items()}
+                        bp = json.loads(self.body_param)
+                        if isinstance(bp, dict):
+                            params = {f"param{k}": v for k, v in bp.items()}
+                        elif isinstance(bp, list):
+                            params = {f"param{i + 1}": v for i, v in enumerate(bp)}
                     except (json.JSONDecodeError, TypeError):
                         pass
                 elif self.template_parameters:
@@ -188,6 +192,13 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                         params = {f"param{i + 1}": v for i, v in enumerate(raw)}
                     except (json.JSONDecodeError, TypeError):
                         pass
+
+                if not params:
+                    frappe.throw(
+                        f"Template '{self.template}' requires variables but none were provided. "
+                        "Fill in 'Template Variables' on the Bulk WhatsApp Message, "
+                        "or configure the notification's 'Fields' child table."
+                    )
 
                 send_payload = {"chatId": chat_id, "templateId": openwa_tid, "vars": params}
                 frappe.logger().info(f"OpenWA send-template payload: {json.dumps(send_payload, default=str)}")
