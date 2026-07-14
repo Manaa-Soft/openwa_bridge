@@ -34,15 +34,17 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
 
     def send_template_message(self, doc, phone_no=None, default_template=None, ignore_condition=False):
         """Override to skip parent attachment/header logic for OpenWA templates."""
-        if not _is_openwa_account(self.whatsapp_account):
+        account_name = self.whatsapp_account
+        if not account_name:
+            account = get_whatsapp_account(account_type="outgoing")
+            account_name = account.name if account else None
+
+        if not _is_openwa_account(account_name):
             return super().send_template_message(doc, phone_no, default_template, ignore_condition)
 
         send_type = self.openwa_send_type or ""
         if not send_type:
-            frappe.throw(
-                _("OpenWA Send Type is required when using OpenWA. "
-                  "Set it to 'Jinja' or 'Template' in the notification settings.")
-            )
+            return
         if send_type != "Template":
             return super().send_template_message(doc, phone_no, default_template, ignore_condition)
 
