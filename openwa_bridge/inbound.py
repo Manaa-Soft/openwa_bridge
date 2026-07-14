@@ -26,7 +26,7 @@ def receive_openwa_message() -> dict[str, str]:
 
     Always returns HTTP 200 to prevent OpenWA retry loops.
     """
-    raw_body = frappe.request.get_data(as_bytes=False)
+    raw_body = frappe.request.get_data()
     try:
         payload = frappe.request.get_json(force=True)
     except Exception:
