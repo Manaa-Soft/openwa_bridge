@@ -415,7 +415,7 @@ When sending a WhatsApp Message with a template:
 
 ## Custom Fields Reference
 
-The bridge adds custom fields to three DocTypes plus Property Setters for UI toggling:
+The bridge adds custom fields to three DocTypes plus Property Setters for UI toggling. Global settings are in the **OpenWA Bridge Settings** Single DocType.
 
 ### WhatsApp Account UI Toggle
 
@@ -429,11 +429,11 @@ Uses Frappe's built-in `depends_on` mechanism — zero JavaScript needed.
 
 | Mode | Visible | Hidden |
 |---|---|---|
-| **OpenWA enabled** | OpenWA fields (Base URL, Session ID, API Key, Webhook Secret, HMAC Strict, API Timeout, Session Start Timeout, Rate Limit, CB Threshold, CB Cooldown, Max Outbox Attempts, QR Code) | Meta fields (Token, URL, Version, Phone ID, App ID, Business ID) |
+| **OpenWA enabled** | OpenWA fields (Base URL, Session ID, API Key, Webhook Secret, QR Code) | Meta fields (Token, URL, Version, Phone ID, App ID, Business ID) |
 | **OpenWA disabled** | Meta fields | OpenWA fields |
 | **Both modes** | Account Name, Status, Is Default Incoming, Is Default Outgoing, Allow Auto Read Receipt, OpenWA Enabled | — |
 
-### WhatsApp Account (16 fields)
+### WhatsApp Account (9 fields)
 
 | Field | Type | Description |
 |---|---|---|
@@ -444,15 +444,31 @@ Uses Frappe's built-in `depends_on` mechanism — zero JavaScript needed.
 | Column Break | Column Break | Visual separator |
 | **OpenWA API Key** | Password | API key for authentication |
 | **OpenWA Webhook Secret** | Password | Secret for HMAC verification |
-| **Require HMAC Signature** | Check | Reject webhooks without valid HMAC |
-| **API Timeout** | Int | HTTP timeout for API calls (default: 30s) |
-| **Session Start Timeout** | Int | Timeout for session start (default: 60s) |
-| **Rate Limit** | Int | Webhook rate limit per IP (default: 60/min) |
-| **CB Threshold** | Int | Circuit breaker trip threshold (default: 5) |
-| **CB Cooldown** | Int | Circuit breaker cooldown (default: 300s) |
-| **Max Outbox Attempts** | Int | Max retry attempts (default: 5) |
 | **QR Code** | HTML | QR code display area (auto-populated) |
 | **Meta Cloud API** | Section Break | Separator between OpenWA and Meta fields |
+
+### OpenWA Bridge Settings (10 fields — global)
+
+Single DocType for system-wide configuration. All settings apply to every OpenWA account.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **General** | Section Break | — | — |
+| **Idempotency TTL** | Int | 3600 | How long to remember duplicate webhook events (seconds) |
+| **Outbox Batch Size** | Int | 25 | Max outbox entries re-enqueued per scheduler cycle |
+| **Media** | Section Break | — | — |
+| **Max Inbound Media Size** | Int | 10 | Maximum size for inbound media attachments (MB) |
+| **Security** | Section Break | — | — |
+| **Require HMAC Signature** | Check | Off | Reject webhooks without valid HMAC signature |
+| **Webhook Rate Limit** | Int | 60 | Max inbound requests per minute per IP |
+| **Timeouts** | Section Break | — | — |
+| **API Timeout** | Int | 30 | HTTP timeout for OpenWA REST API calls (seconds) |
+| **Session Start Timeout** | Int | 60 | HTTP timeout when starting a session (seconds) |
+| **Circuit Breaker** | Section Break | — | — |
+| **CB Threshold** | Int | 5 | Consecutive failures before circuit breaker trips |
+| **CB Cooldown** | Int | 300 | Seconds to wait before retrying after trip (seconds) |
+| **Outbox** | Section Break | — | — |
+| **Max Outbox Retry Attempts** | Int | 5 | Max delivery retries per entry before marking as Failed |
 
 ### WhatsApp Templates (8 fields)
 
@@ -559,7 +575,7 @@ openwa_bridge/
 ├── openwa_bridge/
 │   ├── doctype/
 │   │   ├── openwa_outbox/      # Async outbox DocType for reliable message delivery
-│   │   └── openwa_bridge_settings/  # System-wide config (timeouts, limits)
+│   │   └── openwa_bridge_settings/  # System-wide config (timeouts, limits, HMAC, rate limit, CB)
 │   └── workspace/
 │       └── whatsapp/           # Frappe Workspace with shortcuts
 ├── public/

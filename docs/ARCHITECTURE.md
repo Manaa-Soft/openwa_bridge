@@ -69,10 +69,8 @@ OpenWA Bridge is a Frappe app that intercepts `frappe_whatsapp` DocType operatio
 │                                                                    │
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │                 Custom Fields (fixtures)                    │  │
-  │  │  WhatsApp Account:     16 fields (OpenWA section +          │  │
-  │  │                          QR HTML + HMAC + timeouts +        │  │
-  │  │                          rate limit + circuit breaker +     │  │
-  │  │                          max outbox attempts)               │  │
+│  │  WhatsApp Account:     9 fields (OpenWA section +          │  │
+│  │                          QR HTML)                          │  │
 │  │  WhatsApp Templates:   8 fields (sync + dynamic header     │  │
 │  │                          + letterhead control)             │  │
 │  │  WhatsApp Notification: 1 field  (openwa_send_type)        │  │

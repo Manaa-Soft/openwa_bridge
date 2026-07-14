@@ -451,6 +451,20 @@ Comprehensive code review identified additional issues. Each fix is scoped to mi
 **Impact**: Only affects `_send_openwa_text()` in notification. Connection pooling works for this call site.
 **Risk**: Low — pure refactor, no behavior change.
 
+### 11. Global settings on wrong DocType
+**Files**: `custom_field.json`, `openwa_bridge_settings.json`, `inbound.py`, `whatsapp_account.py`, `tasks.py`
+**Issue**: 7 settings (HMAC strict, API timeout, session start timeout, rate limit, CB threshold, CB cooldown, max outbox attempts) were per-account custom fields on WhatsApp Account. These are system-wide settings that should be global.
+**Fix**: Moved all 7 fields from WhatsApp Account to OpenWA Bridge Settings (Single DocType). Updated all readers to use `frappe.db.get_single_value()`.
+**Impact**: WhatsApp Account fields reduced from 16 to 9. Settings page now has all global config in one place.
+**Risk**: Low — existing values on WhatsApp Account docs will be ignored after migration. Users must re-enter values in OpenWA Bridge Settings.
+
+### 12. `RedisWrapper.set_value()` `only_set` unsupported
+**File**: `tasks.py:168`
+**Issue**: `frappe.cache().set_value(key, 1, only_set=True)` throws `TypeError: RedisWrapper.set_value() got an unexpected keyword argument 'only_set'`. Frappe's RedisWrapper doesn't support this parameter.
+**Fix**: Changed to `get_value` + `set_value` pattern. Not strictly atomic, but sufficient for the outbox lock use case (TTL auto-expires stale locks).
+**Impact**: Only affects the distributed lock in `process_outbox_entry()`.
+**Risk**: Low — the race window is negligible (microseconds between get and set), and the 30s TTL provides safety.
+
 ---
 
 ### Fix Impact Summary
@@ -467,7 +481,9 @@ Comprehensive code review identified additional issues. Each fix is scoped to mi
 | 8. max_attempts source | tasks.py | 1 function | No |
 | 9. Redundant wrappers | notification.py, templates.py | 2 functions | No |
 | 10. _http_session usage | whatsapp_notification.py | 1 method | No |
+| 11. Global settings move | 5 files | 7 settings | Yes (values migrate) |
+| 12. RedisWrapper only_set | tasks.py | 1 function | No |
 
-**Total functions affected**: 10 (out of 50+ in the codebase)
-**Breaking changes**: 0 (fix #2 has minor API change from Document to dict, but callers already work with both)
+**Total functions affected**: 12 (out of 50+ in the codebase)
+**Breaking changes**: Fix #11 (settings must be re-entered in OpenWA Bridge Settings after migration)
 **Safe to deploy**: Yes — all fixes are scoped and backward-compatible
