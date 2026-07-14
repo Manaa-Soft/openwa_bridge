@@ -23,19 +23,33 @@ def receive_openwa_message() -> dict[str, str]:
       URL: https://your-domain/api/method/openwa_bridge.inbound.receive_openwa_message
       Events: message.received, message.ack, message.failed
       Secret: (set same value in WhatsApp Account -> openwa_webhook_secret)
+
+    Always returns HTTP 200 to prevent OpenWA retry loops.
     """
-    raw_body = frappe.request.get_data()
-    payload = frappe.request.get_json()
+    raw_body = frappe.request.get_data(as_bytes=False)
+    try:
+        payload = frappe.request.get_json(force=True)
+    except Exception:
+        frappe.log_error(title="OpenWA: Failed to parse webhook body")
+        return {"status": "error", "message": "Invalid JSON"}
 
     if not payload or "event" not in payload:
-        frappe.throw("Invalid webhook payload")
+        frappe.log_error(
+            title="OpenWA: Missing event field",
+            message=f"Payload keys: {list(payload.keys()) if payload else 'None'}",
+        )
+        return {"status": "error", "message": "Missing 'event' field"}
 
-    # ── Rate limiting (30 req/min per IP) ──
+    # ── Rate limiting (60 req/min per IP) ──
     client_ip = frappe.request.remote_addr or "unknown"
     rate_key = f"openwa_rate::{client_ip}"
     count = frappe.cache().get_value(rate_key) or 0
-    if count >= 30:
-        frappe.throw("Rate limit exceeded", http_status_code=429)
+    if count >= 60:
+        frappe.log_error(
+            title="OpenWA: Rate limit exceeded",
+            message=f"IP: {client_ip}, Count: {count}",
+        )
+        return {"status": "error", "message": "Rate limit exceeded"}
     frappe.cache().set_value(rate_key, count + 1, expires_in_sec=60)
 
     session_id: str = payload.get("sessionId", "")
@@ -52,9 +66,9 @@ def receive_openwa_message() -> dict[str, str]:
             if not verify_openwa_signature(raw_body, secret, signature):
                 frappe.log_error(
                     title="OpenWA HMAC Verification Failed",
-                    message=f"Session: {session_id}, Sig: '{signature}', Body prefix: {raw_body[:100]}",
+                    message=f"Session: {session_id}, Sig: '{signature}'",
                 )
-                frappe.throw("Signature verification failed")
+                return {"status": "error", "message": "Signature verification failed"}
 
     # ── Idempotency check ──
     idempotency_key = frappe.request.headers.get("X-OpenWA-Idempotency-Key", "")
@@ -62,7 +76,7 @@ def receive_openwa_message() -> dict[str, str]:
         cache_key = f"openwa_idempotent:{idempotency_key}"
         if frappe.cache().get(cache_key):
             return {"status": "duplicate"}
-        frappe.cache().set(cache_key, 1, ex=3600)
+        frappe.cache().set(cache_key, 1, expires_in_sec=3600)
 
     # ── Route to handler ──
     try:
@@ -70,6 +84,8 @@ def receive_openwa_message() -> dict[str, str]:
             _handle_inbound_message(event_data, whatsapp_account, session_id)
         elif event_type in ("message.ack", "message.failed"):
             _handle_status_update(event_data)
+        elif event_type == "session.status":
+            _handle_session_status(event_data, session_id)
     except Exception:
         frappe.log_error(title="OpenWA Inbound Handler Error")
 
@@ -225,6 +241,28 @@ def _handle_status_update(event_data: dict) -> None:
         return
 
     frappe.db.set_value("WhatsApp Message", name, "status", status.capitalize())
+
+
+def _handle_session_status(event_data: dict, session_id: str) -> None:
+    """Update WhatsApp Account status from OpenWA session.status events."""
+    status = event_data.get("status", "")
+    if not status:
+        return
+    status_map = {
+        "ready": "Active",
+        "disconnected": "Inactive",
+        "failed": "Inactive",
+    }
+    frappe_status = status_map.get(status)
+    if not frappe_status:
+        return
+    account_name = frappe.db.get_value(
+        "WhatsApp Account",
+        {"openwa_session_id": session_id},
+        "name",
+    )
+    if account_name:
+        frappe.db.set_value("WhatsApp Account", account_name, "status", frappe_status)
 
 
 # ── Account resolution ───────────────────────────────────────────────
