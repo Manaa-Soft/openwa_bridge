@@ -342,9 +342,13 @@ def _send_outbox_message(msg, account, outbox) -> None:  # noqa: C901
     """Actually send the message via OpenWA. Reuses the dispatcher from whatsapp_message."""
 
     # Phase 1: Send dynamic header image with rendered text as caption
-    _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
+    image_sent = _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
 
-    # Phase 2: Always send the text/template message
+    # Phase 2: If image was sent with caption, we're done
+    if image_sent:
+        return
+
+    # Phase 3: No image — send text/template message directly
     from frappe_whatsapp.utils import format_number
 
     # msg is already an OverrideWhatsAppMessage instance via override_doctype_class.
