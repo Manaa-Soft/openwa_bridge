@@ -220,6 +220,7 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
             "message": message,
             "to": data.get("to"),
             "content_type": "text",
+            "template": self.template,
             "whatsapp_account": account.name,
         }
         if doc_data:

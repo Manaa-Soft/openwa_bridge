@@ -228,34 +228,36 @@ def process_outbox_entry(outbox_name: str) -> None:  # noqa: C901
         _fail_outbox(outbox_name, str(exc))
 
 
-def _send_dynamic_header_for_outbox(msg, account) -> None:
+def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
     """Send dynamic header image before the main message, if configured.
 
     Checks the linked WhatsApp Templates doc for ``openwa_dynamic_header``
     and ``openwa_print_format``.  Renders the reference doc as an image
-    and sends it via OpenWA send-image endpoint.
+    and sends it via OpenWA send-image endpoint with the text as caption.
+
+    Returns True if image was sent successfully, False otherwise.
     """
     if not msg.template:
-        return
+        return False
 
     try:
         tmpl = frappe.get_doc("WhatsApp Templates", msg.template)
     except Exception:
-        return
+        return False
 
     if not getattr(tmpl, "openwa_dynamic_header", False) or not getattr(tmpl, "openwa_print_format", None):
-        return
+        return False
 
     # Need the source document to render
     ref_doctype = msg.reference_doctype
     ref_name = msg.reference_name
     if not ref_doctype or not ref_name:
-        return
+        return False
 
     try:
         doc = frappe.get_doc(ref_doctype, ref_name)
     except Exception:
-        return
+        return False
 
     print_format = tmpl.openwa_print_format
     letterhead = None
@@ -267,7 +269,7 @@ def _send_dynamic_header_for_outbox(msg, account) -> None:
 
     image_bytes = render_doc_as_image(ref_doctype, ref_name, print_format, letterhead=letterhead)
     if not image_bytes:
-        return
+        return False
 
     import requests as _req
     import base64
@@ -285,6 +287,9 @@ def _send_dynamic_header_for_outbox(msg, account) -> None:
         "base64": base64.b64encode(image_bytes).decode("utf-8"),
         "mimetype": "image/png",
     }
+    if caption:
+        payload["caption"] = caption
+
     try:
         img_resp = _req.post(
             url,
@@ -302,20 +307,26 @@ def _send_dynamic_header_for_outbox(msg, account) -> None:
                     f"Response: {img_resp.text[:2000]}"
                 ),
             )
+            return False
+        return True
     except Exception as e:
         frappe.log_error(
             title="OpenWA: Dynamic header image failed",
             message=f"Template {tmpl.name}, Doc {ref_doctype} {ref_name}: {e}",
         )
+        return False
 
 
 def _send_outbox_message(msg, account, outbox) -> None:  # noqa: C901
     """Actually send the message via OpenWA. Reuses the dispatcher from whatsapp_message."""
 
-    # Phase 1: Send dynamic header image if configured (moved from sync path)
-    _send_dynamic_header_for_outbox(msg, account)
+    # Phase 1: Send dynamic header image with text as caption (moved from sync path)
+    image_sent = _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
 
-    # Phase 2: Send the text/template message
+    # Phase 2: Send the text/template message (skip if image was sent with caption)
+    if image_sent:
+        return
+
     from openwa_bridge.whatsapp_message import OverrideWhatsAppMessage
 
     # Create a lightweight instance to reuse _ensure_session_ready and _send_via_openwa
