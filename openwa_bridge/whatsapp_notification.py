@@ -12,12 +12,7 @@ from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_notification.whatsapp_noti
     WhatsAppNotification,
 )
 from frappe_whatsapp.utils import get_whatsapp_account, format_number
-from openwa_bridge.utils import openwa_api, render_doc_as_image, get_api_key, is_openwa_account
-
-
-def _is_openwa_account(account_name: str | None) -> bool:
-    """Check if a WhatsApp Account has OpenWA enabled. Wrapper for utils.is_openwa_account."""
-    return is_openwa_account(account_name)
+from openwa_bridge.utils import openwa_api, render_doc_as_image, get_api_key, is_openwa_account, _http_session
 
 
 class OverrideWhatsAppNotification(WhatsAppNotification):
@@ -40,7 +35,7 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
             account = get_whatsapp_account(account_type="outgoing")
             account_name = account.name if account else None
 
-        if not _is_openwa_account(account_name):
+        if not is_openwa_account(account_name):
             return super().send_template_message(doc, phone_no, default_template, ignore_condition)
 
         send_type = self.openwa_send_type or ""
@@ -103,7 +98,7 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
         if not whatsapp_account:
             frappe.throw(_("Please set a default outgoing WhatsApp Account"))
 
-        if not _is_openwa_account(whatsapp_account.name):
+        if not is_openwa_account(whatsapp_account.name):
             return super().notify(data, doc_data)
 
         # ── OpenWA path ──
@@ -162,8 +157,6 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
         raw_number = format_number(phone_number)
         chat_id = f"{raw_number}@c.us" if "@c.us" not in raw_number else raw_number
 
-        import requests as _req
-
         base_url = account.get("openwa_base_url").strip("/")
         session_id = account.get("openwa_session_id")
         api_key = get_api_key(account)
@@ -174,7 +167,7 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
             "mimetype": "image/png",
         }
         try:
-            img_resp = _req.post(
+            img_resp = _http_session.post(
                 url,
                 json=payload,
                 headers={"Content-Type": "application/json", "X-API-Key": api_key},

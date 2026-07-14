@@ -125,14 +125,15 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 f"OpenWA session is {status} and restart failed: {exc}"
             )
 
-        # Poll for readiness (up to 20s, 1s intervals)
-        for _ in range(20):
+        # Poll for readiness (up to 3s, 1s intervals) — keep brief to avoid
+        # blocking the worker thread.  The outbox retry handles longer waits.
+        for _ in range(3):
             time.sleep(1)
             try:
                 verify = _http_session.get(
                     f"{base_url}/api/sessions/{session_id}",
                     headers=headers,
-                    timeout=10,
+                    timeout=5,
                 )
                 if verify.status_code == 200:
                     new_status = verify.json().get("status", "unknown")
@@ -150,9 +151,11 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             except Exception:
                 pass
 
+        # Not ready after brief wait — let outbox retry handle it
         frappe.throw(
             f"OpenWA session is {status} and could not be recovered automatically. "
-            "Please open the WhatsApp Account form and click 'Reconnect'."
+            "The message will be retried. You can also click 'Reconnect' on the "
+            "WhatsApp Account form."
         )
 
     def _send_via_openwa(self, account: "WhatsAppAccount", meta_payload: dict) -> None:  # noqa: F821

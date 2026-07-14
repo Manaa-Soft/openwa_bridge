@@ -162,6 +162,20 @@ def process_outbox_entry(outbox_name: str) -> None:  # noqa: C901
     Called by ``frappe.enqueue`` from ``OverrideWhatsAppMessage.notify()`` and
     also by the scheduler safety-net ``process_pending_outbox``.
     """
+    # Distributed lock — prevent duplicate processing when scheduler safety-net
+    # and frappe.enqueue overlap on the same entry.
+    lock_key = f"openwa_outbox_lock::{outbox_name}"
+    if not frappe.cache().set_value(lock_key, 1, expires_in_sec=30, only_set=True):
+        return  # another worker is already processing this entry
+
+    try:
+        _process_outbox_entry_inner(outbox_name)
+    finally:
+        frappe.cache().delete_value(lock_key)
+
+
+def _process_outbox_entry_inner(outbox_name: str) -> None:  # noqa: C901
+    """Inner processing logic — called under the distributed lock."""
     try:
         outbox = frappe.get_doc("OpenWA Outbox", outbox_name, for_update=True)
     except Exception:
@@ -421,7 +435,9 @@ def process_pending_outbox() -> None:
     re-enqueues them into the ``long`` queue.
     """
     now = datetime.now()
-    max_attempts = frappe.db.get_single_value("System Settings", "max_auto_retry_count") or 5
+    # Use a default max attempts filter. The real guard is per-entry in
+    # process_outbox_entry(), so this is just a query optimization.
+    max_attempts = 5
     batch_size = frappe.db.get_single_value("OpenWA Bridge Settings", "outbox_batch_size") or 25
 
     entries = frappe.get_all(
@@ -705,7 +721,7 @@ def replay_webhooks(account_name: str, since: str | None = None, chat_id: str | 
             new_msg = frappe.get_doc({
                 "doctype": "WhatsApp Message",
                 "type": "Incoming",
-                "to": phone if not phone.startswith("+") else phone[1:],
+                "from": phone,
                 "message": text,
                 "message_type": msg_type.capitalize() if msg_type else "Text",
                 "content_type": "text",

@@ -95,10 +95,10 @@ def receive_openwa_message() -> dict[str, str]:
     idempotency_key = frappe.request.headers.get("X-OpenWA-Idempotency-Key", "")
     if idempotency_key:
         cache_key = f"openwa_idempotent:{idempotency_key}"
-        if frappe.cache().get_value(cache_key):
-            return {"status": "duplicate"}
         idempotency_ttl = frappe.db.get_single_value("OpenWA Bridge Settings", "idempotency_ttl") or 3600
-        frappe.cache().set_value(cache_key, 1, expires_in_sec=idempotency_ttl)
+        # Atomic check-and-set: only_set=True returns True only if key didn't exist
+        if not frappe.cache().set_value(cache_key, 1, expires_in_sec=idempotency_ttl, only_set=True):
+            return {"status": "duplicate"}
 
     # ── Route to handler ──
     try:
@@ -114,7 +114,6 @@ def receive_openwa_message() -> dict[str, str]:
             message=f"Event: {event_type}, Session: {session_id}\n{frappe.get_traceback()}",
         )
 
-    frappe.db.commit()
     return {"status": "ok"}
 
 

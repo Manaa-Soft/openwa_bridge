@@ -9,11 +9,6 @@ from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templat
 from openwa_bridge.utils import openwa_api, frappe_to_openwa_vars, is_openwa_account
 
 
-def _is_openwa_account(account_name: str | None) -> bool:
-    """Return True if the WhatsApp Account has OpenWA enabled. Wrapper for utils.is_openwa_account."""
-    return is_openwa_account(account_name)
-
-
 class OverrideWhatsAppTemplates(WhatsAppTemplates):
     """Skips Meta Cloud API calls and syncs templates to OpenWA."""
 
@@ -27,7 +22,7 @@ class OverrideWhatsAppTemplates(WhatsAppTemplates):
             lang_code = frappe.db.get_value("Language", self.language) or "en"
             self.language_code = lang_code.replace("-", "_")
 
-        if _is_openwa_account(self.whatsapp_account):
+        if is_openwa_account(self.whatsapp_account):
             if not self.actual_name and self.template_name:
                 self.actual_name = self.template_name.lower().replace(" ", "_")
             self.status = "APPROVED"
@@ -41,7 +36,7 @@ class OverrideWhatsAppTemplates(WhatsAppTemplates):
             self.update_template()
 
     def after_insert(self):
-        if _is_openwa_account(self.whatsapp_account):
+        if is_openwa_account(self.whatsapp_account):
             if self.template_name:
                 self.actual_name = self.template_name.lower().replace(" ", "_")
             self.status = "APPROVED"
@@ -52,14 +47,14 @@ class OverrideWhatsAppTemplates(WhatsAppTemplates):
         super().after_insert()
 
     def on_update(self):
-        if _is_openwa_account(self.whatsapp_account):
+        if is_openwa_account(self.whatsapp_account):
             self._sync_to_openwa()
             return
 
         super().on_update()
 
     def on_trash(self):
-        if _is_openwa_account(self.whatsapp_account):
+        if is_openwa_account(self.whatsapp_account):
             self._delete_from_openwa()
             return
 

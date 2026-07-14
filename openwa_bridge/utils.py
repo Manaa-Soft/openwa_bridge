@@ -143,12 +143,12 @@ def get_account_setting(account, field: str, default=None):
 
     Returns
     -------
-    The field value, or *default* if unset/zero.
+    The field value, or *default* if unset/None.
     """
     if isinstance(account, str):
         account = get_cached_account(account)
     val = getattr(account, field, None)
-    return val if val else default
+    return val if val is not None else default
 
 
 def validate_openwa_url(url: str) -> str:
