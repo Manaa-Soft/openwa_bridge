@@ -63,12 +63,22 @@ def receive_openwa_message() -> dict[str, str]:
         secret = whatsapp_account.get_password("openwa_webhook_secret")
         if secret:
             signature = frappe.request.headers.get("X-OpenWA-Signature", "")
-            if not verify_openwa_signature(raw_body, secret, signature):
+            if signature and not verify_openwa_signature(raw_body, secret, signature):
                 frappe.log_error(
                     title="OpenWA HMAC Verification Failed",
                     message=f"Session: {session_id}, Sig: '{signature}'",
                 )
                 return {"status": "error", "message": "Signature verification failed"}
+            elif not signature:
+                frappe.log_error(
+                    title="OpenWA: Missing HMAC signature",
+                    message=(
+                        f"Session: {session_id} — webhook_secret is configured "
+                        "but OpenWA sent no signature. Messages are processed "
+                        "but HMAC is NOT verified. Set the same secret in "
+                        "OpenWA webhook config to enable signature verification."
+                    ),
+                )
 
     # ── Idempotency check ──
     idempotency_key = frappe.request.headers.get("X-OpenWA-Idempotency-Key", "")
