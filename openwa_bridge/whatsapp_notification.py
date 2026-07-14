@@ -34,6 +34,17 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
 
     def send_template_message(self, doc, phone_no=None, default_template=None, ignore_condition=False):
         """Override to skip parent attachment/header logic for OpenWA templates."""
+        frappe.logger().info(
+            f"OpenWA DEBUG send_template_message: "
+            f"openwa_send_type={self.openwa_send_type!r}, "
+            f"self.code type={type(self.code).__name__}, "
+            f"self.code truthy={bool(self.code)}, "
+            f"self.code[:120]={str(self.code)[:120]!r}, "
+            f"self.template={self.template!r}, "
+            f"doc type={type(doc).__name__}, "
+            f"doc.name={getattr(doc, 'name', 'N/A')!r}, "
+            f"self.whatsapp_account={self.whatsapp_account!r}"
+        )
         if not _is_openwa_account(self.whatsapp_account):
             return super().send_template_message(doc, phone_no, default_template, ignore_condition)
 
@@ -91,6 +102,17 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
         self.notify(data, doc_data)
 
     def notify(self, data: dict, doc_data=None) -> None:  # noqa: ANN001
+        frappe.logger().info(
+            f"OpenWA DEBUG notify: "
+            f"openwa_send_type={self.openwa_send_type!r}, "
+            f"self.code type={type(self.code).__name__}, "
+            f"self.code truthy={bool(self.code)}, "
+            f"self.code[:120]={str(self.code)[:120]!r}, "
+            f"doc_data type={type(doc_data).__name__ if doc_data else 'None'}, "
+            f"doc_data truthy={bool(doc_data)}, "
+            f"self.template={self.template!r}, "
+            f"self.whatsapp_account={self.whatsapp_account!r}"
+        )
         if self.whatsapp_account:
             whatsapp_account = frappe.get_doc("WhatsApp Account", self.whatsapp_account)
         else:
