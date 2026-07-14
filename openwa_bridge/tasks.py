@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 import frappe
 import requests
 
+from openwa_bridge.utils import get_cached_account, _http_session
+
 
 def _get_openwa_accounts() -> list[dict]:
     """Return all WhatsApp Accounts that have OpenWA enabled with a session ID."""
@@ -21,9 +23,9 @@ def _get_openwa_accounts() -> list[dict]:
 def _check_session_status(base_url: str, session_id: str, api_key: str) -> dict | None:
     """GET /api/sessions/:id and return the session data, or None."""
     try:
-        resp = requests.get(
+        resp = _http_session.get(
             f"{base_url.rstrip('/')}/api/sessions/{session_id}",
-            headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+            headers={"X-API-Key": api_key},
             timeout=10,
         )
         if resp.status_code == 200:
@@ -36,9 +38,9 @@ def _check_session_status(base_url: str, session_id: str, api_key: str) -> dict 
 def _start_session(base_url: str, session_id: str, api_key: str) -> bool:
     """POST /api/sessions/:id/start and return True on success."""
     try:
-        resp = requests.post(
+        resp = _http_session.post(
             f"{base_url.rstrip('/')}/api/sessions/{session_id}/start",
-            headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+            headers={"X-API-Key": api_key},
             timeout=60,
         )
         return resp.status_code in (200, 201, 400)  # 400 = already started
@@ -99,7 +101,7 @@ def _run_health_check() -> None:
             continue
 
         try:
-            doc = frappe.get_doc("WhatsApp Account", account_name)
+            doc = get_cached_account(account_name)
             api_key = doc.get_password("openwa_api_key")
         except Exception:
             continue
@@ -130,12 +132,14 @@ def _run_health_check() -> None:
             )
             started = _start_session(base_url, session_id, api_key)
             if started:
-                # Give OpenWA a moment to initialize
-                time.sleep(3)
-                # Re-check status
-                session = _check_session_status(base_url, session_id, api_key)
-                if session:
-                    status = session.get("status", status)
+                # Poll for readiness (up to 15s, 1s intervals)
+                for _ in range(15):
+                    time.sleep(1)
+                    session = _check_session_status(base_url, session_id, api_key)
+                    if session:
+                        status = session.get("status", status)
+                        if status == "ready":
+                            break
             else:
                 frappe.logger().warning(
                     f"OpenWA health check: failed to restart session "
@@ -192,7 +196,7 @@ def process_outbox_entry(outbox_name: str) -> None:  # noqa: C901
     # Load linked docs
     try:
         msg = frappe.get_doc("WhatsApp Message", outbox.whatsapp_message)
-        account = frappe.get_doc("WhatsApp Account", outbox.whatsapp_account)
+        account = get_cached_account(outbox.whatsapp_account)
     except Exception as exc:
         _fail_outbox(outbox_name, str(exc))
         return
@@ -264,14 +268,13 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
     if getattr(tmpl, "openwa_include_letterhead", False):
         letterhead = getattr(tmpl, "openwa_letterhead", None) or None
 
-    from openwa_bridge.utils import render_doc_as_image, get_api_key
+    from openwa_bridge.utils import render_doc_as_image, get_api_key, _http_session
     from frappe_whatsapp.utils import format_number
 
     image_bytes = render_doc_as_image(ref_doctype, ref_name, print_format, letterhead=letterhead)
     if not image_bytes:
         return False
 
-    import requests as _req
     import base64
 
     base_url = account.get("openwa_base_url").strip("/")
@@ -291,10 +294,10 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
         payload["caption"] = caption
 
     try:
-        img_resp = _req.post(
+        img_resp = _http_session.post(
             url,
             json=payload,
-            headers={"Content-Type": "application/json", "X-API-Key": api_key},
+            headers={"X-API-Key": api_key},
             timeout=30,
         )
         if img_resp.status_code >= 400:
@@ -396,22 +399,32 @@ def process_pending_outbox() -> None:
     re-enqueues them into the ``long`` queue.
     """
     now = datetime.now()
+    max_attempts = frappe.db.get_single_value("System Settings", "max_auto_retry_count") or 5
 
     entries = frappe.get_all(
         "OpenWA Outbox",
-        filters={
-            "status": "Pending",
-            "attempts": ["<", frappe.db.get_single_value("System Settings", "max_auto_retry_count") or 5],
-        },
-        fields=["name", "next_retry_at"],
-        limit=50,
+        filters=[
+            ["status", "=", "Pending"],
+            ["attempts", "<", max_attempts],
+            ["next_retry_at", "is", "not set"],
+        ],
+        fields=["name"],
+        limit=25,
     )
 
-    # Filter: next_retry_at is NULL or <= now
-    candidates = [
-        e.name for e in entries
-        if not e.next_retry_at or e.next_retry_at <= now
-    ]
+    # Also pick up entries where next_retry_at <= now
+    retry_entries = frappe.get_all(
+        "OpenWA Outbox",
+        filters=[
+            ["status", "=", "Pending"],
+            ["attempts", "<", max_attempts],
+            ["next_retry_at", "<=", now],
+        ],
+        fields=["name"],
+        limit=25,
+    )
+
+    candidates = list({e.name for e in entries} | {e.name for e in retry_entries})
 
     for name in candidates:
         frappe.enqueue(

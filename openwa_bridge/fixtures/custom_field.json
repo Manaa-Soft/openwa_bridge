@@ -80,6 +80,30 @@
         "description":  "When checked, incoming webhooks without a valid HMAC signature are rejected."
     },
     {
+        "name":  "WhatsApp Account-openwa_api_timeout",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Account",
+        "fieldname":  "openwa_api_timeout",
+        "fieldtype":  "Int",
+        "insert_after":  "openwa_hmac_strict",
+        "label":  "API Timeout (seconds)",
+        "default":  "30",
+        "depends_on":  "eval:doc.openwa_enabled",
+        "description":  "HTTP timeout for OpenWA REST API calls. Default: 30s."
+    },
+    {
+        "name":  "WhatsApp Account-openwa_session_start_timeout",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Account",
+        "fieldname":  "openwa_session_start_timeout",
+        "fieldtype":  "Int",
+        "insert_after":  "openwa_api_timeout",
+        "label":  "Session Start Timeout (seconds)",
+        "default":  "60",
+        "depends_on":  "eval:doc.openwa_enabled",
+        "description":  "HTTP timeout when starting an OpenWA session. Default: 60s."
+    },
+    {
         "name":  "WhatsApp Account-openwa_qr_html",
         "doctype":  "Custom Field",
         "dt":  "WhatsApp Account",

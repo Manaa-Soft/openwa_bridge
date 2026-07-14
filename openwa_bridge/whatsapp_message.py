@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import frappe
-import requests
 import json
 import time
 
@@ -10,7 +9,7 @@ from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message i
     WhatsAppMessage,
 )
 from frappe_whatsapp.utils import format_number
-from openwa_bridge.utils import openwa_api, frappe_to_openwa_vars, get_api_key
+from openwa_bridge.utils import openwa_api, frappe_to_openwa_vars, get_api_key, _http_session
 
 
 class OverrideWhatsAppMessage(WhatsAppMessage):
@@ -92,7 +91,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
 
         # Check current status
         try:
-            resp = requests.get(
+            resp = _http_session.get(
                 f"{base_url}/api/sessions/{session_id}",
                 headers=headers,
                 timeout=10,
@@ -112,7 +111,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             f"attempting restart before sending message {self.name}"
         )
         try:
-            start_resp = requests.post(
+            start_resp = _http_session.post(
                 f"{base_url}/api/sessions/{session_id}/start",
                 headers=headers,
                 timeout=60,
@@ -126,29 +125,30 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 f"OpenWA session is {status} and restart failed: {exc}"
             )
 
-        # Give OpenWA a moment to initialize, then verify
-        time.sleep(5)
-        try:
-            verify = requests.get(
-                f"{base_url}/api/sessions/{session_id}",
-                headers=headers,
-                timeout=10,
-            )
-            if verify.status_code == 200:
-                new_status = verify.json().get("status", "unknown")
-                if new_status == "ready":
-                    frappe.logger().info(
-                        f"OpenWA pre-send: session '{session_id}' restarted "
-                        f"successfully — status is now 'ready'"
-                    )
-                    return
-                if new_status == "qr_ready":
-                    frappe.throw(
-                        "OpenWA session restarted but requires QR re-scan. "
-                        "Please open the WhatsApp Account form and scan the QR code."
-                    )
-        except Exception:
-            pass
+        # Poll for readiness (up to 20s, 1s intervals)
+        for _ in range(20):
+            time.sleep(1)
+            try:
+                verify = _http_session.get(
+                    f"{base_url}/api/sessions/{session_id}",
+                    headers=headers,
+                    timeout=10,
+                )
+                if verify.status_code == 200:
+                    new_status = verify.json().get("status", "unknown")
+                    if new_status == "ready":
+                        frappe.logger().info(
+                            f"OpenWA pre-send: session '{session_id}' restarted "
+                            f"successfully — status is now 'ready'"
+                        )
+                        return
+                    if new_status == "qr_ready":
+                        frappe.throw(
+                            "OpenWA session restarted but requires QR re-scan. "
+                            "Please open the WhatsApp Account form and scan the QR code."
+                        )
+            except Exception:
+                pass
 
         frappe.throw(
             f"OpenWA session is {status} and could not be recovered automatically. "
@@ -191,7 +191,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
 
                 send_payload = {"chatId": chat_id, "templateId": openwa_tid, "vars": params}
                 frappe.logger().info(f"OpenWA send-template payload: {json.dumps(send_payload, default=str)}")
-                resp = requests.post(
+                resp = _http_session.post(
                     f"{base_url}/api/sessions/{session_id}/messages/send-template",
                     json=send_payload,
                     headers=headers,
@@ -199,7 +199,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 )
             else:
                 message_body = self._translate_template_payload()
-                resp = requests.post(
+                resp = _http_session.post(
                     f"{base_url}/api/sessions/{session_id}/messages/send-text",
                     json={"chatId": chat_id, "text": message_body},
                     headers=headers,

@@ -7,7 +7,7 @@ import time
 import frappe
 import requests
 
-from openwa_bridge.utils import openwa_api, get_api_key, validate_openwa_url
+from openwa_bridge.utils import openwa_api, get_api_key, validate_openwa_url, _http_session
 
 
 # ---------------------------------------------------------------------------
@@ -29,12 +29,14 @@ def _get_account(account_name: str, require_session: bool = True) -> dict:
 
 
 def _raw_openwa_call(account: dict, method: str, url_path: str,
-                     json_data: dict | None = None, timeout: int = 30) -> dict:
+                     json_data: dict | None = None, timeout: int | None = None) -> dict:
     """Call an OpenWA endpoint that is NOT scoped under ``/api/sessions/:id``.
 
     Used for session listing and creation where the session ID is not yet
     known.
     """
+    if timeout is None:
+        timeout = getattr(account, "openwa_api_timeout", None) or 30
     base_url = account.get("openwa_base_url").strip("/")
     api_key = get_api_key(account)
 
@@ -43,7 +45,7 @@ def _raw_openwa_call(account: dict, method: str, url_path: str,
         "X-API-Key": api_key,
     }
     url = f"{base_url}{url_path}"
-    resp = requests.request(method, url, json=json_data, headers=headers,
+    resp = _http_session.request(method, url, json=json_data, headers=headers,
                             timeout=timeout)
     resp.raise_for_status()
     if resp.status_code == 204:
@@ -78,13 +80,22 @@ def _safe_get_session(account: dict) -> dict | None:
 
 def _start_session(account: dict) -> None:
     """Start an OpenWA session, ignoring 'already started' errors."""
+    timeout = getattr(account, "openwa_session_start_timeout", None) or 60
     try:
-        openwa_api(account, "POST", "/start", timeout=60)
+        openwa_api(account, "POST", "/start", timeout=timeout)
     except requests.exceptions.HTTPError as exc:
         if exc.response is not None and exc.response.status_code == 400:
             return  # already started — fine
         raise
-    time.sleep(5)
+    # Poll for readiness (up to 15s, 1s intervals)
+    for _ in range(15):
+        time.sleep(1)
+        try:
+            status = openwa_api(account, "GET", "")
+            if status.get("status") in ("ready", "qr_ready"):
+                return
+        except Exception:
+            pass
 
 
 def _fetch_qr(account: dict) -> dict:
@@ -99,7 +110,15 @@ def _fetch_qr(account: dict) -> dict:
         error_msg = _extract_error(exc)
 
         if "not started" in error_msg.lower():
-            time.sleep(3)
+            # Poll for QR readiness (up to 10s, 1s intervals)
+            for _ in range(10):
+                time.sleep(1)
+                try:
+                    qr = openwa_api(account, "GET", "/qr")
+                    return {"qr_code": qr.get("qrCode"), "status": qr.get("status", "qr_ready")}
+                except Exception:
+                    pass
+            # Final attempt — let it raise
             qr = openwa_api(account, "GET", "/qr")
             return {"qr_code": qr.get("qrCode"), "status": qr.get("status", "qr_ready")}
 
@@ -159,7 +178,7 @@ def setup_openwa_session(account_name: str) -> dict:
 
     # Quick connectivity check — fail fast with a clear message.
     try:
-        requests.get(base_url.rstrip("/") + "/api/sessions",
+        _http_session.get(base_url.rstrip("/") + "/api/sessions",
                      headers={"X-API-Key": get_api_key(account)},
                      timeout=10)
     except requests.exceptions.ConnectionError:

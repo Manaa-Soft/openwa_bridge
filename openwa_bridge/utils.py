@@ -9,6 +9,10 @@ from datetime import datetime, timedelta
 import frappe
 import requests
 
+# Module-level Session for HTTP connection pooling (reuses TCP connections)
+_http_session = requests.Session()
+_http_session.headers.update({"Content-Type": "application/json"})
+
 
 def verify_openwa_signature(
     payload_bytes: bytes, secret: str, signature_header: str
@@ -190,7 +194,7 @@ def openwa_api(account, method: str, path: str, json_data=None, timeout: int = 3
     }
 
     url = f"{base_url}/api/sessions/{session_id}{path}"
-    resp = requests.request(method, url, json=json_data, headers=headers, timeout=timeout)
+    resp = _http_session.request(method, url, json=json_data, headers=headers, timeout=timeout)
     resp.raise_for_status()
     return resp.json()
 

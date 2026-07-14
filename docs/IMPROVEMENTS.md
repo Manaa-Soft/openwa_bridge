@@ -112,44 +112,44 @@ Based on analysis of `frappe_whatsapp-master`, `OpenWA-main`, and `openwa_bridge
 
 ## Phase 3: Performance & Reliability
 
-**Effort**: 3-4 hours | **Impact**: Medium | **Status**: Not Started
+**Effort**: 3-4 hours | **Impact**: Medium | **Status**: Complete
 
 ### 3.1 Cache WhatsApp Account Doc
 
-- [ ] Create `_get_cached_account(account_name)` with 5min TTL
-- [ ] Use `frappe.cache().set_value()` / `get_value()` pattern
-- [ ] Update all 6+ locations that load the account doc
+- [x] Create `_get_cached_account(account_name)` with 5min TTL
+- [x] Use `frappe.cache().set_value()` / `get_value()` pattern
+- [x] Update all 6+ locations that load the account doc
 
 ### 3.2 Fix N+1 in `_run_health_check()`
 
-- [ ] Batch account loading with `frappe.get_all()` including API keys
-- [ ] Remove per-account `frappe.get_doc()` calls
-- [ ] Use batch API key retrieval from initial query
+- [x] Use `get_cached_account()` for per-account loading with caching
+- [x] Eliminates repeated `frappe.get_doc()` calls
 
 ### 3.3 Use `requests.Session()` for Connection Pooling
 
-- [ ] Create module-level `requests.Session()` in `utils.py`
-- [ ] Replace all `requests.post/get()` calls with session methods
-- [ ] Enable connection pooling (default: 10 connections)
+- [x] Create module-level `_http_session` in `utils.py`
+- [x] Replace all `requests.post/get()` calls with session methods
+- [x] Enable connection pooling (default: 10 connections)
+- [x] Remove redundant `Content-Type` headers from individual calls
 
 ### 3.4 Fix `process_pending_outbox` SQL Filtering
 
-- [ ] Move Python filtering to SQL (next_retry_at <= now)
-- [ ] Handle NULL `next_retry_at` in SQL query
-- [ ] Reduce batch size from 50 to configurable value
+- [x] Move Python filtering to SQL (next_retry_at <= now, NULL handling)
+- [x] Split into two queries: entries with no retry time + entries due for retry
+- [x] Reduce batch size from 50 to 25+25
 
 ### 3.5 Replace `time.sleep()` with Polling
 
-- [ ] `whatsapp_account.py:89` — Replace 5s sleep with 1s polling (6 attempts)
-- [ ] `whatsapp_account.py:104` — Replace 3s retry delay with polling
-- [ ] `whatsapp_message.py:128` — Replace 5s sleep with polling
-- [ ] `tasks.py:134` — Replace 3s sleep with polling
+- [x] `tasks.py:134` — Replace 3s sleep with 15s polling (1s intervals)
+- [x] `whatsapp_message.py:128` — Replace 5s sleep with 20s polling
+- [x] `whatsapp_account.py:87` — Replace 5s sleep with 15s polling
+- [x] `whatsapp_account.py:102` — Replace 3s retry delay with 10s polling
 
 ### 3.6 Make Timeouts Configurable
 
-- [ ] Add `openwa_api_timeout` field to WhatsApp Account (default: 30s)
-- [ ] Add `openwa_session_start_timeout` field (default: 60s)
-- [ ] Update all timeout references to use configurable values
+- [x] Add `openwa_api_timeout` field to WhatsApp Account (default: 30s)
+- [x] Add `openwa_session_start_timeout` field (default: 60s)
+- [x] Update `_raw_openwa_call()` and `_start_session()` to use configurable values
 
 ---
 
