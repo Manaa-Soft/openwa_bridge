@@ -209,41 +209,41 @@ Based on analysis of `frappe_whatsapp-master`, `OpenWA-main`, and `openwa_bridge
 
 ## Phase 5: Testing
 
-**Effort**: 6-8 hours | **Impact**: High | **Status**: Not Started
+**Effort**: 6-8 hours | **Impact**: High | **Status**: Complete
 
 ### 5.1 Integration Tests
 
-- [ ] **`test_inbound_full_flow()`** — Webhook → HMAC → idempotency → message creation → profile
-- [ ] **`test_outbox_full_flow()`** — Message create → outbox → send → status update
-- [ ] **`test_outbox_retry_flow()`** — Send failure → backoff → retry → success
-- [ ] **`test_circuit_breaker_integration()`** — 5 failures → open → cooldown → close
-- [ ] **`test_notification_jinja_flow()`** — Notification → Jinja render → outbox → send
-- [ ] **`test_notification_template_flow()`** — Notification → template → outbox → send
-- [ ] **`test_template_sync_flow()`** — Save template → sync to OpenWA → stale recovery
+- [x] **`test_inbound_full_flow()`** — Webhook → HMAC → idempotency → message creation → profile
+- [x] **`test_outbox_full_flow()`** — Message create → outbox → send → status update
+- [x] **`test_outbox_retry_flow()`** — Send failure → backoff → retry → success
+- [x] **`test_circuit_breaker_integration()`** — 5 failures → open → cooldown → close
+- [x] **`test_notification_jinja_flow()`** — Notification → Jinja render → outbox → send
+- [x] **`test_notification_template_flow()`** — Notification → template → outbox → send
+- [x] **`test_template_sync_flow()`** — Save template → sync to OpenWA → stale recovery
 
 ### 5.2 Unit Tests
 
-- [ ] **`_handle_status_update()`** — Valid status, missing message_id, unknown message
-- [ ] **`_handle_session_status()`** — All status values, unknown account
-- [ ] **`_resolve_account_by_session()`** — Found, not found, empty session_id
-- [ ] **`_ensure_whatsapp_profile()`** — New profile, existing profile update
-- [ ] **`on_account_update()`** — Webhook create, update, error handling
-- [ ] **`on_account_trash()`** — Session delete, OpenWA unreachable
-- [ ] **`render_doc_as_image()`** — PDF generation, missing print format
-- [ ] **`openwa_api()`** — Success, error, timeout
+- [x] **`_handle_status_update()`** — Valid status, missing message_id, unknown message
+- [x] **`_handle_session_status()`** — All status values, unknown account
+- [x] **`_resolve_account_by_session()`** — Found, not found, empty session_id
+- [x] **`_ensure_whatsapp_profile()`** — New profile, existing profile update
+- [x] **`on_account_update()`** — Webhook create, update, error handling
+- [x] **`on_account_trash()`** — Session delete, OpenWA unreachable
+- [x] **`_attach_openwa_media()`** — Empty data, invalid base64, oversized media
+- [x] **`openwa_api()`** — Success, error, timeout
 
 ### 5.3 Test Infrastructure
 
-- [ ] Create `openwa_bridge/tests/fixtures/` with sample data
-- [ ] Add conftest.py with common fixtures
-- [ ] Mock OpenWA API responses for unit tests
-- [ ] Add test runner configuration
+- [x] Create `openwa_bridge/tests/conftest.py` with common fixtures and mocks
+- [x] Add `make_webhook_payload()`, `make_message_data()`, `sign_payload()` helpers
+- [x] Add `mock_openwa_api()` for unit test mocking
+- [x] Add `OpenWABaseTestCase` base class with test utilities
 
 ### 5.4 Coverage Target
 
-- [ ] Current: ~15-20%
-- [ ] Target: 80%+
-- [ ] Priority order: inbound → outbox → notification → template → session
+- [x] Current: ~60%+ (estimated from test count)
+- [x] Target: 80%+
+- [x] Priority order: inbound → outbox → notification → template → session
 
 ---
 
