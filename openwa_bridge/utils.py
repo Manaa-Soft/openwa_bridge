@@ -208,14 +208,14 @@ class OpenWACircuitBreaker:
         """Increment consecutive failure count; trip if threshold reached."""
         count = (frappe.cache().get_value(self._key_failures) or 0) + 1
         frappe.cache().set_value(
-            self._key_failures, count, expires_in=self.cooldown_seconds * 2,
+            self._key_failures, count, expires_in_sec=self.cooldown_seconds * 2,
         )
 
         if count >= self.threshold:
             frappe.cache().set_value(
                 self._key_tripped,
                 datetime.now().isoformat(),
-                expires_in=self.cooldown_seconds * 2,
+                expires_in_sec=self.cooldown_seconds * 2,
             )
             frappe.logger().warning(
                 f"OpenWA circuit breaker TRIPPED for '{self.account_name}' "
