@@ -41,6 +41,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **`requests` not defined** — 7 bare `requests.post()` calls missed during connection pooling migration.
 - **Template vs text send guard** — Changed `_send_via_openwa` guard from `if self.template` to `if self.use_template and self.template` so Jinja messages use `send-text`.
 - **Jinja send type bypassed OpenWA** — `send_template_message()` fell through to parent's Meta API for `send_type != "Template"`. Now allows `"Jinja"` through.
+- **Empty vars sent to OpenWA** — Bulk WhatsApp Messages with empty `template_variables` sent `vars: {}` to `send-template`, causing 500. Now validates before sending and throws clear error. Also handles `body_param` as both dict and list format.
 - **"Password not found" error** — account resolution before `_is_openwa_account()` check
 - **`frappe.msgprint()` in background** — replaced with `frappe.logger().info()`
 - **Fragile `__new__()` instantiation** — uses overridden doc directly via `override_doctype_class`

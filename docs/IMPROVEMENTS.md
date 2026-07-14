@@ -366,6 +366,12 @@ All critical bugs have been fixed and pushed to `feature/improvements`.
 **Root cause**: `send_template_message()` had `if send_type != "Template": return super()`.
 **Fix**: Changed to `if send_type not in ("Template", "Jinja")`.
 
+### 8. Empty vars sent to OpenWA from Bulk WhatsApp Messages
+**Commit**: `86e9f5b`
+**Symptom**: OpenWA `send-template` returns 500 Internal Server Error when `vars: {}` is sent.
+**Root cause**: Bulk WhatsApp Message creates WhatsApp Message with `use_template=1` but no `body_param` (when `template_variables` is not filled in) and no `template_parameters` (Meta API path skipped). Both sources are empty → empty `vars` sent to OpenWA.
+**Fix**: Added validation — if both `body_param` and `template_parameters` are empty, throws a clear error message telling the user to fill in variables. Also handles `body_param` as both dict and list format (parent frappe_whatsapp uses `.values()` but our `.items()` crashed on list input).
+
 ### Key Architecture Insight
 
 `use_template` flag on WhatsApp Message distinguishes:
