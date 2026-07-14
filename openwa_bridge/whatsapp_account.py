@@ -331,6 +331,64 @@ def stop_openwa_session(account_name: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Doc event hook — called by Frappe when a WhatsApp Account is saved
+# ---------------------------------------------------------------------------
+
+_WEBHOOK_PATH = "/api/method/openwa_bridge.inbound.receive_openwa_message"
+_WEBHOOK_EVENTS = [
+    "message.received", "message.ack", "message.failed", "session.status",
+]
+
+
+def on_account_update(doc, method):  # noqa: ANN001
+    """Sync the OpenWA webhook secret to the gateway when the account is saved.
+
+    If a webhook for our Frappe URL already exists on the session the secret
+    is updated.  Otherwise a new webhook is created with the configured events.
+    """
+    if not getattr(doc, "openwa_enabled", 0):
+        return
+    session_id = getattr(doc, "openwa_session_id", None)
+    if not session_id:
+        return
+
+    secret = doc.get_password("openwa_webhook_secret") if doc.get("openwa_webhook_secret") else None
+    frappe_url = frappe.utils.get_url(_WEBHOOK_PATH)
+
+    try:
+        webhooks = openwa_api(doc, "GET", "/webhooks")
+
+        existing = None
+        if isinstance(webhooks, list):
+            for wh in webhooks:
+                if wh.get("url") == frappe_url:
+                    existing = wh
+                    break
+
+        if existing:
+            openwa_api(
+                doc, "PUT",
+                f"/webhooks/{existing['id']}",
+                json_data={"secret": secret or ""},
+            )
+        else:
+            openwa_api(
+                doc, "POST",
+                "/webhooks",
+                json_data={
+                    "url": frappe_url,
+                    "events": _WEBHOOK_EVENTS,
+                    "secret": secret or "",
+                },
+            )
+    except Exception as exc:
+        frappe.log_error(
+            title="OpenWA: Failed to sync webhook secret",
+            message=f"Account: {doc.name}, Session: {session_id}: {exc}",
+        )
+
+
+# ---------------------------------------------------------------------------
 # Doc event hook — called by Frappe when a WhatsApp Account is deleted
 # ---------------------------------------------------------------------------
 

@@ -5,6 +5,10 @@ app_description = "Seamlessly integrates the OpenWA Gateway with the core frappe
 app_email = "manaamnaa2018@gmail.com"
 app_license = "gpl-3.0"
 
+# Send non-GET requests for this app's endpoints as native `application/json`
+# bodies instead of form-encoded, per-key JSON-stringified values.
+use_json_request_body = True
+
 # Apps
 # ------------------
 
@@ -142,6 +146,7 @@ doctype_js = {
 
 doc_events = {
 	"WhatsApp Account": {
+		"on_update": "openwa_bridge.whatsapp_account.on_account_update",
 		"on_trash": "openwa_bridge.whatsapp_account.on_account_trash"
 	}
 }
