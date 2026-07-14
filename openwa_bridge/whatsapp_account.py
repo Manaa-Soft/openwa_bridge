@@ -36,7 +36,7 @@ def _raw_openwa_call(account: dict, method: str, url_path: str,
     known.
     """
     if timeout is None:
-        timeout = getattr(account, "openwa_api_timeout", None) or 30
+        timeout = frappe.db.get_single_value("OpenWA Bridge Settings", "openwa_api_timeout") or 30
     base_url = account.get("openwa_base_url").strip("/")
     api_key = get_api_key(account)
 
@@ -80,7 +80,7 @@ def _safe_get_session(account: dict) -> dict | None:
 
 def _start_session(account: dict) -> None:
     """Start an OpenWA session, ignoring 'already started' errors."""
-    timeout = getattr(account, "openwa_session_start_timeout", None) or 60
+    timeout = frappe.db.get_single_value("OpenWA Bridge Settings", "openwa_session_start_timeout") or 60
     try:
         openwa_api(account, "POST", "/start", timeout=timeout)
     except requests.exceptions.HTTPError as exc:

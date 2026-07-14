@@ -51,8 +51,8 @@ def receive_openwa_message() -> dict[str, str]:
 
     whatsapp_account = _resolve_account_by_session(session_id)
 
-    # ── Rate limiting (configurable per account) ──
-    rate_limit = get_account_setting(whatsapp_account, "openwa_rate_limit", 60) if whatsapp_account else 60
+    # ── Rate limiting (configurable globally) ──
+    rate_limit = frappe.db.get_single_value("OpenWA Bridge Settings", "openwa_rate_limit") or 60
     forwarded_for = frappe.request.headers.get("X-Forwarded-For", "")
     client_ip = forwarded_for.split(",")[0].strip() if forwarded_for else (
         frappe.request.remote_addr or "unknown"
@@ -72,7 +72,7 @@ def receive_openwa_message() -> dict[str, str]:
         secret = whatsapp_account.get_password("openwa_webhook_secret")
         if secret:
             signature = frappe.request.headers.get("X-OpenWA-Signature", "")
-            hmac_strict = getattr(whatsapp_account, "openwa_hmac_strict", 0)
+            hmac_strict = frappe.db.get_single_value("OpenWA Bridge Settings", "openwa_hmac_strict") or 0
             if not signature and hmac_strict:
                 frappe.log_error(
                     title="OpenWA HMAC Missing (strict mode)",
