@@ -34,17 +34,6 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
 
     def send_template_message(self, doc, phone_no=None, default_template=None, ignore_condition=False):
         """Override to skip parent attachment/header logic for OpenWA templates."""
-        frappe.logger().info(
-            f"OpenWA DEBUG send_template_message: "
-            f"openwa_send_type={self.openwa_send_type!r}, "
-            f"self.code type={type(self.code).__name__}, "
-            f"self.code truthy={bool(self.code)}, "
-            f"self.code[:120]={str(self.code)[:120]!r}, "
-            f"self.template={self.template!r}, "
-            f"doc type={type(doc).__name__}, "
-            f"doc.name={getattr(doc, 'name', 'N/A')!r}, "
-            f"self.whatsapp_account={self.whatsapp_account!r}"
-        )
         if not _is_openwa_account(self.whatsapp_account):
             return super().send_template_message(doc, phone_no, default_template, ignore_condition)
 
@@ -100,24 +89,9 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
                 parameters.append({"type": "text", "text": value})
             data["template"]["components"] = [{"type": "body", "parameters": parameters}]
 
-        # ── Step 1: Dynamic image header ──
-        if getattr(template, "openwa_dynamic_header", False) and getattr(template, "openwa_print_format", None):
-            self._send_dynamic_header_image(doc, template, data)
-
         self.notify(data, doc_data)
 
     def notify(self, data: dict, doc_data=None) -> None:  # noqa: ANN001
-        frappe.logger().info(
-            f"OpenWA DEBUG notify: "
-            f"openwa_send_type={self.openwa_send_type!r}, "
-            f"self.code type={type(self.code).__name__}, "
-            f"self.code truthy={bool(self.code)}, "
-            f"self.code[:120]={str(self.code)[:120]!r}, "
-            f"doc_data type={type(doc_data).__name__ if doc_data else 'None'}, "
-            f"doc_data truthy={bool(doc_data)}, "
-            f"self.template={self.template!r}, "
-            f"self.whatsapp_account={self.whatsapp_account!r}"
-        )
         if self.whatsapp_account:
             whatsapp_account = frappe.get_doc("WhatsApp Account", self.whatsapp_account)
         else:
@@ -145,12 +119,6 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
         # 2) Explicit "Jinja" → render code and send as free text
         if send_type == "Jinja" and self.code and doc_data:
             doc = self._resolve_document(doc_data)
-
-            # Dynamic image header (same as Template path)
-            if self.template:
-                tmpl = frappe.get_doc("WhatsApp Templates", self.template)
-                if getattr(tmpl, "openwa_dynamic_header", False) and getattr(tmpl, "openwa_print_format", None):
-                    self._send_dynamic_header_image(doc, tmpl, data)
 
             rendered_message = frappe.render_template(self.code, {"doc": doc}).strip()
             if not rendered_message:

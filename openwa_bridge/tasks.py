@@ -228,8 +228,94 @@ def process_outbox_entry(outbox_name: str) -> None:  # noqa: C901
         _fail_outbox(outbox_name, str(exc))
 
 
+def _send_dynamic_header_for_outbox(msg, account) -> None:
+    """Send dynamic header image before the main message, if configured.
+
+    Checks the linked WhatsApp Templates doc for ``openwa_dynamic_header``
+    and ``openwa_print_format``.  Renders the reference doc as an image
+    and sends it via OpenWA send-image endpoint.
+    """
+    if not msg.template:
+        return
+
+    try:
+        tmpl = frappe.get_doc("WhatsApp Templates", msg.template)
+    except Exception:
+        return
+
+    if not getattr(tmpl, "openwa_dynamic_header", False) or not getattr(tmpl, "openwa_print_format", None):
+        return
+
+    # Need the source document to render
+    ref_doctype = msg.reference_doctype
+    ref_name = msg.reference_name
+    if not ref_doctype or not ref_name:
+        return
+
+    try:
+        doc = frappe.get_doc(ref_doctype, ref_name)
+    except Exception:
+        return
+
+    print_format = tmpl.openwa_print_format
+    letterhead = None
+    if getattr(tmpl, "openwa_include_letterhead", False):
+        letterhead = getattr(tmpl, "openwa_letterhead", None) or None
+
+    from openwa_bridge.utils import render_doc_as_image
+    from frappe_whatsapp.utils import format_number
+
+    image_bytes = render_doc_as_image(ref_doctype, ref_name, print_format, letterhead=letterhead)
+    if not image_bytes:
+        return
+
+    import requests as _req
+    import base64
+
+    base_url = account.get("openwa_base_url").strip("/")
+    session_id = account.get("openwa_session_id")
+    api_key = account.get_password("openwa_api_key") if hasattr(account, "get_password") else account.get("openwa_api_key")
+
+    raw_number = format_number(msg.to)
+    chat_id = f"{raw_number}@c.us" if "@c.us" not in raw_number else raw_number
+
+    url = f"{base_url}/api/sessions/{session_id}/messages/send-image"
+    payload = {
+        "chatId": chat_id,
+        "base64": base64.b64encode(image_bytes).decode("utf-8"),
+        "mimetype": "image/png",
+    }
+    try:
+        img_resp = _req.post(
+            url,
+            json=payload,
+            headers={"Content-Type": "application/json", "X-API-Key": api_key},
+            timeout=30,
+        )
+        if img_resp.status_code >= 400:
+            frappe.log_error(
+                title="OpenWA: Dynamic header image failed",
+                message=(
+                    f"Template {tmpl.name}, Doc {ref_doctype} {ref_name}\n"
+                    f"POST {url}\n"
+                    f"Status: {img_resp.status_code}\n"
+                    f"Response: {img_resp.text[:2000]}"
+                ),
+            )
+    except Exception as e:
+        frappe.log_error(
+            title="OpenWA: Dynamic header image failed",
+            message=f"Template {tmpl.name}, Doc {ref_doctype} {ref_name}: {e}",
+        )
+
+
 def _send_outbox_message(msg, account, outbox) -> None:  # noqa: C901
     """Actually send the message via OpenWA. Reuses the dispatcher from whatsapp_message."""
+
+    # Phase 1: Send dynamic header image if configured (moved from sync path)
+    _send_dynamic_header_for_outbox(msg, account)
+
+    # Phase 2: Send the text/template message
     from openwa_bridge.whatsapp_message import OverrideWhatsAppMessage
 
     # Create a lightweight instance to reuse _ensure_session_ready and _send_via_openwa
