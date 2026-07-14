@@ -146,6 +146,7 @@ before_install = "openwa_bridge.install.before_install"
 
 doc_events = {
 	"WhatsApp Account": {
+		"validate": "openwa_bridge.whatsapp_account.on_account_validate",
 		"on_update": "openwa_bridge.whatsapp_account.on_account_update",
 		"on_trash": "openwa_bridge.whatsapp_account.on_account_trash"
 	}

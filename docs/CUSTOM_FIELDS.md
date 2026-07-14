@@ -18,13 +18,13 @@ Uses Frappe's built-in `depends_on` mechanism — zero JavaScript needed.
 
 | Mode | Visible | Hidden |
 |---|---|---|
-| **OpenWA enabled** | OpenWA fields (Base URL, Session ID, API Key, Webhook Secret, QR Code) | Meta fields (Token, URL, Version, Phone ID, App ID, Business ID) |
+| **OpenWA enabled** | OpenWA fields (Base URL, Session ID, API Key, Webhook Secret, HMAC Strict, QR Code) | Meta fields (Token, URL, Version, Phone ID, App ID, Business ID) |
 | **OpenWA disabled** | Meta fields | OpenWA fields |
 | **Both modes** | Account Name, Status, Is Default Incoming, Is Default Outgoing, Allow Auto Read Receipt, OpenWA Enabled toggle | — |
 
 ---
 
-## WhatsApp Account (9 fields)
+## WhatsApp Account (10 fields)
 
 Added to the `WhatsApp Account` DocType.
 
@@ -37,8 +37,9 @@ Added to the `WhatsApp Account` DocType.
 | 5 | `openwa_column_break` | Column Break | | Visual separator. depends_on: openwa_enabled |
 | 6 | `openwa_api_key` | Password | OpenWA API Key | Encrypted API key for OpenWA REST API authentication. depends_on: openwa_enabled |
 | 7 | `openwa_webhook_secret` | Password | OpenWA Webhook Secret | Secret for HMAC webhook verification. depends_on: openwa_enabled |
-| 8 | `openwa_qr_html` | HTML | QR Code | QR code display area (auto-populated by Setup button or Show QR button) |
-| 9 | `openwa_meta_separator` | Section Break | Meta Cloud API | Separator between OpenWA and Meta fields |
+| 8 | `openwa_hmac_strict` | Check | Require HMAC Signature | When checked, incoming webhooks without a valid HMAC signature are rejected. depends_on: openwa_enabled |
+| 9 | `openwa_qr_html` | HTML | QR Code | QR code display area (auto-populated by Setup button or Show QR button) |
+| 10 | `openwa_meta_separator` | Section Break | Meta Cloud API | Separator between OpenWA and Meta fields |
 
 ### Meta Fields (via Property Setters)
 

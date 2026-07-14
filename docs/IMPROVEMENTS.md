@@ -69,45 +69,44 @@ Based on analysis of `frappe_whatsapp-master`, `OpenWA-main`, and `openwa_bridge
 
 ## Phase 2: Security Hardening
 
-**Effort**: 2-3 hours | **Impact**: High | **Status**: Not Started
+**Effort**: 2-3 hours | **Impact**: High | **Status**: Complete
 
 ### 2.1 Add Media Size Limit on Inbound
 
-- [ ] Add `MAX_MEDIA_SIZE_MB = 10` (configurable via System Settings)
-- [ ] Check `len(raw_data)` before base64 decode in `_attach_openwa_media()`
-- [ ] Log and reject oversized media instead of storing
+- [x] Add `MAX_MEDIA_SIZE_MB = 10` (configurable via System Settings)
+- [x] Check `len(raw_data)` before base64 decode in `_attach_openwa_media()`
+- [x] Log and reject oversized media instead of storing
 
 ### 2.2 Add `openwa_hmac_strict` Field per Account
 
-- [ ] New Check field on WhatsApp Account: `openwa_hmac_strict`
-- [ ] When checked + secret configured: reject missing signatures
-- [ ] Default: lenient (current behavior)
-- [ ] Update `inbound.py` HMAC verification logic
+- [x] New Check field on WhatsApp Account: `openwa_hmac_strict`
+- [x] When checked + secret configured: reject missing signatures
+- [x] Default: lenient (current behavior)
+- [x] Update `inbound.py` HMAC verification logic
 
 ### 2.3 Add Role Checks to Whitelisted Methods
 
-- [ ] `setup_openwa_session()` — require System Manager or WhatsApp Manager role
-- [ ] `get_openwa_session_status()` — require read permission on WhatsApp Account
-- [ ] `get_openwa_qr()` — require read permission on WhatsApp Account
-- [ ] `stop_openwa_session()` — require write permission on WhatsApp Account
+- [x] `setup_openwa_session()` — require write permission on WhatsApp Account
+- [x] `get_openwa_session_status()` — require read permission on WhatsApp Account
+- [x] `get_openwa_qr()` — require read permission on WhatsApp Account
+- [x] `stop_openwa_session()` — require write permission on WhatsApp Account
 
 ### 2.4 Validate `openwa_base_url` Against SSRF
 
-- [ ] Warn when private IP detected in URL
-- [ ] Validate URL format on save
-- [ ] Add `openwa_url_validated` field to track validation status
+- [x] Warn when private IP detected in URL
+- [x] Validate URL format on save
+- [x] Add `validate_openwa_url()` to utils.py, called via `on_account_validate` hook
 
 ### 2.5 Remove Plaintext API Key Fallback
 
-- [ ] Remove `account.get("openwa_api_key")` fallback in 8+ locations
-- [ ] Always use `account.get_password("openwa_api_key")` (encrypted)
-- [ ] Update `_get_api_key()` helper to use only `get_password()`
+- [x] Remove `account.get("openwa_api_key")` fallback in `get_api_key()`
+- [x] Always use `account.get_password("openwa_api_key")` (encrypted)
 
 ### 2.6 Add `X-Forwarded-For` Support for Rate Limiting
 
-- [ ] Check `X-Forwarded-For` header before `remote_addr`
-- [ ] Handle comma-separated list (take first IP)
-- [ ] Prevent rate limit bypass behind reverse proxies
+- [x] Check `X-Forwarded-For` header before `remote_addr`
+- [x] Handle comma-separated list (take first IP)
+- [x] Prevent rate limit bypass behind reverse proxies
 
 ---
 

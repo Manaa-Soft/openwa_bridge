@@ -7,7 +7,7 @@ import time
 import frappe
 import requests
 
-from openwa_bridge.utils import openwa_api, get_api_key
+from openwa_bridge.utils import openwa_api, get_api_key, validate_openwa_url
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +137,8 @@ def setup_openwa_session(account_name: str) -> dict:
 
         { status: "error", error: "..." }
     """
+    if not frappe.has_permission("WhatsApp Account", "write", account_name):
+        frappe.throw("Insufficient permissions to manage WhatsApp Account.", frappe.PermissionError)
     account = _get_account(account_name, require_session=False)
     base_url = account.get("openwa_base_url")
     if not base_url:
@@ -254,6 +256,8 @@ def get_openwa_session_status(account_name: str) -> dict:
         dict: { status, phone, push_name, connected_at, last_active } or
               { status: "error", error: "..." }
     """
+    if not frappe.has_permission("WhatsApp Account", "read", account_name):
+        frappe.throw("Insufficient permissions to read WhatsApp Account.", frappe.PermissionError)
     account = _get_account(account_name)
     session = _safe_get_session(account)
     if session is None:
@@ -280,6 +284,8 @@ def get_openwa_qr(account_name: str) -> dict:
               { status: "ready", phone, push_name } or
               { status: "error", error: "..." }
     """
+    if not frappe.has_permission("WhatsApp Account", "read", account_name):
+        frappe.throw("Insufficient permissions to read WhatsApp Account.", frappe.PermissionError)
     account = _get_account(account_name)
 
     # --- 1. Check current session status -----------------------------------
@@ -318,12 +324,25 @@ def stop_openwa_session(account_name: str) -> dict:
     Returns:
         dict: { status: "disconnected" } or { status: "error", error: "..." }
     """
+    if not frappe.has_permission("WhatsApp Account", "write", account_name):
+        frappe.throw("Insufficient permissions to manage WhatsApp Account.", frappe.PermissionError)
     account = _get_account(account_name)
     try:
         openwa_api(account, "POST", "/stop")
         return {"status": "disconnected"}
     except Exception as exc:
         return {"status": "error", "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# Doc event hook — called by Frappe when a WhatsApp Account is validated
+# ---------------------------------------------------------------------------
+
+
+def on_account_validate(doc, method):  # noqa: ANN001
+    """Validate the OpenWA base URL on save."""
+    if getattr(doc, "openwa_enabled", 0) and doc.openwa_base_url:
+        validate_openwa_url(doc.openwa_base_url)
 
 
 # ---------------------------------------------------------------------------

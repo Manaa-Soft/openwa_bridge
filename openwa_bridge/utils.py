@@ -89,10 +89,7 @@ def get_api_key(account) -> str:
     ------
     frappe.ValidationError : If the account has no API key set.
     """
-    if hasattr(account, "get_password"):
-        return account.get_password("openwa_api_key")
-    # Fallback for dict-like objects (should not happen in normal flow)
-    return account.get("openwa_api_key") or ""
+    return account.get_password("openwa_api_key")
 
 
 def is_openwa_account(account_name: str | None) -> bool:
@@ -129,6 +126,42 @@ def get_cached_account(account_name: str):
     doc = frappe.get_doc("WhatsApp Account", account_name)
     frappe.cache().set_value(cache_key, doc, expires_in_sec=300)
     return doc
+
+
+def validate_openwa_url(url: str) -> str:
+    """Validate an OpenWA base URL against SSRF and format issues.
+
+    Returns the cleaned URL on success.  Raises ``frappe.ValidationError``
+    on problems.
+    """
+    import ipaddress
+    from urllib.parse import urlparse
+
+    if not url:
+        frappe.throw("OpenWA Base URL is required.")
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        frappe.throw(f"OpenWA Base URL must use http or https (got: {parsed.scheme})")
+
+    hostname = parsed.hostname or ""
+    if not hostname:
+        frappe.throw("OpenWA Base URL must have a valid hostname.")
+
+    # Warn on private/internal IPs (SSRF risk) — allow but log
+    try:
+        ip = ipaddress.ip_address(hostname)
+        if ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_link_local:
+            frappe.logger().info(
+                f"OpenWA URL warning: hostname '{hostname}' resolves to a "
+                f"private/internal IP ({ip}). This is OK for local setups "
+                f"but should not be used in production."
+            )
+    except ValueError:
+        # hostname is a domain name, not an IP — that's fine
+        pass
+
+    return url.strip()
 
 
 # ------------------------------------------------------------------

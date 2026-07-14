@@ -69,6 +69,17 @@
         "depends_on":  "eval:doc.openwa_enabled"
     },
     {
+        "name":  "WhatsApp Account-openwa_hmac_strict",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Account",
+        "fieldname":  "openwa_hmac_strict",
+        "fieldtype":  "Check",
+        "insert_after":  "openwa_webhook_secret",
+        "label":  "Require HMAC Signature",
+        "depends_on":  "eval:doc.openwa_enabled",
+        "description":  "When checked, incoming webhooks without a valid HMAC signature are rejected."
+    },
+    {
         "name":  "WhatsApp Account-openwa_qr_html",
         "doctype":  "Custom Field",
         "dt":  "WhatsApp Account",

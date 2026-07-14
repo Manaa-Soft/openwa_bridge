@@ -12,6 +12,8 @@ from openwa_bridge.utils import (
     openwa_type_to_frappe,
 )
 
+MAX_MEDIA_SIZE_MB = 10
+
 
 # ── Public endpoint ──────────────────────────────────────────────────
 
@@ -43,7 +45,10 @@ def receive_openwa_message() -> dict[str, str]:
         return {"status": "error", "message": "Missing 'event' field"}
 
     # ── Rate limiting (60 req/min per IP) ──
-    client_ip = frappe.request.remote_addr or "unknown"
+    forwarded_for = frappe.request.headers.get("X-Forwarded-For", "")
+    client_ip = forwarded_for.split(",")[0].strip() if forwarded_for else (
+        frappe.request.remote_addr or "unknown"
+    )
     rate_key = f"openwa_rate::{client_ip}"
     count = frappe.cache().get_value(rate_key) or 0
     if count >= 60:
@@ -65,6 +70,13 @@ def receive_openwa_message() -> dict[str, str]:
         secret = whatsapp_account.get_password("openwa_webhook_secret")
         if secret:
             signature = frappe.request.headers.get("X-OpenWA-Signature", "")
+            hmac_strict = getattr(whatsapp_account, "openwa_hmac_strict", 0)
+            if not signature and hmac_strict:
+                frappe.log_error(
+                    title="OpenWA HMAC Missing (strict mode)",
+                    message=f"Session: {session_id}, strict=True",
+                )
+                return {"status": "error", "message": "HMAC signature required (strict mode)"}
             if signature and not verify_openwa_signature(raw_body, secret, signature):
                 frappe.log_error(
                     title="OpenWA HMAC Verification Failed",
@@ -203,6 +215,18 @@ def _attach_openwa_media(message_doc: "Document", media_info: dict) -> None:  # 
             message=(
                 f"Message {message_doc.name}: mimetype={mime_type}, "
                 "omitted=False but no data"
+            ),
+        )
+        return
+
+    # Check size before base64 decode to avoid memory issues
+    estimated_bytes = len(raw_data) * 3 // 4  # rough base64→bytes estimate
+    if estimated_bytes > MAX_MEDIA_SIZE_MB * 1024 * 1024:
+        frappe.log_error(
+            title="OpenWA: Media too large",
+            message=(
+                f"Message {message_doc.name}: ~{estimated_bytes // (1024 * 1024)}MB "
+                f"(limit {MAX_MEDIA_SIZE_MB}MB), mimetype={mime_type}"
             ),
         )
         return
