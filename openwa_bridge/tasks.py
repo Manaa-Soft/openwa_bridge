@@ -175,6 +175,32 @@ def process_outbox_entry(outbox_name: str) -> None:  # noqa: C901
     if outbox.next_retry_at and outbox.next_retry_at > datetime.now():
         return
 
+    # Load linked docs (account must be loaded first for settings checks)
+    try:
+        msg = frappe.get_doc("WhatsApp Message", outbox.whatsapp_message)
+        account = get_cached_account(outbox.whatsapp_account)
+    except Exception as exc:
+        frappe.log_error(
+            title=f"OpenWA Outbox: failed to load docs for {outbox_name}",
+            message=str(exc),
+        )
+        frappe.db.set_value(
+            "OpenWA Outbox",
+            outbox_name,
+            {"status": "Failed", "last_error": str(exc)[:65000]},
+        )
+        frappe.db.commit()
+        return
+
+    if not account.get("openwa_enabled"):
+        frappe.db.set_value(
+            "OpenWA Outbox",
+            outbox_name,
+            {"status": "Failed", "last_error": "WhatsApp Account no longer has OpenWA enabled"},
+        )
+        frappe.db.commit()
+        return
+
     # Guard: exhausted retries
     max_attempts = get_account_setting(account, "openwa_max_outbox_attempts", 5)
     if outbox.attempts >= max_attempts:
@@ -193,18 +219,6 @@ def process_outbox_entry(outbox_name: str) -> None:  # noqa: C901
         {"status": "Sending", "attempts": (outbox.attempts or 0) + 1},
     )
     frappe.db.commit()
-
-    # Load linked docs
-    try:
-        msg = frappe.get_doc("WhatsApp Message", outbox.whatsapp_message)
-        account = get_cached_account(outbox.whatsapp_account)
-    except Exception as exc:
-        _fail_outbox(outbox_name, str(exc), account=account)
-        return
-
-    if not account.get("openwa_enabled"):
-        _fail_outbox(outbox_name, "WhatsApp Account no longer has OpenWA enabled", account=account)
-        return
 
     # Check circuit breaker
     from openwa_bridge.utils import OpenWACircuitBreaker
