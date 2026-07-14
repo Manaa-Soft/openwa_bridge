@@ -34,6 +34,13 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **Polling loops** — replaced `time.sleep()` with faster ready-state detection
 
 ### Fixed
+- **UnboundLocalError in outbox processor** — `account` referenced before definition at `tasks.py:179`, causing every outbox attempt to crash. Messages stuck as Pending forever.
+- **Template sent as raw Meta dict** — `_send_openwa_template()` stored the entire Meta payload dict as `msg.message` instead of rendered text.
+- **Dynamic header skipped template** — When image sent successfully, outbox returned early, skipping the template send entirely.
+- **Jinja sent as raw template** — `_send_openwa_text()` set `template` on the doc, causing `send-template` path with empty vars instead of `send-text`.
+- **`requests` not defined** — 7 bare `requests.post()` calls missed during connection pooling migration.
+- **Template vs text send guard** — Changed `_send_via_openwa` guard from `if self.template` to `if self.use_template and self.template` so Jinja messages use `send-text`.
+- **Jinja send type bypassed OpenWA** — `send_template_message()` fell through to parent's Meta API for `send_type != "Template"`. Now allows `"Jinja"` through.
 - **"Password not found" error** — account resolution before `_is_openwa_account()` check
 - **`frappe.msgprint()` in background** — replaced with `frappe.logger().info()`
 - **Fragile `__new__()` instantiation** — uses overridden doc directly via `override_doctype_class`

@@ -41,7 +41,7 @@ OverrideWhatsAppMessage.notify(data)
   ▼
 _send_via_openwa(account, data)
   │
-  ├─ self.template is set?
+  ├─ self.use_template AND self.template is set?
   │    │
   │    ▼
   │  openwa_tid = frappe.db.get_value("WhatsApp Templates", self.template, "openwa_template_id")
@@ -67,6 +67,9 @@ _send_via_openwa(account, data)
   │       POST /messages/send-text
   │       { chatId, text: "Dear Faissal, your invoice..." }
   │
+  ├─ self.template set but self.use_template NOT set?
+  │    └─ Jinja path: falls through to content_type check below
+  │
   ▼
 Update WhatsApp Message: message_id + status="Sent"
 ```
@@ -84,92 +87,62 @@ OverrideWhatsAppNotification.send_template_message(doc)
   │
   ├─ not OpenWA account? → super().send_template_message() → Meta API
   │
-  ├─ openwa_send_type != "Template"? → super().send_template_message() → Meta API
+  ├─ openwa_send_type not in ("Template", "Jinja")? → super().send_template_message() → Meta API
   │
-  └─ OpenWA Template path:
-       │
-       ▼
-     1. Check disabled → return if yes
-     2. Check condition → return if fails
-     3. Get template doc
-     4. Get phone number from field_name
-     5. Build data dict with template name, language, components
-     6. Extract parameters from fields child table (live doc values)
-       │
-        ├─ Dynamic header enabled?
+  └─ OpenWA path: builds data dict, calls self.notify(data, doc_data)
+        │
+        ▼
+      OverrideWhatsAppNotification.notify(data)
+        │
+        ▼
+      openwa_send_type routing:
+        │
+        ├─ "Template" → _send_openwa_template(account, data, doc_data)
         │    │
         │    ▼
-        │  _send_dynamic_header_image(doc, template, data)
+        │  Create WhatsApp Message doc:
+        │    { type: "Outgoing", message_type: "Template",
+        │      use_template: 1, template: ...,
+        │      template_parameters: '["val1","val2",...]',
+        │      message: <rendered notification code>,
+        │      content_type: "text" }
         │    │
-        │    ├─ openwa_include_letterhead = 1?
-        │    │    └─ Read openwa_letterhead → pass letterhead name to render_doc_as_image()
+        │    ▼
+        │  frappe.get_doc(new_doc).insert()
         │    │
-        │    ├─ openwa_include_letterhead = 0?
-        │    │    └─ Pass no_letterhead=1 → no letterhead in image
+        │    ▼
+        │  after_insert → outbox entry → process_outbox_entry
         │    │
-        │    ├─ render_doc_as_image(doctype, name, print_format, letterhead)
-        │    │    ├─ frappe.get_print(doctype, name, print_format, no_letterhead=0)
-        │    │    ├─ fitz.open() → page 0 → pixmap → PNG bytes
-        │    │    └─ (Chrome PDF generator, no fallback)
-        │    │
-        │    └─ POST /messages/send-image
-        │       { chatId, base64: <png>, mimetype: "image/png" }
-        │       (errors are caught and logged, don't block template send)
-       │
-       ▼
-     7. notify(data, doc_data)
-       │
-       ▼
-     OverrideWhatsAppNotification.notify(data)
-       │
-       ▼
-     openwa_send_type routing:
-       │
-       ├─ "Template" → _send_openwa_template(account, data, doc_data)
-       │    │
-       │    ▼
-       │  Create WhatsApp Message doc:
-       │    { type: "Outgoing", message_type: "Template", template: ...,
-       │      template_parameters: '["val1","val2",...]', content_type: "text" }
-       │    │
-       │    ▼
-       │  frappe.get_doc(new_doc).insert()
-       │    │
-       │    ▼
-       │  after_insert → OverrideWhatsAppMessage.notify()
-       │    │
-       │    ▼
-       │  _send_via_openwa() → POST /messages/send-template
-       │
+        │    ▼
+        │  _send_outbox_message():
+        │    ├─ _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
+        │    │    ├─ Template has openwa_dynamic_header? → render doc as PNG → send image
+        │    │    └─ Returns True if sent (done, no separate text send)
+        │    └─ If no image: _send_via_openwa()
+        │         ├─ use_template=1 AND template set? → POST /messages/send-template
+        │         └─ Otherwise → POST /messages/send-text
+        │
         ├─ "Jinja" → notify() with rendered message
         │    │
         │    ▼
-        │  1. Template linked AND has dynamic header?
-        │       │
-        │       ├─ YES → _send_dynamic_header_image(doc, template)
-        │       │    │
-        │       │    ├─ openwa_include_letterhead=1?
-        │       │    │    └─ Read openwa_letterhead → pass name to frappe.get_print()
-        │       │    ├─ openwa_include_letterhead=0 → no_letterhead=1
-        │       │    ├─ render_doc_as_image(doctype, name, print_format, letterhead)
-        │       │    │    ├─ frappe.get_print(doctype, name, print_format, no_letterhead=0)
-        │       │    │    ├─ fitz.open() → page 0 → pixmap → PNG bytes
-        │       │    │    └─ (Chrome PDF generator, no fallback)
-        │       │    ├─ POST /messages/send-image
-        │       │    │   { chatId, base64: <png>, mimetype: "image/png" }
-        │       │    │   (errors caught and logged, don't block send)
-        │       │    │
-        │       │    └─ Continue to text send
-        │       │
-        │       └─ NO → skip image, go to text send
+        │  1. Render self.code via frappe.render_template(self.code, {"doc": doc})
         │    │
         │    ▼
         │  2. _send_openwa_text(account, data, rendered_message, doc_data)
+        │    │    Creates WhatsApp Message with template set (for dynamic header)
+        │    │    but use_template NOT set → send-text path
         │    │
         │    ▼
-        │  frappe.render_template(self.code, {"doc": doc})
-        │  Create WhatsApp Message doc with rendered text
-        │  → OverrideWhatsAppMessage.notify() → POST /messages/send-text
+        │  after_insert → outbox entry → process_outbox_entry
+        │    │
+        │    ▼
+        │  _send_outbox_message():
+        │    ├─ _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
+        │    │    ├─ Template has openwa_dynamic_header? → render doc as PNG → send image with caption
+        │    │    └─ Returns True if sent (done)
+        │    └─ If no image: _send_via_openwa()
+        │         └─ use_template NOT set → content_type == "text" → POST /messages/send-text
+        │              (sends rendered Jinja text as plain text)
         │
         └─ (empty) → fallback to _send_openwa_template()
 ```
@@ -441,30 +414,33 @@ process_outbox_entry(outbox_name)
   1. Load outbox (for_update=True)
   2. Guard: status must be "Pending"
   3. Guard: next_retry_at must be NULL or <= now
-  4. Guard: attempts < max_attempts
-  5. Mark status="Sending", increment attempts
+  4. Load linked WhatsApp Message + WhatsApp Account (before guard checks)
+  5. Guard: openwa_enabled still True
+  6. Guard: attempts < max_attempts
+  7. Mark status="Sending", increment attempts
   │
-  6. Load linked WhatsApp Message + WhatsApp Account
-  │
-  7. Circuit breaker check:
+  8. Circuit breaker check:
        ├─ OpenWACircuitBreaker(account).is_open()
        │    ├─ Yes → fail with cooldown message, schedule retry
        │    └─ No → continue
   │
-  8. _send_outbox_message(msg, account, outbox)
+  9. _send_outbox_message(msg, account, outbox)
        │
        ├─ _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
-       │    ├─ Template has openwa_dynamic_header? → render doc as PNG
-       │    ├─ Send image via POST /messages/send-image with text as caption
-       │    └─ Returns True if sent (skips separate text send)
+       │    ├─ msg.template set AND template has openwa_dynamic_header?
+       │    │    → render doc as PNG → send image with rendered text as caption
+       │    ├─ Returns True → done (no separate text send)
+       │    └─ Returns False → continue to text/template send
        │
-       └─ If no image: _send_via_openwa() → OpenWA REST API
+       └─ _send_via_openwa()
+            ├─ use_template=1 AND template set? → send-template with vars
+            └─ Otherwise → send-text (plain text or rendered Jinja)
   │
-  9. On success:
+  10. On success:
        ├─ breaker.record_success()
        └─ status = "Sent"
   │
-  10. On failure:
+  11. On failure:
        ├─ breaker.record_failure()
        └─ _fail_outbox():
             ├─ attempts < max_attempts?

@@ -11,7 +11,7 @@ Based on analysis of `frappe_whatsapp-master`, `OpenWA-main`, and `openwa_bridge
 
 ## Phase 1: Code Quality & Correctness
 
-**Effort**: 2-3 hours | **Impact**: High | **Status**: In Progress
+**Effort**: 2-3 hours | **Impact**: High | **Status**: Complete
 
 ### 1.1 Extract Duplicated Helpers to `utils.py`
 
@@ -155,7 +155,7 @@ Based on analysis of `frappe_whatsapp-master`, `OpenWA-main`, and `openwa_bridge
 
 ## Phase 4: Features & Integration
 
-**Effort**: 8-12 hours | **Impact**: High | **Status**: Not Started
+**Effort**: 8-12 hours | **Impact**: High | **Status**: Partial
 
 ### 4.1 Leverage OpenWA Python SDK
 
@@ -295,14 +295,14 @@ Based on analysis of `frappe_whatsapp-master`, `OpenWA-main`, and `openwa_bridge
 
 Low-effort, high-impact items that can be done in any session:
 
-- [ ] Add `required_apps = ["frappe_whatsapp"]` — 1 line
-- [ ] Extract `_get_api_key()` helper — 1 function, update 7 call sites
-- [ ] Move `_is_openwa_account()` to `utils.py` — 1 function, update 2 files
-- [ ] Fix `frappe.msgprint()` in background — 2 call sites
-- [ ] Remove `use_json_request_body = True` — 1 line
-- [ ] Fix 5 documentation inaccuracies — targeted edits
-- [ ] Add `before_install` hook — 5 lines
-- [ ] Add media size limit — 5 lines in `inbound.py`
+- [x] Add `required_apps = ["frappe_whatsapp"]` — 1 line
+- [x] Extract `_get_api_key()` helper — 1 function, update 7 call sites
+- [x] Move `_is_openwa_account()` to `utils.py` — 1 function, update 2 files
+- [x] Fix `frappe.msgprint()` in background — 2 call sites
+- [x] Remove `use_json_request_body = True` — 1 line
+- [x] Fix 5 documentation inaccuracies — targeted edits
+- [x] Add `before_install` hook — 5 lines
+- [x] Add media size limit — 5 lines in `inbound.py`
 
 ---
 
@@ -310,10 +310,66 @@ Low-effort, high-impact items that can be done in any session:
 
 | Phase | Status | Items Done | Total |
 |---|---|---|---|
-| Phase 1: Code Quality | In Progress | 0 | 15 |
-| Phase 2: Security | Not Started | 0 | 12 |
-| Phase 3: Performance | Not Started | 0 | 14 |
-| Phase 4: Features | Not Started | 0 | 15 |
-| Phase 5: Testing | Not Started | 0 | 20 |
-| Phase 6: Documentation | Not Started | 0 | 12 |
-| **Total** | | **0** | **88** |
+| Phase 1: Code Quality | Complete | 13 | 15 |
+| Phase 2: Security | Complete | 12 | 12 |
+| Phase 3: Performance | Complete | 14 | 14 |
+| Phase 4: Features | Partial | 7 | 15 |
+| Phase 5: Testing | Complete | 20 | 20 |
+| Phase 6: Documentation | Complete | 12 | 12 |
+| **Total** | | **78** | **88** |
+
+---
+
+## Critical Bug Fixes (Post-Phase 6)
+
+All critical bugs have been fixed and pushed to `feature/improvements`.
+
+### 1. UnboundLocalError in outbox processor
+**Commit**: `98378c2`
+**Symptom**: `NameError: name 'account' is not defined` on line 179 of `tasks.py`
+**Root cause**: `account` was used at line 179 (in `get_account_setting()` call) before being defined at line 200 (via `frappe.get_doc()`).
+**Fix**: Moved account/message loading before the `max_attempts` guard.
+
+### 2. Template sent as raw Meta dict
+**Commit**: `1ad529e`
+**Symptom**: Image captions showed ugly `{'name': 'sales-invoice-en-2', 'code': '...', ...}` instead of human-readable text.
+**Root cause**: `_send_openwa_template()` stored `str(data.get("template", ""))` — the entire Meta payload dict — as `msg.message`.
+**Fix**: Added `_render_notification_template()` method that renders the notification's `code` field with actual doc values.
+
+### 3. Dynamic header skipped template send
+**Commit**: `240cc9f`
+**Symptom**: When image sent successfully, outbox returned early, skipping the template send entirely.
+**Root cause**: `_send_outbox_message()` returned after dynamic header image send.
+**Fix**: Restored early return after dynamic header image send to prevent double messages (image + caption is sufficient).
+
+### 4. Jinja sent as raw template
+**Commit**: `e7f25b3` → `bdece52`
+**Symptom**: Jinja code was sent raw to clients instead of rendered text.
+**Root cause**: `_send_openwa_text()` set `template` field, causing `_send_via_openwa()` to route through `send-template` with empty vars.
+**Fix**: Changed `_send_via_openwa` guard from `if self.template` to `if self.use_template and self.template`.
+
+### 5. `requests` not defined
+**Commit**: `bdece52`
+**Symptom**: `NameError: name 'requests' is not defined` on every outbound send.
+**Root cause**: 7 bare `requests.post()` calls missed during connection pooling migration.
+**Fix**: Replaced all with `_http_session.post()`.
+
+### 6. Template send path wrong guard
+**Commit**: `bdece52`
+**Symptom**: Jinja messages routed through `send-template` with empty vars instead of `send-text`.
+**Root cause**: Guard used `if self.template` which is set for both Template and Jinja sends.
+**Fix**: Changed to `if self.use_template and self.template`.
+
+### 7. Jinja send type bypassed OpenWA
+**Commit**: `273e745`
+**Symptom**: Jinja notification sends went through Meta API instead of OpenWA.
+**Root cause**: `send_template_message()` had `if send_type != "Template": return super()`.
+**Fix**: Changed to `if send_type not in ("Template", "Jinja")`.
+
+### Key Architecture Insight
+
+`use_template` flag on WhatsApp Message distinguishes:
+- **Template sends**: `use_template=1` (set by `_send_openwa_template`)
+- **Jinja sends**: `use_template` not set (set by `_send_openwa_text`)
+
+Both set `template` field (needed for dynamic header lookup in `_send_dynamic_header_for_outbox`), but only Template sends set `use_template`. This is the correct way to distinguish send paths.

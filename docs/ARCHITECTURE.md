@@ -69,8 +69,10 @@ OpenWA Bridge is a Frappe app that intercepts `frappe_whatsapp` DocType operatio
 │                                                                    │
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │                 Custom Fields (fixtures)                    │  │
-│  │  WhatsApp Account:     9 fields (OpenWA section +          │  │
-│  │                          QR HTML + separator)              │  │
+  │  │  WhatsApp Account:     16 fields (OpenWA section +          │  │
+  │  │                          QR HTML + HMAC + timeouts +        │  │
+  │  │                          rate limit + circuit breaker +     │  │
+  │  │                          max outbox attempts)               │  │
 │  │  WhatsApp Templates:   8 fields (sync + dynamic header     │  │
 │  │                          + letterhead control)             │  │
 │  │  WhatsApp Notification: 1 field  (openwa_send_type)        │  │
@@ -193,7 +195,8 @@ WhatsApp Account doc (Frappe)
 
 1. **Override, not replace**: We extend parent classes so non-OpenWA accounts continue working via Meta API.
 2. **Message doc as carrier**: Template sends create a WhatsApp Message doc first, which triggers `notify()` → routes to OpenWA. This preserves Frappe's message history.
-3. **Two-step image+text**: OpenWA's `send-template` is text-only. Dynamic image headers require sending the image first via `send-image`, then the template text via `send-template`.
+3. **use_template flag**: `send-template` vs `send-text` is determined by the `use_template` field (set to 1 by `_send_openwa_template`, not set by `_send_openwa_text`). The `template` field alone is used for dynamic header lookups and should not control the send path.
+4. **Two-step image+text**: When `openwa_dynamic_header` is enabled on a template, the image is sent via `send-image` with the rendered text as caption. The recipient receives one message (image + caption), not two separate messages.
 4. **Live doc values**: Notification parameters are resolved from the actual document at send time (not from pre-filled sample values).
 5. **Graceful degradation**: If OpenWA is down, the error is logged but the doc is still saved. If dynamic image fails, the template text still sends.
 6. **Async outbox**: Outbound messages flow through `OpenWA Outbox` — created in `after_insert()` after the doc is persisted, processed by background workers with exponential backoff retry (30s–1h cap, 5 attempts max).
@@ -216,12 +219,15 @@ after_insert()
   ▼ [background worker]
 process_outbox_entry()
   │
+  ├─ load WhatsApp Message + Account (first, for settings checks)
+  ├─ openwa_enabled still True? attempts < max?
   ├─ circuit breaker open? → fail with cooldown message
-  ├─ load WhatsApp Message + Account
-  ├─ _send_dynamic_header_for_outbox() → send image with text as caption
-  │    ├─ image sent? → done (1 message, not 2)
+  ├─ _send_dynamic_header_for_outbox() → send image with rendered text as caption
+  │    ├─ image sent? → done (1 message with caption, not 2)
   │    └─ no image? → fall through
-  ├─ _send_via_openwa() → OpenWA REST API
+  ├─ _send_via_openwa()
+  │    ├─ use_template=1? → send-template with vars
+  │    └─ Otherwise → send-text (plain text or rendered Jinja)
   ├─ success → record_success(), status=Sent
   └─ failure → record_failure(), exponential backoff retry
                 (30s, 60s, 120s, 300s, capped at 1h)
