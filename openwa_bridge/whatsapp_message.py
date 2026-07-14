@@ -173,7 +173,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
         }
 
         # --- template via OpenWA send-template endpoint ---
-        if self.template:
+        if self.use_template and self.template:
             openwa_tid = frappe.db.get_value("WhatsApp Templates", self.template, "openwa_template_id")
             if openwa_tid:
                 params: dict[str, str] = {}
@@ -212,7 +212,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     "OpenWA bridge does not support media replies. "
                     "Send the media and reply separately, or use a Meta account."
                 )
-            resp = requests.post(
+            resp = _http_session.post(
                 f"{base_url}/api/sessions/{session_id}/messages/reply",
                 json={
                     "chatId": chat_id,
@@ -224,7 +224,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             )
 
         elif self.content_type == "text":
-            resp = requests.post(
+            resp = _http_session.post(
                 f"{base_url}/api/sessions/{session_id}/messages/send-text",
                 json={"chatId": chat_id, "text": self.message},
                 headers=headers,
@@ -237,7 +237,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             if self.content_type != "audio":
                 payload["caption"] = self.message
             endpoint = f"send-{self.content_type}"
-            resp = requests.post(
+            resp = _http_session.post(
                 f"{base_url}/api/sessions/{session_id}/messages/{endpoint}",
                 json=payload,
                 headers=headers,
@@ -245,7 +245,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             )
 
         elif self.content_type == "reaction":
-            resp = requests.post(
+            resp = _http_session.post(
                 f"{base_url}/api/sessions/{session_id}/messages/react",
                 json={
                     "chatId": chat_id,
@@ -265,7 +265,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     "Location messages require JSON in the message field: "
                     '{"latitude": -6.2088, "longitude": 106.8456, "description": "...", "address": "..."}'
                 )
-            resp = requests.post(
+            resp = _http_session.post(
                 f"{base_url}/api/sessions/{session_id}/messages/send-location",
                 json={
                     "chatId": chat_id,
@@ -287,7 +287,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     "Contact messages require JSON in the message field: "
                     '{"contact_name": "John Doe", "contact_number": "+1234567890"}'
                 )
-            resp = requests.post(
+            resp = _http_session.post(
                 f"{base_url}/api/sessions/{session_id}/messages/send-contact",
                 json={
                     "chatId": chat_id,
@@ -307,7 +307,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     "Poll messages require JSON in the message field: "
                     '{"name": "Question?", "options": ["Option 1", "Option 2"], "allowMultipleAnswers": false}'
                 )
-            resp = requests.post(
+            resp = _http_session.post(
                 f"{base_url}/api/sessions/{session_id}/messages/send-poll",
                 json={
                     "chatId": chat_id,
