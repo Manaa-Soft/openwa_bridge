@@ -49,6 +49,11 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
             return super().send_template_message(doc, phone_no, default_template, ignore_condition)
 
         send_type = self.openwa_send_type or ""
+        if not send_type:
+            frappe.throw(
+                _("OpenWA Send Type is required when using OpenWA. "
+                  "Set it to 'Jinja' or 'Template' in the notification settings.")
+            )
         if send_type != "Template":
             return super().send_template_message(doc, phone_no, default_template, ignore_condition)
 
@@ -126,6 +131,11 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
 
         # ── OpenWA path ──
         send_type = self.openwa_send_type or ""
+        if not send_type:
+            frappe.throw(
+                _("OpenWA Send Type is required when using OpenWA. "
+                  "Set it to 'Jinja' or 'Template' in the notification settings.")
+            )
 
         # 1) Explicit "Template" → OpenWA send-template with real doc values
         if send_type == "Template" and self.template:
