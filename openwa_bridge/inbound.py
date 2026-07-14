@@ -10,6 +10,7 @@ from openwa_bridge.utils import (
     verify_openwa_signature,
     strip_jid_suffix,
     openwa_type_to_frappe,
+    get_account_setting,
 )
 
 MAX_MEDIA_SIZE_MB = 10
@@ -44,26 +45,27 @@ def receive_openwa_message() -> dict[str, str]:
         )
         return {"status": "error", "message": "Missing 'event' field"}
 
-    # ── Rate limiting (60 req/min per IP) ──
+    session_id: str = payload.get("sessionId", "")
+    event_type: str = payload.get("event", "")
+    event_data: dict = payload.get("data", {})
+
+    whatsapp_account = _resolve_account_by_session(session_id)
+
+    # ── Rate limiting (configurable per account) ──
+    rate_limit = get_account_setting(whatsapp_account, "openwa_rate_limit", 60) if whatsapp_account else 60
     forwarded_for = frappe.request.headers.get("X-Forwarded-For", "")
     client_ip = forwarded_for.split(",")[0].strip() if forwarded_for else (
         frappe.request.remote_addr or "unknown"
     )
     rate_key = f"openwa_rate::{client_ip}"
     count = frappe.cache().get_value(rate_key) or 0
-    if count >= 60:
+    if count >= rate_limit:
         frappe.log_error(
             title="OpenWA: Rate limit exceeded",
-            message=f"IP: {client_ip}, Count: {count}",
+            message=f"IP: {client_ip}, Count: {count}, Limit: {rate_limit}",
         )
         return {"status": "error", "message": "Rate limit exceeded"}
     frappe.cache().set_value(rate_key, count + 1, expires_in_sec=60)
-
-    session_id: str = payload.get("sessionId", "")
-    event_type: str = payload.get("event", "")
-    event_data: dict = payload.get("data", {})
-
-    whatsapp_account = _resolve_account_by_session(session_id)
 
     # ── HMAC verification ──
     if whatsapp_account:
@@ -95,7 +97,8 @@ def receive_openwa_message() -> dict[str, str]:
         cache_key = f"openwa_idempotent:{idempotency_key}"
         if frappe.cache().get_value(cache_key):
             return {"status": "duplicate"}
-        frappe.cache().set_value(cache_key, 1, expires_in_sec=3600)
+        idempotency_ttl = frappe.db.get_single_value("OpenWA Bridge Settings", "idempotency_ttl") or 3600
+        frappe.cache().set_value(cache_key, 1, expires_in_sec=idempotency_ttl)
 
     # ── Route to handler ──
     try:
@@ -220,13 +223,14 @@ def _attach_openwa_media(message_doc: "Document", media_info: dict) -> None:  # 
         return
 
     # Check size before base64 decode to avoid memory issues
+    max_media_size_mb = frappe.db.get_single_value("OpenWA Bridge Settings", "max_media_size_mb") or 10
     estimated_bytes = len(raw_data) * 3 // 4  # rough base64→bytes estimate
-    if estimated_bytes > MAX_MEDIA_SIZE_MB * 1024 * 1024:
+    if estimated_bytes > max_media_size_mb * 1024 * 1024:
         frappe.log_error(
             title="OpenWA: Media too large",
             message=(
                 f"Message {message_doc.name}: ~{estimated_bytes // (1024 * 1024)}MB "
-                f"(limit {MAX_MEDIA_SIZE_MB}MB), mimetype={mime_type}"
+                f"(limit {max_media_size_mb}MB), mimetype={mime_type}"
             ),
         )
         return

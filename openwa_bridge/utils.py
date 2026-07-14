@@ -132,6 +132,25 @@ def get_cached_account(account_name: str):
     return doc
 
 
+def get_account_setting(account, field: str, default=None):
+    """Read a configurable value from a WhatsApp Account doc.
+
+    Parameters
+    ----------
+    account : WhatsApp Account doc or name.
+    field   : Field name to read (e.g. 'openwa_cb_threshold').
+    default : Fallback value if the field is not set.
+
+    Returns
+    -------
+    The field value, or *default* if unset/zero.
+    """
+    if isinstance(account, str):
+        account = get_cached_account(account)
+    val = getattr(account, field, None)
+    return val if val else default
+
+
 def validate_openwa_url(url: str) -> str:
     """Validate an OpenWA base URL against SSRF and format issues.
 

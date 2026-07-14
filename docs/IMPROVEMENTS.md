@@ -190,13 +190,13 @@ Based on analysis of `frappe_whatsapp-master`, `OpenWA-main`, and `openwa_bridge
 
 ### 4.5 Make Hardcoded Values Configurable
 
-- [ ] Rate limit: 60/min → WhatsApp Account field
-- [ ] Idempotency TTL: 3600s → System Settings
-- [ ] Circuit breaker threshold: 5 → WhatsApp Account field
-- [ ] Circuit breaker cooldown: 300s → WhatsApp Account field
-- [ ] Max outbox attempts: 5 → WhatsApp Account field
-- [ ] Outbox batch size: 50 → System Settings
-- [ ] Media size limit: 10MB → System Settings
+- [x] Rate limit: 60/min → WhatsApp Account field `openwa_rate_limit`
+- [x] Idempotency TTL: 3600s → OpenWA Bridge Settings DocType
+- [x] Circuit breaker threshold: 5 → WhatsApp Account field `openwa_cb_threshold`
+- [x] Circuit breaker cooldown: 300s → WhatsApp Account field `openwa_cb_cooldown`
+- [x] Max outbox attempts: 5 → WhatsApp Account field `openwa_max_outbox_attempts`
+- [x] Outbox batch size: 25 → OpenWA Bridge Settings DocType
+- [x] Media size limit: 10MB → OpenWA Bridge Settings DocType
 
 ### 4.6 Add Webhook Replay / Backfill
 

@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import frappe
 import requests
 
-from openwa_bridge.utils import get_cached_account, _http_session
+from openwa_bridge.utils import get_cached_account, get_account_setting, _http_session
 
 
 def _get_openwa_accounts() -> list[dict]:
@@ -176,7 +176,8 @@ def process_outbox_entry(outbox_name: str) -> None:  # noqa: C901
         return
 
     # Guard: exhausted retries
-    if outbox.attempts >= (outbox.max_attempts or 5):
+    max_attempts = get_account_setting(account, "openwa_max_outbox_attempts", 5)
+    if outbox.attempts >= max_attempts:
         frappe.db.set_value(
             "OpenWA Outbox",
             outbox_name,
@@ -198,21 +199,24 @@ def process_outbox_entry(outbox_name: str) -> None:  # noqa: C901
         msg = frappe.get_doc("WhatsApp Message", outbox.whatsapp_message)
         account = get_cached_account(outbox.whatsapp_account)
     except Exception as exc:
-        _fail_outbox(outbox_name, str(exc))
+        _fail_outbox(outbox_name, str(exc), account=account)
         return
 
     if not account.get("openwa_enabled"):
-        _fail_outbox(outbox_name, "WhatsApp Account no longer has OpenWA enabled")
+        _fail_outbox(outbox_name, "WhatsApp Account no longer has OpenWA enabled", account=account)
         return
 
     # Check circuit breaker
     from openwa_bridge.utils import OpenWACircuitBreaker
 
-    breaker = OpenWACircuitBreaker(account.name)
+    cb_threshold = get_account_setting(account, "openwa_cb_threshold", 5)
+    cb_cooldown = get_account_setting(account, "openwa_cb_cooldown", 300)
+    breaker = OpenWACircuitBreaker(account.name, threshold=cb_threshold, cooldown_seconds=cb_cooldown)
     if breaker.is_open():
         _fail_outbox(
             outbox_name,
             f"Circuit breaker open — {breaker.remaining_cooldown()}s cooldown remaining",
+            account=account,
         )
         return
 
@@ -229,7 +233,7 @@ def process_outbox_entry(outbox_name: str) -> None:  # noqa: C901
         frappe.db.commit()
     except Exception as exc:
         breaker.record_failure()
-        _fail_outbox(outbox_name, str(exc))
+        _fail_outbox(outbox_name, str(exc), account=account)
 
 
 def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
@@ -345,7 +349,7 @@ def _send_outbox_message(msg, account, outbox) -> None:  # noqa: C901
     msg._send_via_openwa(account, meta_payload)
 
 
-def _fail_outbox(outbox_name: str, error: str) -> None:
+def _fail_outbox(outbox_name: str, error: str, account=None) -> None:
     """Mark an outbox entry as Failed or schedule a retry."""
     try:
         outbox = frappe.get_doc("OpenWA Outbox", outbox_name)
@@ -354,7 +358,10 @@ def _fail_outbox(outbox_name: str, error: str) -> None:
 
     # attempts was already incremented by process_outbox_entry() before calling us
     attempts = outbox.attempts or 0
-    max_attempts = outbox.max_attempts or 5
+    if account:
+        max_attempts = get_account_setting(account, "openwa_max_outbox_attempts", 5)
+    else:
+        max_attempts = outbox.max_attempts or 5
     error_msg = str(error)[:65000]
 
     if attempts >= max_attempts:
@@ -400,6 +407,7 @@ def process_pending_outbox() -> None:
     """
     now = datetime.now()
     max_attempts = frappe.db.get_single_value("System Settings", "max_auto_retry_count") or 5
+    batch_size = frappe.db.get_single_value("OpenWA Bridge Settings", "outbox_batch_size") or 25
 
     entries = frappe.get_all(
         "OpenWA Outbox",
@@ -409,7 +417,7 @@ def process_pending_outbox() -> None:
             ["next_retry_at", "is", "not set"],
         ],
         fields=["name"],
-        limit=25,
+        limit=batch_size,
     )
 
     # Also pick up entries where next_retry_at <= now
@@ -421,7 +429,7 @@ def process_pending_outbox() -> None:
             ["next_retry_at", "<=", now],
         ],
         fields=["name"],
-        limit=25,
+        limit=batch_size,
     )
 
     candidates = list({e.name for e in entries} | {e.name for e in retry_entries})
