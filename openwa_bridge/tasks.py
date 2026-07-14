@@ -165,8 +165,10 @@ def process_outbox_entry(outbox_name: str) -> None:  # noqa: C901
     # Distributed lock — prevent duplicate processing when scheduler safety-net
     # and frappe.enqueue overlap on the same entry.
     lock_key = f"openwa_outbox_lock::{outbox_name}"
-    if not frappe.cache().set_value(lock_key, 1, expires_in_sec=30, only_set=True):
+    existing = frappe.cache().get_value(lock_key)
+    if existing is not None:
         return  # another worker is already processing this entry
+    frappe.cache().set_value(lock_key, 1, expires_in_sec=30)
 
     try:
         _process_outbox_entry_inner(outbox_name)
