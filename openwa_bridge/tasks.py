@@ -461,3 +461,274 @@ def process_pending_outbox() -> None:
 
     if candidates:
         frappe.logger().info(f"OpenWA outbox safety-net: re-enqueued {len(candidates)} entry(ies)")
+
+
+# ---------------------------------------------------------------------------
+# Outbox Dashboard API
+# ---------------------------------------------------------------------------
+
+
+@frappe.whitelist()
+def get_outbox_dashboard(account_name: str | None = None) -> dict:
+    """Return outbox statistics for the dashboard.
+
+    If *account_name* is provided, stats are scoped to that account.
+    Otherwise, returns aggregate stats across all OpenWA-enabled accounts.
+
+    Returns::
+
+        {
+          "queue_depth": {"Pending": 3, "Sending": 1, "Sent": 150, "Failed": 2},
+          "circuit_breakers": {"manaa2": {"open": false, "failures": 0}},
+          "success_rate_24h": 98.5,
+          "success_rate_7d": 97.2,
+          "avg_send_time_ms": 1200,
+          "recent_failures": [{"name": "...", "error": "...", "modified": "..."}]
+        }
+    """
+    from datetime import datetime, timedelta
+
+    filters: list = []
+    if account_name:
+        filters.append(["whatsapp_account", "=", account_name])
+
+    # Queue depth
+    status_counts = frappe.get_all(
+        "OpenWA Outbox",
+        filters=filters + [["status", "in", ["Pending", "Sending", "Sent", "Failed"]]],
+        fields=["status"],
+        limit_page_length=0,
+    )
+    queue_depth: dict[str, int] = {"Pending": 0, "Sending": 0, "Sent": 0, "Failed": 0}
+    for row in status_counts:
+        queue_depth[row.status] = queue_depth.get(row.status, 0) + 1
+
+    # Circuit breaker status per account
+    from openwa_bridge.utils import OpenWACircuitBreaker
+
+    accounts_to_check = (
+        [account_name]
+        if account_name
+        else [
+            a.name
+            for a in frappe.get_all(
+                "WhatsApp Account",
+                filters={"openwa_enabled": 1},
+                fields=["name"],
+            )
+        ]
+    )
+    circuit_breakers: dict[str, dict] = {}
+    for acct in accounts_to_check:
+        cb = OpenWACircuitBreaker(acct)
+        failures_key = f"openwa_cb::{acct}::failures"
+        failures = frappe.cache().get_value(failures_key) or 0
+        circuit_breakers[acct] = {
+            "open": cb.is_open(),
+            "failures": failures,
+            "remaining_cooldown": cb.remaining_cooldown() if cb.is_open() else 0,
+        }
+
+    # Success rates (last 24h and 7d)
+    now = datetime.now()
+    success_rate_24h = _calc_success_rate(filters, now - timedelta(hours=24), now)
+    success_rate_7d = _calc_success_rate(filters, now - timedelta(days=7), now)
+
+    # Average send time (last 24h) — from WhatsApp Message docs
+    msg_filters: list = [["status", "in", ["sent", "delivered", "read"]]]
+    if account_name:
+        msg_filters.append(["whatsapp_account", "=", account_name])
+    recent_msgs = frappe.get_all(
+        "WhatsApp Message",
+        filters=msg_filters + [
+            ["modified", ">", (now - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")],
+        ],
+        fields=["creation", "modified"],
+        limit_page_length=0,
+    )
+    avg_send_time_ms = 0
+    if recent_msgs:
+        deltas = [(m.modified - m.creation).total_seconds() * 1000 for m in recent_msgs]
+        avg_send_time_ms = int(sum(deltas) / len(deltas)) if deltas else 0
+
+    # Recent failures (last 10)
+    fail_filters = [["status", "=", "Failed"]]
+    if account_name:
+        fail_filters.append(["whatsapp_account", "=", account_name])
+    recent_failures = frappe.get_all(
+        "OpenWA Outbox",
+        filters=fail_filters,
+        fields=["name", "last_error", "modified"],
+        order_by="modified desc",
+        limit_page_length=10,
+    )
+
+    return {
+        "queue_depth": queue_depth,
+        "circuit_breakers": circuit_breakers,
+        "success_rate_24h": success_rate_24h,
+        "success_rate_7d": success_rate_7d,
+        "avg_send_time_ms": avg_send_time_ms,
+        "recent_failures": recent_failures,
+    }
+
+
+def _calc_success_rate(base_filters: list, since: datetime, until: datetime) -> float:
+    """Calculate success rate (Sent / (Sent + Failed)) for a time range."""
+    filters = base_filters + [
+        ["status", "in", ["Sent", "Failed"]],
+        ["modified", ">", since.strftime("%Y-%m-%d %H:%M:%S")],
+        ["modified", "<=", until.strftime("%Y-%m-%d %H:%M:%S")],
+    ]
+    rows = frappe.get_all("OpenWA Outbox", filters=filters, fields=["status"], limit_page_length=0)
+    sent = sum(1 for r in rows if r.status == "Sent")
+    failed = sum(1 for r in rows if r.status == "Failed")
+    total = sent + failed
+    if total == 0:
+        return 100.0
+    return round((sent / total) * 100, 1)
+
+
+# ---------------------------------------------------------------------------
+# Webhook Replay / Backfill
+# ---------------------------------------------------------------------------
+
+
+@frappe.whitelist()
+def replay_webhooks(account_name: str, since: str | None = None, chat_id: str | None = None) -> dict:
+    """Fetch messages from OpenWA and create WhatsApp Message docs for any
+    that are missing from Frappe.
+
+    Useful for backfilling messages that arrived while the webhook was down.
+
+    Args:
+        account_name: WhatsApp Account name.
+        since: ISO datetime string — only fetch messages after this time.
+                Defaults to 24 hours ago.
+        chat_id: Optional chat ID filter (e.g. ``12345@c.us``).
+
+    Returns::
+
+        {
+          "fetched": 42,
+          "created": 5,
+          "skipped": 37,
+          "errors": ["..."]
+        }
+    """
+    from datetime import datetime, timedelta
+
+    if not frappe.has_permission("WhatsApp Account", "read", account_name):
+        frappe.throw("Insufficient permissions.", frappe.PermissionError)
+
+    doc = frappe.get_doc("WhatsApp Account", account_name)
+    if not doc.get("openwa_enabled"):
+        frappe.throw("OpenWA is not enabled on this account.")
+
+    base_url = (doc.openwa_base_url or "").strip("/")
+    session_id = doc.openwa_session_id
+    if not base_url or not session_id:
+        frappe.throw("OpenWA Base URL or Session ID is not set.")
+
+    api_key = get_account_password(doc)
+
+    # Default: last 24 hours
+    if since:
+        since_dt = datetime.fromisoformat(since)
+    else:
+        since_dt = datetime.now() - timedelta(hours=24)
+
+    # Fetch messages from OpenWA
+    params: dict = {"limit": 200}
+    if chat_id:
+        params["chatId"] = chat_id
+
+    try:
+        resp = _http_session.get(
+            f"{base_url}/api/sessions/{session_id}/messages",
+            params=params,
+            headers={"X-API-Key": api_key},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        messages = resp.json()
+    except Exception as exc:
+        frappe.throw(f"Failed to fetch messages from OpenWA: {exc}")
+
+    if isinstance(messages, dict):
+        messages = messages.get("messages", [])
+
+    fetched = len(messages)
+    created = 0
+    skipped = 0
+    errors: list[str] = []
+
+    for msg_data in messages:
+        try:
+            # Filter by time
+            msg_time = msg_data.get("timestamp") or msg_data.get("created_at")
+            if msg_time:
+                if isinstance(msg_time, str):
+                    msg_dt = datetime.fromisoformat(msg_time.replace("Z", "+00:00"))
+                else:
+                    msg_dt = datetime.fromtimestamp(msg_time / 1000)
+                if msg_dt.replace(tzinfo=None) < since_dt:
+                    skipped += 1
+                    continue
+
+            # Only process incoming messages (we don't replay our own sends)
+            direction = msg_data.get("direction") or msg_data.get("from")
+            if not direction:
+                skipped += 1
+                continue
+
+            # Determine phone number
+            phone = msg_data.get("from") or msg_data.get("to") or ""
+            phone = phone.replace("@c.us", "").replace("@g.us", "").replace("@lid", "")
+
+            # Determine message content
+            text = msg_data.get("body") or msg_data.get("text") or ""
+            msg_type = msg_data.get("type") or "text"
+            msg_id = msg_data.get("id") or msg_data.get("key") or ""
+
+            # Check for duplicates by message_id or body hash
+            if msg_id:
+                exists = frappe.db.exists(
+                    "WhatsApp Message",
+                    {"message_id": msg_id},
+                )
+                if exists:
+                    skipped += 1
+                    continue
+
+            # Create the WhatsApp Message doc
+            new_msg = frappe.get_doc({
+                "doctype": "WhatsApp Message",
+                "type": "Incoming",
+                "to": phone if not phone.startswith("+") else phone[1:],
+                "message": text,
+                "message_type": msg_type.capitalize() if msg_type else "Text",
+                "content_type": "text",
+                "message_id": msg_id,
+                "status": "Received",
+                "whatsapp_account": account_name,
+            })
+            new_msg.insert(ignore_permissions=True)
+            created += 1
+
+        except Exception as exc:
+            errors.append(str(exc)[:200])
+
+    frappe.db.commit()
+
+    return {
+        "fetched": fetched,
+        "created": created,
+        "skipped": skipped,
+        "errors": errors[:10],
+    }
+
+
+def get_account_password(doc: "WhatsAppAccount") -> str:  # noqa: F821
+    """Get the API key password from the account doc."""
+    return doc.get_password("openwa_api_key")

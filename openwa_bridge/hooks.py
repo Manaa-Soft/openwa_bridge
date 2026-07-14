@@ -97,7 +97,7 @@ before_install = "openwa_bridge.install.before_install"
 # Uninstallation
 # ------------
 
-# before_uninstall = "openwa_bridge.uninstall.before_uninstall"
+before_uninstall = "openwa_bridge.uninstall.before_uninstall"
 # after_uninstall = "openwa_bridge.uninstall.after_uninstall"
 
 # Integration Setup
