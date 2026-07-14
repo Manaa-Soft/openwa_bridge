@@ -246,7 +246,7 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
         new_doc = {
             "doctype": "WhatsApp Message",
             "type": "Outgoing",
-            "message": str(data.get("template", "")),
+            "message": self._render_notification_template(doc_data) or "",
             "to": data.get("to"),
             "message_type": "Template",
             "content_type": "text",
@@ -286,6 +286,38 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
                         frappe.db.set_value(doctype, name, fieldname, value)
             except Exception:
                 pass
+
+    def _render_notification_template(self, doc_data) -> str:
+        """Render the notification's code template with actual doc values.
+
+        Replaces ``{{1}}``, ``{{2}}``, etc. in ``self.code`` with formatted
+        field values from the linked document.
+        """
+        if not self.code:
+            return ""
+
+        doc = self._resolve_document(doc_data) if doc_data else None
+        if not doc:
+            return ""
+
+        values = []
+        if self.fields:
+            for field_row in self.fields:
+                field_name = field_row.field_name
+                try:
+                    if hasattr(doc, "get_formatted"):
+                        value = doc.get_formatted(field_name)
+                    else:
+                        value = getattr(doc, field_name, "") or doc.get(field_name, "")
+                    values.append(str(value) if value is not None else "")
+                except Exception:
+                    values.append("")
+
+        text = self.code
+        for i, val in enumerate(values, 1):
+            text = text.replace(f"{{{{{i}}}}}", val)
+
+        return text
 
     def _extract_template_parameters(self, data, doc_data=None) -> str | None:
         """Extract variable values from the actual document for OpenWA send-template.
