@@ -79,9 +79,9 @@ def receive_openwa_message() -> dict[str, str]:
     idempotency_key = frappe.request.headers.get("X-OpenWA-Idempotency-Key", "")
     if idempotency_key:
         cache_key = f"openwa_idempotent:{idempotency_key}"
-        if frappe.cache().get(cache_key):
+        if frappe.cache().get_value(cache_key):
             return {"status": "duplicate"}
-        frappe.cache().set(cache_key, 1, expires_in_sec=3600)
+        frappe.cache().set_value(cache_key, 1, expires_in_sec=3600)
 
     # ── Route to handler ──
     try:
