@@ -2,140 +2,97 @@
 
 ## Current Active Issues
 
-### 1. send-template 400 Bad Request
+### 1. Session Disconnected
 
-**Status**: Under investigation  
-**Error**: `400 Client Error: Bad Request for url: .../messages/send-template`  
-**First seen**: 2026-07-10  
-
-**What happens**:
-When a notification fires (Sales Invoice submit via POS), the template send fails with 400. The dynamic image send also fails with 400 (separate issue, see #2).
-
-**What we know**:
-- The `send-template` DTO expects: `{ chatId, templateId?, templateName?, vars? }`
-- We send: `{ chatId: "967777715787@c.us", templateId: "85f89390-...", vars: { param1: "...", ... } }`
-- The `vars` is a `Record<string, string>` (dict) — matches the DTO
-- Template ID was synced from OpenWA: `85f89390-6054-4d79-a4f0-15b973a38c60`
-
-**Possible causes**:
-1. Template was deleted from OpenWA dashboard (stale UUID)
-2. Session "manaa" went inactive/disconnected
-3. Some NestJS validation pipe rejecting the payload
-4. `vars` values contain unexpected content
-
-**Fix applied**:
-- Added detailed error logging in `whatsapp_message.py` (line ~213) that captures:
-  - Full request URL
-  - Full request body (JSON)
-  - Full response body from OpenWA
-- This will reveal the actual error message on next test
-
-**Next step**: Deploy updated code, test, check Error Log for "OpenWA API Error" entry with full response body.
+**Status**: User action required
+**Symptom**: OpenWA session `0ccd954f` returns 409/400 errors ("Session is not connected" / "Session is not active")
+**Fix**: Restart the session at `http://192.168.1.15:2886` (OpenWA dashboard)
 
 ---
 
-### 2. send-image 400 Bad Request (mimetype)
+### 2. send-template 400 Bad Request (under investigation)
 
-**Status**: Fix applied locally, NOT yet deployed to server  
-**Error**: `400 Client Error: Bad Request for url: .../messages/send-image`  
-**Root cause**: `mimetype` field missing from send-image payload  
-
-**OpenWA requirement**: When using `base64`, the `mimetype` field is **required**. Without it, OpenWA returns: `"mimetype is required when using base64 data"`.
-
-**Fix applied** in `whatsapp_notification.py` line ~161:
-```python
-payload = {
-    "chatId": chat_id,
-    "base64": base64.b64encode(image_bytes).decode("utf-8"),
-    "mimetype": "image/png",  # ← ADDED
-}
-```
-
-Also replaced `openwa_api()` call with direct `requests.post()` for better error logging.
-
-**Next step**: Deploy to server and test. This fix now applies to BOTH Template and Jinja send types.
-
----
-
-### 3. OpenWA Enabled checkbox not visible on new account
-
-**Status**: Fixed  
-**Root cause**: The OpenWA Gateway Section Break had `depends_on: "eval:doc.openwa_enabled"`, which hid the entire section — including the checkbox itself.  
-**Fix**: Removed `depends_on` from the Section Break. Added `depends_on: "eval:doc.openwa_enabled"` to individual fields instead.  
-**File**: `fixtures/custom_field.json`
-
----
-
-### 4. API timeout during setup (read timeout=15)
-
-**Status**: Fixed  
-**Error**: `HTTPConnectionPool(host='localhost', port=2785): Read timed out. (read timeout=15)`  
-**Root cause**: Default 15s timeout was too short for session creation + start (Chromium launch can be slow).  
-**Fix**: Increased `openwa_api` timeout from 15s to 30s, `_start_session` timeout to 60s. Added connectivity check at start of setup with clear error messages.  
-**Files**: `utils.py`, `whatsapp_account.py`
-
----
-
-### 5. Deleting WhatsApp Account doesn't delete OpenWA session
-
-**Status**: Fixed  
-**Root cause**: No cleanup hook on WhatsApp Account deletion.  
-**Fix**: Added `doc_events` hook with `on_trash` handler that calls `DELETE /api/sessions/:id` on OpenWA. Best-effort — logs error if OpenWA unreachable.  
-**File**: `whatsapp_account.py`, `hooks.py`
-
----
-
-### 6. Sessions don't reconnect after VM restart
-
-**Status**: Fixed  
-**Root cause**: OpenWA's `AUTO_START_SESSIONS` defaults to `false`, and openwa_bridge had no scheduled reconnection logic.  
-**Fix**: Added `tasks.py` with `hourly()` and `daily()` scheduler hooks that:
-1. Query all OpenWA-enabled WhatsApp Accounts
-2. Check each session's status via OpenWA API
-3. Restart disconnected/created/failed sessions automatically
-4. Sync WhatsApp Account `status` field (Active/Inactive) with OpenWA
-
-Also added `_ensure_session_ready()` pre-send check in `whatsapp_message.py` that verifies session is ready before every send, auto-restarts if not.
-
-**Files**: `tasks.py` (new), `hooks.py` (scheduler_events), `whatsapp_message.py` (_ensure_session_ready)
-
-**Note**: Frappe scheduler must be enabled: `bench --site erp.manaasoft.com scheduler enable`
+**Status**: Under investigation
+**Error**: `400 Client Error: Bad Request for url: .../messages/send-template`
+**What we know**: Template ID synced from OpenWA, payload format matches DTO. May be stale UUID or session state issue.
+**Fix applied**: Detailed error logging captures full request/response bodies.
+**Next step**: Test after session restart, check Error Log for "OpenWA API Error" entry.
 
 ---
 
 ## Resolved Issues
 
-### 3. jinja `doc.items` AttributeError
+### 3. "Password not found for WhatsApp Account X token"
+**Fix**: `send_template_message()` now resolves account from `self.whatsapp_account` or default outgoing BEFORE checking `_is_openwa_account()`. When OpenWA account detected, `super()` (which reads Meta token) is never called.
+**File**: `whatsapp_notification.py` → `send_template_message()`
+
+### 4. send-image 400 Bad Request (mimetype)
+**Fix**: Added `"mimetype": "image/png"` to send-image payload. Also sends image with text as caption (1 message instead of 2).
+**File**: `whatsapp_notification.py`, `tasks.py` → `_send_dynamic_header_for_outbox()`
+
+### 5. OpenWA Enabled checkbox not visible on new account
+**Fix**: Removed `depends_on` from Section Break, added to individual fields.
+**File**: `fixtures/custom_field.json`
+
+### 6. API timeout during setup (read timeout=15)
+**Fix**: Increased `openwa_api` timeout to 30s, `_start_session` to 60s. Added connectivity check.
+**Files**: `utils.py`, `whatsapp_account.py`
+
+### 7. Deleting WhatsApp Account doesn't delete OpenWA session
+**Fix**: `on_trash` doc_events hook calls `DELETE /api/sessions/:id`.
+**File**: `whatsapp_account.py`, `hooks.py`
+
+### 8. Sessions don't reconnect after VM restart
+**Fix**: `tasks.py` with `hourly()` and `daily()` scheduler hooks restart disconnected sessions. Pre-send check in `whatsapp_message.py` auto-restarts before every send.
+**Files**: `tasks.py`, `hooks.py`, `whatsapp_message.py`
+
+### 9. jinja `doc.items` AttributeError
 **Fix**: Use `frappe.get_doc()` to get proper Document object, not `as_dict()`.
 **File**: `whatsapp_notification.py` → `_resolve_document()`
 
-### 4.409 Conflict on Template Sync
-**Fix**: Stale ID recovery — if PUT returns 404, clear `openwa_template_id`, find by name via GET, POST if not found.  
+### 10. 409 Conflict on Template Sync
+**Fix**: Stale ID recovery — 404 → clear ID → find by name → POST fresh.
 **File**: `whatsapp_templates.py` → `_sync_to_openwa()`
 
-### 5. Template Status Not Set
-**Fix**: Force `self.status = "APPROVED"` and `self.actual_name = name` after sync.  
-**File**: `whatsapp_templates.py` → `_sync_to_openwa()`
-
-### 6. `content_type` AttributeError
-**Fix**: Hardcode `"text"` instead of `self.content_type` in WhatsApp Message creation.  
+### 11. `content_type` AttributeError
+**Fix**: Hardcode `"text"` instead of `self.content_type` in WhatsApp Message creation.
 **File**: `whatsapp_notification.py` → `_send_openwa_template()`, `_send_openwa_text()`
 
-### 7. `@lid` JID Format Not Handled
-**Fix**: Added `@lid` to `strip_jid_suffix()` suffix list.  
+### 12. `@lid` JID Format Not Handled
+**Fix**: Added `@lid` to `strip_jid_suffix()` suffix list.
 **File**: `utils.py` → `strip_jid_suffix()`
 
-### 8. frappe.cache() kwarg
-**Fix**: Use `ex=3600` not `expires_in=3600` (Redis kwarg).  
+### 13. frappe.cache() kwarg
+**Fix**: Use `frappe.cache().set_value()` with `expires_in_sec=` (not Redis native `set()` with `ex=`).
 **File**: `inbound.py`
 
-### 9. frappe.throw() kwarg
-**Fix**: Remove `statusCode` kwarg (not supported).  
+### 14. frappe.throw() kwarg
+**Fix**: Remove `statusCode` kwarg (not supported). Inbound webhook now always returns 200.
 **File**: `inbound.py`
 
-### 10. Sample Values Auto-fill Removed
-**Fix**: Removed `_SAMPLEDefaults` mixin and `_auto_fill_sample_values()`. Values now read from live doc at send time via notification's `fields` child table.  
+### 15. Sample Values Auto-fill Removed
+**Fix**: Removed `_SAMPLEDefaults` mixin. Values now read from live doc at send time.
 **File**: `whatsapp_templates.py`
+
+### 16. Error log flood from HMAC verification
+**Fix**: "Missing HMAC signature" changed from `frappe.log_error()` to `frappe.logger().info()`. Catch-all handler now includes traceback. Success confirmation logged after doc insert.
+**File**: `inbound.py`
+
+### 17. use_json_request_body causing 417
+**Fix**: Removed `use_json_request_body = True` from hooks.py — Frappe middleware was rejecting webhook payloads.
+**File**: `hooks.py`
+
+### 18. frappe.request.get_data(as_bytes=False) invalid kwarg
+**Fix**: Changed to `get_data()` without kwargs — `as_bytes` not supported in this Frappe version.
+**File**: `inbound.py`
+
+### 19. HMAC verification too strict
+**Fix**: When secret is configured but OpenWA sends no signature, processes the message with a warning log instead of rejecting. Prevents drops when HMAC isn't enabled on the OpenWA side.
+**File**: `inbound.py`
+
+### 20. Webhook secret not synced to OpenWA
+**Fix**: `on_update` hook auto-syncs webhook secret — lists webhooks, finds by URL match, updates via PUT or creates via POST.
+**File**: `whatsapp_account.py` → `on_account_update()`
 
 ---
 

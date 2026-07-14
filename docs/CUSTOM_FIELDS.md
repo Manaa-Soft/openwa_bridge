@@ -148,3 +148,40 @@ Values are read at send time using `doc.get_formatted(field_name)` for live data
 | `get_openwa_qr` | `whatsapp_account.py` | Fetch QR code for existing session |
 | `get_openwa_session_status` | `whatsapp_account.py` | Get session status |
 | `stop_openwa_session` | `whatsapp_account.py` | Disconnect session |
+
+---
+
+## OpenWA Outbox DocType
+
+Created by `openwa_bridge/openwa_bridge/doctype/openwa_outbox/`.
+
+| Field | Type | Description |
+|---|---|---|
+| `whatsapp_message` | Link (WhatsApp Message) | The message being sent |
+| `whatsapp_account` | Link (WhatsApp Account) | Target account |
+| `content_type` | Data | Message content type |
+| `status` | Select | Pending / Sending / Sent / Failed |
+| `attempts` | Int | Current attempt count |
+| `max_attempts` | Int | Maximum retries (default: 5) |
+| `next_retry_at` | Datetime | When to retry (exponential backoff) |
+| `last_error` | Long Text | Last failure reason |
+
+### Status Flow
+
+```
+Pending → Sending → Sent
+    ↑         │
+    └─────────┘  (retry on failure, exponential backoff)
+
+Pending → Failed  (after max_attempts exhausted)
+```
+
+### Backoff Schedule
+
+| Attempt | Delay | Cumulative |
+|---|---|---|
+| 1 | 30s | 30s |
+| 2 | 60s | 1m30s |
+| 3 | 120s | 3m30s |
+| 4 | 300s | 8m30s |
+| 5 | Failed | — |

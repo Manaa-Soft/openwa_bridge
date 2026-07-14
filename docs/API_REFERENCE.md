@@ -294,10 +294,26 @@ OpenWA sends webhooks to Frappe for incoming messages.
 ### HMAC Verification
 
 OpenWA signs every webhook with:
-- Header: `X-Openwa-Signature: sha256=<hex-digest>`
-- Computation: `HMAC-SHA256(webhook_secret, JSON.stringify(payload))`
+- Header: `X-OpenWA-Signature: sha256=<hex-digest>`
+- Computation: `HMAC-SHA256(webhook_secret, raw_body)`
 
-Frappe verifies in `inbound.py` using `verify_openwa_signature()`.
+**Lenient mode**: When a webhook secret is configured but OpenWA sends no `X-OpenWA-Signature` header, the message is processed with a warning log. This prevents message drops when HMAC isn't enabled on the OpenWA side. Only invalid signatures are rejected.
+
+### Rate Limiting
+
+- 60 requests per minute per IP
+- Exceeding the limit returns `{"status": "error", "message": "Rate limit exceeded"}` (HTTP 200)
+
+### Idempotency
+
+OpenWA sends `X-OpenWA-Idempotency-Key` header. Duplicate keys within 1 hour are rejected with `{"status": "duplicate"}` (HTTP 200).
+
+### Response
+
+The endpoint **always returns HTTP 200** to prevent OpenWA retry loops. Errors are returned in the response body:
+```json
+{"status": "error", "message": "Invalid JSON"}
+```
 
 ---
 
@@ -414,3 +430,18 @@ Disconnect the session.
 **Args**: `{ account_name: string }`
 
 **Returns**: `{ status: "disconnected" }`
+
+### on_account_update (doc_events hook)
+
+Not whitelisted — called automatically when WhatsApp Account is saved.
+
+**Method**: `openwa_bridge.whatsapp_account.on_account_update`
+
+**Behavior**:
+1. Checks `openwa_enabled` and `openwa_session_id`
+2. Gets webhook secret from Password field
+3. `GET /webhooks` → list all webhooks
+4. Find webhook matching Frappe URL
+5. If found → `PUT /webhooks/:id { secret }`
+6. If not found → `POST /webhooks { url, events, secret }`
+7. On error → `frappe.log_error()` (best-effort)

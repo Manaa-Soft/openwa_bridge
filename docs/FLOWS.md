@@ -228,44 +228,51 @@ OpenWA receives message from WhatsApp
   ▼
 OpenWA webhook → POST /api/method/openwa_bridge.inbound.receive_openwa_message
   │
-  Headers: X-Openwa-Signature: sha256=<hmac-hex>
-  Body: { event, data: { from, to, body, type, ... } }
+  Headers: X-OpenWA-Signature: sha256=<hmac-hex> (optional)
+  Headers: X-OpenWA-Idempotency-Key: <unique-id> (optional)
+  Body: { event, sessionId, data: { from, to, body, type, ... } }
   │
   ▼
 receive_openwa_message()
   │
-  1. Parse request body
-  2. Extract X-Openwa-Signature header (lowercase 'wa' in 'Openwa')
-  3. Get webhook secret from site_config or WhatsApp Account
-  4. Verify HMAC: verify_openwa_signature(payload_bytes, secret, sig_header)
-       │
-       ├─ Invalid → frappe.throw("Invalid signature", 403)
-       │
-       └─ Valid → continue
+  1. Parse request body (get_json(force=True))
+  2. Validate event field present
+  3. Rate limiting: 60 req/min per IP (frappe.cache)
+  4. Resolve WhatsApp Account by session ID
   │
-  5. Idempotency check: frappe.cache().set(f"owb_msg:{msg_id}", True, ex=3600)
+  5. HMAC verification (lenient mode):
        │
-       ├─ Already set → return ("Duplicate", 200)
+       ├─ Secret configured + signature present + valid → continue
+       ├─ Secret configured + signature present + INVALID → return error (200)
+       ├─ Secret configured + NO signature → warn + continue (lenient)
+       └─ No secret configured → skip verification
+  │
+  6. Idempotency check: frappe.cache().set_value("owb_msg:{key}", 1, expires_in_sec=3600)
        │
+       ├─ Already set → return {"status": "duplicate"} (200)
        └─ New message → continue
   │
-  6. Route by event type:
+  7. Route by event type (always returns 200):
        │
-       ├─ "message.reaction" → _handle_reaction(data)
-       │
-       ├─ "message" / "message.any" → _handle_message(data)
-       │    │
+       ├─ "message.received" → _handle_inbound_message()
+       │    ├─ Skip if fromMe (outgoing echo)
        │    ├─ Extract sender JID → strip_jid_suffix() (handles @lid)
-       │    ├─ Find or create Contact/Lead
+       │    ├─ Group messages → extract actual author
        │    ├─ Create WhatsApp Message doc (type="Incoming")
        │    ├─ If has media → download and attach as File
        │    ├─ If is_reply → link to reply_to_message_id
-       │    └─ Create Communication record
+       │    ├─ Create WhatsApp Profile
+       │    └─ Log success with doc name
        │
-       └─ Other events → log and ignore
+       ├─ "message.ack" / "message.failed" → _handle_status_update()
+       │    └─ Update WhatsApp Message status field
+       │
+       └─ "session.status" → _handle_session_status()
+            └─ Update WhatsApp Account status (Active/Inactive)
   │
   ▼
-  Return "OK" (200)
+  Return {"status": "ok"} (200)
+  ── All errors return HTTP 200 to prevent OpenWA retry loops ──
 ```
 
 ## Flow 6: One-Click Session Setup (WhatsApp Account → OpenWA)
@@ -403,4 +410,98 @@ _ensure_session_ready(account)
   │
   └─ 5. throw "session is {status} and could not be recovered"
        → User must open WhatsApp Account form and click "Reconnect"
+```
+
+## Flow 10: Outbox Processing (Background Worker)
+
+```
+WhatsApp Message created (type="Outgoing")
+  │
+  ▼
+OverrideWhatsAppMessage.notify() [inside before_insert]
+  │
+  ├─ openwa_enabled? → self._openwa_outbox_needed = True → return
+  │
+  ▼
+OverrideWhatsAppMessage.after_insert() [self.name now assigned]
+  │
+  ├─ _openwa_outbox_needed?
+  │    │
+  │    ▼
+  │  Create OpenWA Outbox doc:
+  │    { whatsapp_message, whatsapp_account, content_type,
+  │      status: "Pending", max_attempts: 5 }
+  │    │
+  │    ▼
+  │  frappe.enqueue(process_outbox_entry, queue="long", timeout=300)
+  │
+  ▼ [background worker — long queue]
+process_outbox_entry(outbox_name)
+  │
+  1. Load outbox (for_update=True)
+  2. Guard: status must be "Pending"
+  3. Guard: next_retry_at must be NULL or <= now
+  4. Guard: attempts < max_attempts
+  5. Mark status="Sending", increment attempts
+  │
+  6. Load linked WhatsApp Message + WhatsApp Account
+  │
+  7. Circuit breaker check:
+       ├─ OpenWACircuitBreaker(account).is_open()
+       │    ├─ Yes → fail with cooldown message, schedule retry
+       │    └─ No → continue
+  │
+  8. _send_outbox_message(msg, account, outbox)
+       │
+       ├─ _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
+       │    ├─ Template has openwa_dynamic_header? → render doc as PNG
+       │    ├─ Send image via POST /messages/send-image with text as caption
+       │    └─ Returns True if sent (skips separate text send)
+       │
+       └─ If no image: _send_via_openwa() → OpenWA REST API
+  │
+  9. On success:
+       ├─ breaker.record_success()
+       └─ status = "Sent"
+  │
+  10. On failure:
+       ├─ breaker.record_failure()
+       └─ _fail_outbox():
+            ├─ attempts < max_attempts?
+            │    └─ Schedule retry with exponential backoff:
+            │         30s, 60s, 120s, 300s, capped at 1 hour
+            │         status remains "Pending", set next_retry_at
+            └─ attempts >= max_attempts?
+                 └─ status = "Failed", frappe.log_error()
+```
+
+## Flow 11: Webhook Auto-Sync (Account Save → OpenWA)
+
+```
+User saves WhatsApp Account in Frappe Desk
+  │
+  ▼
+doc_events["on_update"] → on_account_update(doc, method)
+  │
+  ├─ openwa_enabled = 0? → return
+  ├─ openwa_session_id empty? → return
+  │
+  └─ Sync webhook secret:
+       │
+       ├─ Build frappe_url = get_url("/api/method/openwa_bridge.inbound.receive_openwa_message")
+       │
+       ├─ GET /webhooks → list all webhooks for session
+       │    │
+       │    ├─ Find webhook with matching URL
+       │    │    │
+       │    │    └─ Found → PUT /webhooks/:id { secret: <new-secret> }
+       │    │
+       │    └─ Not found → POST /webhooks {
+       │         url: frappe_url,
+       │         events: ["message.received", "message.ack",
+       │                  "message.failed", "session.status"],
+       │         secret: <new-secret>
+       │       }
+       │
+       └─ On error → frappe.log_error() (best-effort, doesn't block save)
 ```

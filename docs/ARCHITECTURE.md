@@ -153,12 +153,14 @@ Each override class extends the parent and selectively intercepts methods:
 ```python
 doc_events = {
     "WhatsApp Account": {
+        "on_update": "openwa_bridge.whatsapp_account.on_account_update",
         "on_trash": "openwa_bridge.whatsapp_account.on_account_trash"
     }
 }
 ```
 
-When a WhatsApp Account is deleted in Frappe, `on_account_trash()` calls `DELETE /api/sessions/:id` on OpenWA to clean up the session.
+- **on_update**: When a WhatsApp Account is saved, `on_account_update()` syncs the webhook secret to OpenWA — finds existing webhook by URL and updates it, or creates a new one.
+- **on_trash**: When a WhatsApp Account is deleted, `on_account_trash()` calls `DELETE /api/sessions/:id` on OpenWA to clean up the session.
 
 ## hooks.py Constraints
 
@@ -192,3 +194,36 @@ WhatsApp Account doc (Frappe)
 3. **Two-step image+text**: OpenWA's `send-template` is text-only. Dynamic image headers require sending the image first via `send-image`, then the template text via `send-template`.
 4. **Live doc values**: Notification parameters are resolved from the actual document at send time (not from pre-filled sample values).
 5. **Graceful degradation**: If OpenWA is down, the error is logged but the doc is still saved. If dynamic image fails, the template text still sends.
+6. **Async outbox**: Outbound messages flow through `OpenWA Outbox` — created in `after_insert()` after the doc is persisted, processed by background workers with exponential backoff retry (30s–1h cap, 5 attempts max).
+7. **Circuit breaker**: After 5 consecutive failures on an account, the circuit opens for 5 minutes (Redis-backed, per-account). Prevents cascade failures when OpenWA is down.
+8. **Lenient HMAC**: When a webhook secret is configured but OpenWA sends no signature header, the message is processed with a warning log instead of rejecting. Prevents drops when HMAC isn't enabled on the OpenWA side.
+9. **Always HTTP 200**: The inbound webhook never throws — all errors return HTTP 200 with an error body to prevent OpenWA retry loops.
+
+## Outbox Pattern
+
+```
+notify() [before_insert]
+  │
+  ├─ openwa_enabled? → set _openwa_outbox_needed = True, return
+  │
+after_insert()
+  │
+  ├─ _openwa_outbox_needed? → create OpenWA Outbox doc
+  │                           → frappe.enqueue(process_outbox_entry, queue="long")
+  │
+  ▼ [background worker]
+process_outbox_entry()
+  │
+  ├─ circuit breaker open? → fail with cooldown message
+  ├─ load WhatsApp Message + Account
+  ├─ _send_dynamic_header_for_outbox() → send image with text as caption
+  │    ├─ image sent? → done (1 message, not 2)
+  │    └─ no image? → fall through
+  ├─ _send_via_openwa() → OpenWA REST API
+  ├─ success → record_success(), status=Sent
+  └─ failure → record_failure(), exponential backoff retry
+                (30s, 60s, 120s, 300s, capped at 1h)
+                → after 5 attempts → status=Failed, log_error()
+```
+
+The scheduler safety-net (`process_pending_outbox`) runs every ~4 minutes and re-enqueues any Pending entries whose `next_retry_at` has passed — catches orphaned entries from worker crashes or Redis restarts.
