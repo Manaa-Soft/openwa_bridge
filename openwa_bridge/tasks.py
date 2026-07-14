@@ -100,7 +100,7 @@ def _run_health_check() -> None:
 
         try:
             doc = frappe.get_doc("WhatsApp Account", account_name)
-            api_key = doc.get_password("openwa_api_key") if hasattr(doc, "get_password") else doc.get("openwa_api_key")
+            api_key = doc.get_password("openwa_api_key")
         except Exception:
             continue
 
@@ -264,7 +264,7 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
     if getattr(tmpl, "openwa_include_letterhead", False):
         letterhead = getattr(tmpl, "openwa_letterhead", None) or None
 
-    from openwa_bridge.utils import render_doc_as_image
+    from openwa_bridge.utils import render_doc_as_image, get_api_key
     from frappe_whatsapp.utils import format_number
 
     image_bytes = render_doc_as_image(ref_doctype, ref_name, print_format, letterhead=letterhead)
@@ -276,7 +276,7 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
 
     base_url = account.get("openwa_base_url").strip("/")
     session_id = account.get("openwa_session_id")
-    api_key = account.get_password("openwa_api_key") if hasattr(account, "get_password") else account.get("openwa_api_key")
+    api_key = get_api_key(account)
 
     raw_number = format_number(msg.to)
     chat_id = f"{raw_number}@c.us" if "@c.us" not in raw_number else raw_number

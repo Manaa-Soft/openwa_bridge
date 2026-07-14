@@ -8,7 +8,7 @@ from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message i
     WhatsAppMessage,
 )
 from frappe_whatsapp.utils import format_number
-from openwa_bridge.utils import openwa_api, frappe_to_openwa_vars
+from openwa_bridge.utils import openwa_api, frappe_to_openwa_vars, get_api_key
 
 
 class OverrideWhatsAppMessage(WhatsAppMessage):
@@ -84,7 +84,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
         """
         base_url = account.get("openwa_base_url").strip("/")
         session_id = account.get("openwa_session_id")
-        api_key = account.get_password("openwa_api_key")
+        api_key = get_api_key(account)
 
         headers = {"Content-Type": "application/json", "X-API-Key": api_key}
 
@@ -160,7 +160,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
 
         base_url = account.get("openwa_base_url").strip("/")
         session_id = account.get("openwa_session_id")
-        api_key = account.get_password("openwa_api_key")
+        api_key = get_api_key(account)
 
         raw_number = format_number(self.to)
         chat_id = f"{raw_number}@c.us" if "@c.us" not in raw_number else raw_number

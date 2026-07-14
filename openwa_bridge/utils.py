@@ -70,6 +70,48 @@ def openwa_type_to_frappe(openwa_type: str) -> str:
 
 
 # ------------------------------------------------------------------
+# Shared helpers
+# ------------------------------------------------------------------
+
+
+def get_api_key(account) -> str:
+    """Extract the encrypted OpenWA API key from a WhatsApp Account doc.
+
+    Parameters
+    ----------
+    account : WhatsApp Account doc (must have ``get_password`` method).
+
+    Returns
+    -------
+    str : The decrypted API key.
+
+    Raises
+    ------
+    frappe.ValidationError : If the account has no API key set.
+    """
+    if hasattr(account, "get_password"):
+        return account.get_password("openwa_api_key")
+    # Fallback for dict-like objects (should not happen in normal flow)
+    return account.get("openwa_api_key") or ""
+
+
+def is_openwa_account(account_name: str | None) -> bool:
+    """Check if a WhatsApp Account has OpenWA enabled.
+
+    Parameters
+    ----------
+    account_name : Name of the WhatsApp Account doc, or None.
+
+    Returns
+    -------
+    bool : True if the account exists and has ``openwa_enabled`` checked.
+    """
+    if not account_name:
+        return False
+    return bool(frappe.db.get_value("WhatsApp Account", account_name, "openwa_enabled"))
+
+
+# ------------------------------------------------------------------
 # OpenWA REST API helper
 # ------------------------------------------------------------------
 
@@ -87,7 +129,7 @@ def openwa_api(account, method: str, path: str, json_data=None, timeout: int = 3
     """
     base_url = account.get("openwa_base_url").strip("/")
     session_id = account.get("openwa_session_id")
-    api_key = account.get_password("openwa_api_key") if hasattr(account, "get_password") else account.get("openwa_api_key")
+    api_key = get_api_key(account)
 
     headers = {
         "Content-Type": "application/json",

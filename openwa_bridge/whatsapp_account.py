@@ -7,7 +7,7 @@ import time
 import frappe
 import requests
 
-from openwa_bridge.utils import openwa_api
+from openwa_bridge.utils import openwa_api, get_api_key
 
 
 # ---------------------------------------------------------------------------
@@ -36,9 +36,7 @@ def _raw_openwa_call(account: dict, method: str, url_path: str,
     known.
     """
     base_url = account.get("openwa_base_url").strip("/")
-    api_key = (account.get_password("openwa_api_key")
-               if hasattr(account, "get_password")
-               else account.get("openwa_api_key"))
+    api_key = get_api_key(account)
 
     headers = {
         "Content-Type": "application/json",
@@ -160,9 +158,7 @@ def setup_openwa_session(account_name: str) -> dict:
     # Quick connectivity check — fail fast with a clear message.
     try:
         requests.get(base_url.rstrip("/") + "/api/sessions",
-                     headers={"X-API-Key": (account.get_password("openwa_api_key")
-                               if hasattr(account, "get_password")
-                               else account.get("openwa_api_key") or "")},
+                     headers={"X-API-Key": get_api_key(account)},
                      timeout=10)
     except requests.exceptions.ConnectionError:
         return {"status": "error",

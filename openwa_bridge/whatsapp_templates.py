@@ -4,14 +4,12 @@ from frappe import _
 from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates import (
     WhatsAppTemplates,
 )
-from openwa_bridge.utils import openwa_api, frappe_to_openwa_vars
+from openwa_bridge.utils import openwa_api, frappe_to_openwa_vars, is_openwa_account
 
 
 def _is_openwa_account(account_name: str | None) -> bool:
-    """Return True if the WhatsApp Account has OpenWA enabled."""
-    if not account_name:
-        return False
-    return bool(frappe.db.get_value("WhatsApp Account", account_name, "openwa_enabled"))
+    """Return True if the WhatsApp Account has OpenWA enabled. Wrapper for utils.is_openwa_account."""
+    return is_openwa_account(account_name)
 
 
 class OverrideWhatsAppTemplates(WhatsAppTemplates):

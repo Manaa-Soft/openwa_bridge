@@ -7,12 +7,12 @@ app_license = "gpl-3.0"
 
 # Send non-GET requests for this app's endpoints as native `application/json`
 # bodies instead of form-encoded, per-key JSON-stringified values.
-use_json_request_body = True
+# use_json_request_body = True
 
 # Apps
 # ------------------
 
-# required_apps = []
+required_apps = ["frappe_whatsapp"]
 
 # Each item in the list will be shown as an app in the apps page
 # add_to_apps_screen = [

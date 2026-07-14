@@ -10,13 +10,12 @@ from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_notification.whatsapp_noti
     WhatsAppNotification,
 )
 from frappe_whatsapp.utils import get_whatsapp_account, format_number
-from openwa_bridge.utils import openwa_api, render_doc_as_image
+from openwa_bridge.utils import openwa_api, render_doc_as_image, get_api_key, is_openwa_account
 
 
 def _is_openwa_account(account_name: str | None) -> bool:
-    if not account_name:
-        return False
-    return bool(frappe.db.get_value("WhatsApp Account", account_name, "openwa_enabled"))
+    """Check if a WhatsApp Account has OpenWA enabled. Wrapper for utils.is_openwa_account."""
+    return is_openwa_account(account_name)
 
 
 class OverrideWhatsAppNotification(WhatsAppNotification):
@@ -165,7 +164,7 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
 
         base_url = account.get("openwa_base_url").strip("/")
         session_id = account.get("openwa_session_id")
-        api_key = account.get_password("openwa_api_key") if hasattr(account, "get_password") else account.get("openwa_api_key")
+        api_key = get_api_key(account)
         url = f"{base_url}/api/sessions/{session_id}/messages/send-image"
         payload = {
             "chatId": chat_id,
@@ -231,12 +230,11 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
 
         try:
             frappe.get_doc(new_doc).insert(ignore_permissions=True)
-            frappe.msgprint("WhatsApp Message Triggered (OpenWA)", indicator="green", alert=True)
+            frappe.logger().info("WhatsApp Message Triggered (OpenWA)")
         except Exception as e:
-            frappe.msgprint(
-                f"Failed to trigger WhatsApp message via OpenWA: {e}",
-                indicator="red",
-                alert=True,
+            frappe.log_error(
+                title="OpenWA: Failed to trigger text message",
+                message=f"Failed to trigger WhatsApp message via OpenWA: {e}",
             )
 
     def _send_openwa_template(self, account, data, doc_data=None) -> None:
@@ -262,12 +260,11 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
 
         try:
             frappe.get_doc(new_doc).insert(ignore_permissions=True)
-            frappe.msgprint("WhatsApp Template Triggered (OpenWA)", indicator="green", alert=True)
+            frappe.logger().info("WhatsApp Template Triggered (OpenWA)")
         except Exception as e:
-            frappe.msgprint(
-                f"Failed to trigger WhatsApp template via OpenWA: {e}",
-                indicator="red",
-                alert=True,
+            frappe.log_error(
+                title="OpenWA: Failed to trigger template message",
+                message=f"Failed to trigger WhatsApp template via OpenWA: {e}",
             )
 
         # Set property after alert if configured
