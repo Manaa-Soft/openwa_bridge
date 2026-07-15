@@ -136,6 +136,43 @@ def _fetch_qr(account: dict) -> dict:
         raise
 
 
+def _delete_and_recreate_session(account: dict) -> str | None:
+    """Delete a failed/stuck session and create a fresh one.
+
+    Returns the new session ID, or ``None`` on failure.
+    """
+    session_id = account.get("openwa_session_id")
+    session_name = _sanitize_session_name(account.get("account_name", ""))
+
+    # Delete the old session (best-effort)
+    if session_id:
+        try:
+            _raw_openwa_call(account, "DELETE", f"/api/sessions/{session_id}")
+        except Exception:
+            pass  # already deleted or unreachable — continue
+
+    # Create a fresh session
+    try:
+        created = _raw_openwa_call(
+            account, "POST", "/api/sessions",
+            json_data={"name": session_name},
+        )
+        return created.get("id")
+    except requests.exceptions.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 409:
+            # 409 = name collision — re-fetch to find it
+            try:
+                sessions = _raw_openwa_call(account, "GET", "/api/sessions")
+                for s in sessions:
+                    if s.get("name") == session_name:
+                        return s.get("id")
+            except Exception:
+                pass
+        return None
+    except Exception:
+        return None
+
+
 def _extract_error(exc: requests.exceptions.HTTPError) -> str:
     """Best-effort extraction of an error message from an HTTP response."""
     if exc.response is None:
@@ -337,14 +374,27 @@ def get_openwa_qr(account_name: str) -> dict:
             "push_name": session.get("pushName"),
         }
 
-    # --- 2. Start the session if it is not running -------------------------
-    if status in ("disconnected", "created", "failed"):
+    # --- 2. Failed / stuck session — delete and recreate -------------------
+    if status == "failed":
+        try:
+            new_id = _delete_and_recreate_session(account)
+            if new_id:
+                frappe.db.set_value("WhatsApp Account", account_name,
+                                    "openwa_session_id", new_id)
+                frappe.db.commit()
+                account = _get_account(account_name, require_session=True)
+                _start_session(account)
+        except Exception as exc:
+            return {"status": "error", "error": f"Failed to recreate session: {exc}"}
+
+    # --- 3. Start the session if it is not running -------------------------
+    elif status in ("disconnected", "created"):
         try:
             _start_session(account)
         except Exception as exc:
             return {"status": "error", "error": str(exc)}
 
-    # --- 3. Fetch the QR code ----------------------------------------------
+    # --- 4. Fetch the QR code ----------------------------------------------
     try:
         return _fetch_qr(account)
     except Exception as exc:

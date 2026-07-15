@@ -37,8 +37,12 @@ frappe.ui.form.on("WhatsApp Account", {
                     // OpenWA server unreachable
                     frm.page.set_indicator(__("OpenWA Unreachable"), "red");
                     _add_reconnect_button(frm);
+                } else if (s === "failed") {
+                    // Session is corrupted/failed — reconnect will delete + recreate
+                    frm.page.set_indicator(__("Session Failed — Reconnect to Fix"), "red");
+                    _add_reconnect_button(frm);
                 } else {
-                    // disconnected / created / failed / unknown
+                    // disconnected / created / unknown
                     frm.page.set_indicator(__("Disconnected"), "red");
                     _add_reconnect_button(frm);
                 }
@@ -96,7 +100,10 @@ function _add_reconnect_button(frm) {
     frm.add_custom_button(
         __("Reconnect"),
         () => {
-            _show_qr_code(frm);
+            frappe.confirm(
+                __("Reconnect the WhatsApp session? If the session is corrupted, it will be recreated."),
+                () => { _show_qr_code(frm); }
+            );
         },
         __("OpenWA")
     );
