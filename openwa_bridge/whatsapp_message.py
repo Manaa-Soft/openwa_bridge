@@ -466,14 +466,27 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 message=f"Template '{self.template}' not found on OpenWA. Creating it now.",
             )
             tmpl_doc = frappe.get_doc("WhatsApp Templates", self.template)
+            old_id = tmpl_doc.openwa_template_id
             tmpl_doc._sync_to_openwa()
             frappe.db.commit()
-            if tmpl_doc.openwa_template_id:
+            # Re-read from DB — _sync_to_openwa uses db.set_value which
+            # doesn't update the in-memory doc attribute
+            new_id = frappe.db.get_value("WhatsApp Templates", self.template, "openwa_template_id")
+            if new_id and new_id != old_id:
                 frappe.log_error(
                     title="OpenWA: Template re-synced",
-                    message=f"Template '{self.template}' created on OpenWA → ID {tmpl_doc.openwa_template_id}",
+                    message=f"Template '{self.template}' created on OpenWA → ID {new_id}",
                 )
-                return tmpl_doc.openwa_template_id
+                return new_id
+            else:
+                frappe.log_error(
+                    title="OpenWA: Template re-sync failed",
+                    message=(
+                        f"Template '{self.template}' — _sync_to_openwa did not produce a new ID. "
+                        f"Old ID was {old_id}. The session may be dead."
+                    ),
+                )
+                return None
         except Exception as e:
             frappe.log_error(
                 title="OpenWA: Template ID recovery failed",
