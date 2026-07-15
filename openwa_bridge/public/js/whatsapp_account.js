@@ -29,6 +29,14 @@ frappe.ui.form.on("WhatsApp Account", {
                 } else if (s === "qr_ready" || s === "initializing") {
                     frm.page.set_indicator(__("Scan QR Code"), "orange");
                     _show_qr_code(frm);
+                } else if (s === "not_found") {
+                    // Session was deleted from OpenWA — stale ID in Frappe
+                    frm.page.set_indicator(__("Session Deleted — Re-setup Required"), "red");
+                    _add_reset_and_setup_button(frm);
+                } else if (s === "error") {
+                    // OpenWA server unreachable
+                    frm.page.set_indicator(__("OpenWA Unreachable"), "red");
+                    _add_reconnect_button(frm);
                 } else {
                     // disconnected / created / failed / unknown
                     frm.page.set_indicator(__("Disconnected"), "red");
@@ -89,6 +97,34 @@ function _add_reconnect_button(frm) {
         __("Reconnect"),
         () => {
             _show_qr_code(frm);
+        },
+        __("OpenWA")
+    );
+}
+
+function _add_reset_and_setup_button(frm) {
+    frm.add_custom_button(
+        __("Setup OpenWA (New Session)"),
+        () => {
+            frappe.confirm(
+                __("The old session was deleted from OpenWA. Clear the stale session ID and create a new one?"),
+                () => {
+                    frappe.call({
+                        method: "openwa_bridge.whatsapp_account.reset_openwa_session",
+                        args: { account_name: frm.doc.name },
+                        freeze: true,
+                        freeze_message: __("Resetting session..."),
+                        callback() {
+                            frappe.show_alert({
+                                message: __("Session ID cleared. Starting new setup..."),
+                                indicator: "green",
+                            });
+                            // Reload to clear stale ID, then run setup
+                            frm.reload_doc();
+                        },
+                    });
+                }
+            );
         },
         __("OpenWA")
     );

@@ -71,9 +71,17 @@ def _sanitize_session_name(name: str) -> str:
 
 
 def _safe_get_session(account: dict) -> dict | None:
-    """GET the session by its ID and return the data, or ``None`` on error."""
+    """GET the session by its ID and return the data, or ``None`` on error.
+
+    Returns ``None`` for connection errors, timeouts, and 404 (session deleted).
+    """
     try:
         return openwa_api(account, "GET", "")
+    except requests.exceptions.HTTPError as exc:
+        # 404 means the session was deleted from OpenWA — treat as not found
+        if exc.response is not None and exc.response.status_code == 404:
+            return None
+        return None
     except Exception:
         return None
 
@@ -273,14 +281,21 @@ def get_openwa_session_status(account_name: str) -> dict:
 
     Returns:
         dict: { status, phone, push_name, connected_at, last_active } or
-              { status: "error", error: "..." }
+              { status: "not_found" } if session was deleted from OpenWA or
+              { status: "error", error: "..." } if OpenWA is unreachable
     """
     if not frappe.has_permission("WhatsApp Account", "read", account_name):
         frappe.throw("Insufficient permissions to read WhatsApp Account.", frappe.PermissionError)
     account = _get_account(account_name)
     session = _safe_get_session(account)
     if session is None:
-        return {"status": "error", "error": "Could not reach OpenWA server."}
+        # Distinguish between "session deleted" (404) and "server unreachable"
+        try:
+            # If we can reach the server but session is gone, it's deleted
+            _raw_openwa_call(account, "GET", "/api/sessions")
+            return {"status": "not_found"}
+        except Exception:
+            return {"status": "error", "error": "Could not reach OpenWA server."}
 
     return {
         "status": session.get("status", "unknown"),
@@ -351,6 +366,22 @@ def stop_openwa_session(account_name: str) -> dict:
         return {"status": "disconnected"}
     except Exception as exc:
         return {"status": "error", "error": str(exc)}
+
+
+@frappe.whitelist()
+def reset_openwa_session(account_name: str) -> dict:
+    """Clear the stale openwa_session_id so a new session can be created.
+
+    Use this when a session was manually deleted from the OpenWA dashboard
+    and the Frappe account still holds the old UUID.
+    """
+    if not frappe.has_permission("WhatsApp Account", "write", account_name):
+        frappe.throw("Insufficient permissions to manage WhatsApp Account.", frappe.PermissionError)
+    frappe.db.set_value("WhatsApp Account", account_name, "openwa_session_id", "")
+    frappe.db.commit()
+    # Clear the cached account so subsequent calls see the empty session_id
+    frappe.cache().delete_value(f"openwa_account:{account_name}")
+    return {"status": "reset"}
 
 
 # ---------------------------------------------------------------------------
