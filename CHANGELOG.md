@@ -8,7 +8,17 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ## [Unreleased] - feature/improvements branch
 
 ### Added
-- **OpenWA Outbox DocType** — async message queue with exponential backoff retry
+- **Contact management API** — `check_whatsapp_number`, `block_contact`, `unblock_contact` via OpenWA REST endpoints
+- **Typing indicators** — `send_typing_indicator` (typing/recording/paused states) via OpenWA `/chats/typing`
+- **Bulk messaging** — `send_bulk_openwa` via OpenWA `/messages/send-bulk` endpoint
+- **Message forwarding** — `forward_message` via OpenWA `/messages/forward` endpoint
+- **Message deletion** — `delete_message` with optional revoke (delete for everyone) via `DELETE /messages/:id`
+- **Pairing code authentication** — `request_pairing_code` as alternative to QR scanning via `/pairing-code`
+- **Sticker messages** — `send_sticker` (URL or base64) + `sticker` content type in outbound dispatcher
+- **@mention support** — auto-extracts `@NNNN@c.us` JIDs from text messages, passes to OpenWA mentions array
+- **Extended webhook events** — `message.sent`, `message.revoked`, `message.reaction`, `session.qr`, `session.authenticated`, `session.disconnected`
+- **Inbound Communication/Lead auto-creation** — `_create_communication()` creates Communication doc linked to Contact; auto-creates Lead+Contact for new numbers
+- **Outbox cleanup scheduler** — daily `cleanup_old_outbox()` deletes Sent entries >7 days, Failed entries >30 days
 - **Circuit breaker** — blocks sends after N consecutive failures per account
 - **Two-phase notification pattern** — sync outbox creation + async background send
 - **Inbound webhook hardening** — always HTTP 200, HMAC lenient/strict mode, idempotency, rate limiting
@@ -38,6 +48,8 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **Uninstall cleanup** — `before_uninstall()` deletes OpenWA sessions and webhooks
 
 ### Fixed
+- **Duplicate message bug** — notification flow with dynamic header sent duplicate messages (user confirmed resolved)
+- **Broken test imports** — corrected `is_openwa_account` import path, outbox test import path, frappe cache `expires_in_sec` param name
 - **`RedisWrapper.set_value()` `only_set` unsupported** — Frappe's RedisWrapper doesn't support `only_set`. Changed to `get_value` + `set_value` pattern.
 - **Global settings on wrong DocType** — Moved 7 settings (HMAC strict, API timeout, session start timeout, rate limit, CB threshold, CB cooldown, max outbox attempts) from per-account WhatsApp Account to global OpenWA Bridge Settings.
 - **UnboundLocalError in outbox processor** — `account` referenced before definition at `tasks.py:179`, causing every outbox attempt to crash. Messages stuck as Pending forever.

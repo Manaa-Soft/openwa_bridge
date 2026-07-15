@@ -225,23 +225,43 @@ receive_openwa_message()
        ├─ Already set → return {"status": "duplicate"} (200)
        └─ New message → continue
   │
-  7. Route by event type (always returns 200):
-       │
-       ├─ "message.received" → _handle_inbound_message()
-       │    ├─ Skip if fromMe (outgoing echo)
-       │    ├─ Extract sender JID → strip_jid_suffix() (handles @lid)
-       │    ├─ Group messages → extract actual author
-       │    ├─ Create WhatsApp Message doc (type="Incoming")
-       │    ├─ If has media → download and attach as File
-       │    ├─ If is_reply → link to reply_to_message_id
-       │    ├─ Create WhatsApp Profile
-       │    └─ Log success with doc name
-       │
-       ├─ "message.ack" / "message.failed" → _handle_status_update()
-       │    └─ Update WhatsApp Message status field
-       │
-       └─ "session.status" → _handle_session_status()
-            └─ Update WhatsApp Account status (Active/Inactive)
+   7. Route by event type (always returns 200):
+        │
+        ├─ "message.received" → _handle_inbound_message()
+        │    ├─ Skip if fromMe (outgoing echo)
+        │    ├─ Extract sender JID → strip_jid_suffix() (handles @lid)
+        │    ├─ Group messages → extract actual author
+        │    ├─ Create WhatsApp Message doc (type="Incoming")
+        │    ├─ If has media → download and attach as File
+        │    ├─ If is_reply → link to reply_to_message_id
+        │    ├─ Create WhatsApp Profile
+        │    ├─ _create_communication() → create Communication doc linked to Contact
+        │    │    └─ No contact found? → auto-create Lead + Contact first
+        │    └─ Log success with doc name
+        │
+        ├─ "message.sent" → _handle_status_update()
+        │    └─ Update WhatsApp Message status field
+        │
+        ├─ "message.ack" / "message.failed" → _handle_status_update()
+        │    └─ Update WhatsApp Message status field
+        │
+        ├─ "message.revoked" → _handle_message_revoked()
+        │    └─ Set WhatsApp Message status to "Revoked"
+        │
+        ├─ "message.reaction" → _handle_message_reaction()
+        │    └─ Log reaction in Frappe error log
+        │
+        ├─ "session.status" → _handle_session_status()
+        │    └─ Update WhatsApp Account status (Active/Inactive)
+        │
+        ├─ "session.qr" → _handle_session_qr()
+        │    └─ Set WhatsApp Account status to Inactive (needs QR scan)
+        │
+        ├─ "session.authenticated" → _handle_session_authenticated()
+        │    └─ Set WhatsApp Account status to Active
+        │
+        └─ "session.disconnected" → _handle_session_status()
+             └─ Set WhatsApp Account status to Inactive
   │
   ▼
   Return {"status": "ok"} (200)
@@ -472,12 +492,71 @@ doc_events["on_update"] → on_account_update(doc, method)
        │    │    │
        │    │    └─ Found → PUT /webhooks/:id { secret: <new-secret> }
        │    │
-       │    └─ Not found → POST /webhooks {
-       │         url: frappe_url,
-       │         events: ["message.received", "message.ack",
-       │                  "message.failed", "session.status"],
-       │         secret: <new-secret>
-       │       }
+        │    └─ Not found → POST /webhooks {
+        │         url: frappe_url,
+        │         events: ["message.received", "message.sent", "message.ack",
+        │                  "message.failed", "message.revoked", "message.reaction",
+        │                  "session.status", "session.qr", "session.authenticated",
+        │                  "session.disconnected"],
+        │         secret: <new-secret>
+        │       }
+        │
+        └─ On error → frappe.log_error() (best-effort, doesn't block save)
+```
+
+## Flow 12: Contact Management & Advanced Messaging (Desk → OpenWA)
+
+```
+User calls a whitelisted method from Desk or JS
+  │
+  ▼
+Check frappe.has_permission()
+  │
+  ├─ No permission → frappe.throw(PermissionError)
+  │
+  └─ Has permission → route by method:
        │
-       └─ On error → frappe.log_error() (best-effort, doesn't block save)
+       ├─ check_whatsapp_number(account, number)
+       │    └─ GET /contacts/check/:number → { isRegistered: true/false }
+       │
+       ├─ block_contact(account, jid)
+       │    └─ POST /contacts/:jid/block → { status: "blocked" }
+       │
+       ├─ unblock_contact(account, jid)
+       │    └─ DELETE /contacts/:jid/block → { status: "unblocked" }
+       │
+       ├─ send_typing_indicator(account, chat_id, state)
+       │    └─ POST /chats/typing { chatId, state } → { status: "ok" }
+       │
+       ├─ send_bulk_openwa(account, contacts, message)
+       │    ├─ Parse comma-separated contacts → format to JIDs
+       │    └─ POST /messages/send-bulk { chatIds, text } → { sent, failed }
+       │
+       ├─ forward_message(account, message_id, chat_id)
+       │    └─ POST /messages/forward { messageId, chatId }
+       │
+       ├─ delete_message(account, message_id, revoke)
+       │    ├─ revoke=0 → DELETE /messages/:id
+       │    └─ revoke=1 → DELETE /messages/:id?revoke=true
+       │
+       ├─ request_pairing_code(account, phone)
+       │    └─ POST /pairing-code { phoneNumber } → { pairingCode: "ABCD1234" }
+       │
+       └─ send_sticker(account, chat_id, url/base64)
+            └─ POST /messages/send-sticker { chatId, url/base64 }
+```
+
+## Flow 13: Outbox Cleanup (Daily Scheduler)
+
+```
+Frappe Scheduler (daily)
+  │
+  ▼
+tasks.cleanup_old_outbox()
+  │
+  ├─ DELETE OpenWA Outbox WHERE status='Sent' AND creation < (now - 7 days)
+  │    └─ Removes old successfully-sent entries
+  │
+  └─ DELETE OpenWA Outbox WHERE status='Failed' AND creation < (now - 30 days)
+       └─ Removes old failed entries
 ```
