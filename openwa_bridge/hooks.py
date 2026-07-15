@@ -163,6 +163,7 @@ scheduler_events = {
 	],
 	"daily": [
 		"openwa_bridge.tasks.daily",
+		"openwa_bridge.tasks.cleanup_old_outbox",
 	],
 	"all": [
 		"openwa_bridge.tasks.process_pending_outbox",

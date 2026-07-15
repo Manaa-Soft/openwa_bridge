@@ -448,3 +448,243 @@ def on_account_trash(doc, method):  # noqa: ANN001
             message=f"Session {session_id} could not be deleted from OpenWA "
                     f"when WhatsApp Account '{doc.account_name}' was removed.",
         )
+
+
+# ---------------------------------------------------------------------------
+# Contact management API
+# ---------------------------------------------------------------------------
+
+
+@frappe.whitelist()
+def check_whatsapp_number(account_name: str, number: str) -> dict:
+    """Check if a phone number is registered on WhatsApp via OpenWA.
+
+    Returns:
+        dict: { "exists": true, "jid": "12345@c.us" } or { "exists": false }
+    """
+    if not frappe.has_permission("WhatsApp Account", "read", account_name):
+        frappe.throw("Insufficient permissions.", frappe.PermissionError)
+    account = _get_account(account_name)
+    from frappe_whatsapp.utils import format_number
+
+    formatted = format_number(number)
+    chat_id = f"{formatted}@c.us" if "@c.us" not in formatted else formatted
+
+    try:
+        result = openwa_api(account, "GET", f"/contacts/check/{formatted}")
+        return {"exists": result.get("isRegistered", False), "jid": chat_id}
+    except Exception as exc:
+        return {"exists": False, "error": str(exc)}
+
+
+@frappe.whitelist()
+def block_contact(account_name: str, contact_id: str) -> dict:
+    """Block a contact via OpenWA.
+
+    Args:
+        contact_id: WhatsApp JID (e.g. ``12345@c.us``).
+    """
+    if not frappe.has_permission("WhatsApp Account", "write", account_name):
+        frappe.throw("Insufficient permissions.", frappe.PermissionError)
+    account = _get_account(account_name)
+    try:
+        openwa_api(account, "POST", f"/contacts/{contact_id}/block")
+        return {"status": "blocked"}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+@frappe.whitelist()
+def unblock_contact(account_name: str, contact_id: str) -> dict:
+    """Unblock a contact via OpenWA."""
+    if not frappe.has_permission("WhatsApp Account", "write", account_name):
+        frappe.throw("Insufficient permissions.", frappe.PermissionError)
+    account = _get_account(account_name)
+    try:
+        openwa_api(account, "DELETE", f"/contacts/{contact_id}/block")
+        return {"status": "unblocked"}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# Typing indicator API
+# ---------------------------------------------------------------------------
+
+
+@frappe.whitelist()
+def send_typing_indicator(account_name: str, chat_id: str, state: str = "typing") -> dict:
+    """Send a typing indicator to a chat via OpenWA.
+
+    Args:
+        chat_id: WhatsApp chat ID (e.g. ``12345@c.us``).
+        state: One of ``typing``, ``recording``, ``paused``.
+    """
+    if not frappe.has_permission("WhatsApp Account", "write", account_name):
+        frappe.throw("Insufficient permissions.", frappe.PermissionError)
+    if state not in ("typing", "recording", "paused"):
+        frappe.throw("State must be one of: typing, recording, paused")
+    account = _get_account(account_name)
+    try:
+        openwa_api(account, "POST", "/chats/typing", json_data={
+            "chatId": chat_id,
+            "state": state,
+        })
+        return {"status": "ok"}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# Bulk messaging API
+# ---------------------------------------------------------------------------
+
+
+@frappe.whitelist()
+def send_bulk_openwa(account_name: str, contacts: str, message: str) -> dict:
+    """Send a text message to multiple contacts via OpenWA's send-bulk endpoint.
+
+    Args:
+        contacts: Comma-separated phone numbers or WhatsApp JIDs.
+        message:  The message body text.
+
+    Returns:
+        dict: { "status": "ok", "sent": <count>, "failed": <count> }
+    """
+    if not frappe.has_permission("WhatsApp Account", "write", account_name):
+        frappe.throw("Insufficient permissions.", frappe.PermissionError)
+    account = _get_account(account_name)
+
+    from frappe_whatsapp.utils import format_number
+
+    raw_numbers = [n.strip() for n in contacts.split(",") if n.strip()]
+    chat_ids = []
+    for num in raw_numbers:
+        formatted = format_number(num)
+        chat_ids.append(f"{formatted}@c.us" if "@c.us" not in formatted else formatted)
+
+    if not chat_ids:
+        frappe.throw("No valid contacts provided.")
+
+    try:
+        result = openwa_api(account, "POST", "/messages/send-bulk", json_data={
+            "chatIds": chat_ids,
+            "text": message,
+        })
+        sent = len(result.get("sent", [])) if isinstance(result, dict) else len(chat_ids)
+        failed = len(result.get("failed", [])) if isinstance(result, dict) else 0
+        return {"status": "ok", "sent": sent, "failed": failed}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# Message forward / delete API
+# ---------------------------------------------------------------------------
+
+
+@frappe.whitelist()
+def forward_message(account_name: str, message_id: str, chat_id: str) -> dict:
+    """Forward an existing message to another chat via OpenWA.
+
+    Args:
+        message_id: The OpenWA message ID to forward.
+        chat_id:    Destination WhatsApp chat ID.
+    """
+    if not frappe.has_permission("WhatsApp Account", "write", account_name):
+        frappe.throw("Insufficient permissions.", frappe.PermissionError)
+    account = _get_account(account_name)
+    try:
+        result = openwa_api(account, "POST", "/messages/forward", json_data={
+            "messageId": message_id,
+            "chatId": chat_id,
+        })
+        return {"status": "ok", "result": result}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+@frappe.whitelist()
+def delete_message(account_name: str, message_id: str, revoke: int = 0) -> dict:
+    """Delete a message via OpenWA.
+
+    Args:
+        message_id: The OpenWA message ID to delete.
+        revoke:     If ``1``, revoke (delete for everyone). Otherwise delete for self.
+    """
+    if not frappe.has_permission("WhatsApp Account", "write", account_name):
+        frappe.throw("Insufficient permissions.", frappe.PermissionError)
+    account = _get_account(account_name)
+    endpoint = f"/messages/{message_id}" + ("?revoke=true" if revoke else "")
+    try:
+        openwa_api(account, "DELETE", endpoint)
+        return {"status": "deleted", "message_id": message_id}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# Pairing code authentication (alternative to QR scan)
+# ---------------------------------------------------------------------------
+
+
+@frappe.whitelist()
+def request_pairing_code(account_name: str, phone_number: str) -> dict:
+    """Request an 8-character pairing code to link via phone number.
+
+    Alternative to QR scanning — user enters the code on their phone.
+    The phone number should be in international format without + or spaces.
+
+    Returns:
+        dict: { "pairingCode": "ABCD1234", "status": "ok" }
+    """
+    if not frappe.has_permission("WhatsApp Account", "write", account_name):
+        frappe.throw("Insufficient permissions.", frappe.PermissionError)
+    account = _get_account(account_name)
+
+    import re
+    digits = re.sub(r"[^0-9]", "", phone_number)
+    if len(digits) < 7:
+        frappe.throw("Phone number must be at least 7 digits (international format without +).")
+
+    try:
+        result = openwa_api(account, "POST", "/pairing-code", json_data={
+            "phoneNumber": digits,
+        })
+        return {"status": "ok", "pairingCode": result.get("pairingCode", "")}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# Sticker API
+# ---------------------------------------------------------------------------
+
+
+@frappe.whitelist()
+def send_sticker(account_name: str, chat_id: str, url: str = "", base64: str = "") -> dict:
+    """Send a sticker message via OpenWA.
+
+    Provide either ``url`` (http/https link to sticker image) or ``base64``
+    (base64-encoded sticker data).
+
+    Returns:
+        dict: { "status": "ok", "messageId": "..." }
+    """
+    if not frappe.has_permission("WhatsApp Account", "write", account_name):
+        frappe.throw("Insufficient permissions.", frappe.PermissionError)
+    if not url and not base64:
+        frappe.throw("Provide either 'url' or 'base64' for the sticker.")
+    account = _get_account(account_name)
+
+    payload: dict = {"chatId": chat_id}
+    if url:
+        payload["url"] = url
+    if base64:
+        payload["base64"] = base64
+
+    try:
+        result = openwa_api(account, "POST", "/messages/send-sticker", json_data=payload)
+        return {"status": "ok", "messageId": result.get("messageId", "")}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}

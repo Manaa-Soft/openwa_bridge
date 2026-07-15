@@ -450,6 +450,7 @@ def process_pending_outbox() -> None:
             ["next_retry_at", "is", "not set"],
         ],
         fields=["name"],
+        order_by="priority DESC, creation ASC",
         limit=batch_size,
     )
 
@@ -462,6 +463,7 @@ def process_pending_outbox() -> None:
             ["next_retry_at", "<=", now],
         ],
         fields=["name"],
+        order_by="priority DESC, next_retry_at ASC",
         limit=batch_size,
     )
 
@@ -479,6 +481,43 @@ def process_pending_outbox() -> None:
 
     if candidates:
         frappe.logger().info(f"OpenWA outbox safety-net: re-enqueued {len(candidates)} entry(ies)")
+
+
+def cleanup_old_outbox() -> None:
+    """Scheduler task: delete old outbox entries to prevent table bloat.
+
+    - Deletes Sent entries older than 7 days
+    - Deletes Failed entries older than 30 days
+    Runs weekly via the ``daily`` scheduler event.
+    """
+    now = datetime.now()
+    sent_cutoff = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+    failed_cutoff = (now - timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
+
+    deleted_sent = frappe.db.delete(
+        "OpenWA Outbox",
+        filters=[
+            ["status", "=", "Sent"],
+            ["modified", "<", sent_cutoff],
+        ],
+        run_commit=False,
+    )
+
+    deleted_failed = frappe.db.delete(
+        "OpenWA Outbox",
+        filters=[
+            ["status", "=", "Failed"],
+            ["modified", "<", failed_cutoff],
+        ],
+        run_commit=False,
+    )
+
+    if deleted_sent or deleted_failed:
+        frappe.db.commit()
+        frappe.logger().info(
+            f"OpenWA outbox cleanup: deleted {deleted_sent} Sent, "
+            f"{deleted_failed} Failed entries"
+        )
 
 
 # ---------------------------------------------------------------------------

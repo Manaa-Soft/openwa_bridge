@@ -238,9 +238,15 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             )
 
         elif self.content_type == "text":
+            text_payload: dict = {"chatId": chat_id, "text": self.message}
+            # Support @mentions — extract JIDs from message body (e.g. @12345@c.us)
+            import re as _re
+            mention_matches = _re.findall(r"(\d{5,15})@c\.us", self.message)
+            if mention_matches:
+                text_payload["mentions"] = [f"{m}@c.us" for m in mention_matches]
             resp = _http_session.post(
                 f"{base_url}/api/sessions/{session_id}/messages/send-text",
-                json={"chatId": chat_id, "text": self.message},
+                json=text_payload,
                 headers=headers,
                 timeout=15,
             )
@@ -310,6 +316,28 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 },
                 headers=headers,
                 timeout=15,
+            )
+
+        elif self.content_type == "sticker":
+            sticker_data = json.loads(self.message) if self.message else {}
+            sticker_url = sticker_data.get("url", "")
+            sticker_b64 = sticker_data.get("base64", "")
+            if not sticker_url and not sticker_b64:
+                frappe.throw(
+                    "Sticker messages require JSON in the message field: "
+                    '{"url": "https://example.com/sticker.webp"} or '
+                    '{"base64": "<base64-encoded data>"}'
+                )
+            sticker_payload: dict = {"chatId": chat_id}
+            if sticker_url:
+                sticker_payload["url"] = sticker_url
+            if sticker_b64:
+                sticker_payload["base64"] = sticker_b64
+            resp = _http_session.post(
+                f"{base_url}/api/sessions/{session_id}/messages/send-sticker",
+                json=sticker_payload,
+                headers=headers,
+                timeout=30,
             )
 
         elif self.content_type == "order":

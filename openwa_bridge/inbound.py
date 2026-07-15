@@ -105,10 +105,18 @@ def receive_openwa_message() -> dict[str, str]:
     try:
         if event_type == "message.received":
             _handle_inbound_message(event_data, whatsapp_account, session_id)
-        elif event_type in ("message.ack", "message.failed"):
+        elif event_type in ("message.ack", "message.failed", "message.sent"):
             _handle_status_update(event_data)
-        elif event_type == "session.status":
+        elif event_type == "message.revoked":
+            _handle_message_revoked(event_data)
+        elif event_type == "message.reaction":
+            _handle_message_reaction(event_data)
+        elif event_type in ("session.status", "session.disconnected"):
             _handle_session_status(event_data, session_id)
+        elif event_type in ("session.qr",):
+            _handle_session_qr(event_data, session_id)
+        elif event_type in ("session.authenticated",):
+            _handle_session_authenticated(session_id)
     except Exception as e:
         frappe.log_error(
             title="OpenWA Inbound Handler Error",
@@ -201,6 +209,9 @@ def _handle_inbound_message(
 
     # Create / update WhatsApp Profile
     _ensure_whatsapp_profile(phone_number, profile_name, whatsapp_account.name)
+
+    # Create Communication and optionally Lead/Contact
+    _create_communication(doc, phone_number, profile_name)
 
 
 # ── Media handler ────────────────────────────────────────────────────
@@ -307,6 +318,65 @@ def _handle_session_status(event_data: dict, session_id: str) -> None:
         frappe.db.set_value("WhatsApp Account", account_name, "status", frappe_status)
 
 
+def _handle_message_revoked(event_data: dict) -> None:
+    """Update WhatsApp Message status when a message is revoked/deleted."""
+    message_id: str = event_data.get("messageId") or event_data.get("id", "")
+    if not message_id:
+        return
+
+    name = frappe.db.get_value(
+        "WhatsApp Message",
+        filters={"message_id": message_id},
+        pluck="name",
+    )
+    if not name:
+        return
+
+    frappe.db.set_value("WhatsApp Message", name, "status", "Revoked")
+
+
+def _handle_message_reaction(event_data: dict) -> None:
+    """Log message reaction on the WhatsApp Message doc."""
+    message_id: str = event_data.get("messageId") or event_data.get("id", "")
+    emoji: str = event_data.get("emoji", "")
+    if not message_id or not emoji:
+        return
+
+    name = frappe.db.get_value(
+        "WhatsApp Message",
+        filters={"message_id": message_id},
+        pluck="name",
+    )
+    if not name:
+        return
+
+    frappe.logger().info(
+        f"OpenWA reaction on {name}: {emoji}"
+    )
+
+
+def _handle_session_qr(event_data: dict, session_id: str) -> None:
+    """Update account status when QR code is ready for scanning."""
+    account_name = frappe.db.get_value(
+        "WhatsApp Account",
+        {"openwa_session_id": session_id},
+        "name",
+    )
+    if account_name:
+        frappe.db.set_value("WhatsApp Account", account_name, "status", "Inactive")
+
+
+def _handle_session_authenticated(session_id: str) -> None:
+    """Update account status when session is authenticated."""
+    account_name = frappe.db.get_value(
+        "WhatsApp Account",
+        {"openwa_session_id": session_id},
+        "name",
+    )
+    if account_name:
+        frappe.db.set_value("WhatsApp Account", account_name, "status", "Active")
+
+
 # ── Account resolution ───────────────────────────────────────────────
 
 
@@ -352,4 +422,71 @@ def _ensure_whatsapp_profile(
             {"number": formatted},
             "profile_name",
             profile_name,
+        )
+
+
+# ── Communication / Lead helper ──────────────────────────────────────
+
+
+def _create_communication(
+    message_doc: "Document",  # noqa: F821
+    phone_number: str,
+    profile_name: str | None,
+) -> None:
+    """Create Communication doc and optionally a Lead/Contact for the sender.
+
+    Looks up an existing Contact by mobile_no. If found, creates a
+    Communication linked to that Contact. If not found, creates a
+    new Lead + Contact, then the Communication.
+    """
+    formatted = format_number(phone_number)
+
+    contact_name = frappe.db.get_value(
+        "Contact", {"mobile_no": formatted}, "name"
+    )
+
+    if not contact_name:
+        lead_name = None
+        try:
+            lead = frappe.get_doc({
+                "doctype": "Lead",
+                "lead_name": profile_name or formatted,
+                "mobile_no": formatted,
+                "source": "WhatsApp",
+            })
+            lead.insert(ignore_permissions=True)
+            lead_name = lead.name
+
+            contact = frappe.get_doc({
+                "doctype": "Contact",
+                "first_name": profile_name or formatted,
+                "mobile_no": formatted,
+                "links": [{"link_doctype": "Lead", "link_name": lead_name}],
+            })
+            contact.insert(ignore_permissions=True)
+            contact_name = contact.name
+        except Exception:
+            frappe.log_error(
+                title="OpenWA: Failed to create Lead/Contact",
+                message=f"Phone: {formatted}, Name: {profile_name}\n{frappe.get_traceback()}",
+            )
+            return
+
+    try:
+        communication = frappe.get_doc({
+            "doctype": "Communication",
+            "communication_type": "Communication",
+            "communication_medium": "WhatsApp",
+            "content": message_doc.message or "",
+            "reference_doctype": "WhatsApp Message",
+            "reference_name": message_doc.name,
+            "party_type": "Contact",
+            "party": contact_name,
+            "status": "Linked",
+        })
+        communication.insert(ignore_permissions=True)
+    except Exception:
+        frappe.log_error(
+            title="OpenWA: Failed to create Communication",
+            message=f"Msg: {message_doc.name}, Contact: {contact_name}\n{frappe.get_traceback()}",
         )

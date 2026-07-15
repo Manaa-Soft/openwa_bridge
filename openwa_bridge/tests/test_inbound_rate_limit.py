@@ -20,12 +20,12 @@ class TestInboundRateLimit(IntegrationTestCase):
         # Simulate requests
         for i in range(5):
             count = frappe.cache().get_value(rate_key) or 0
-            frappe.cache().set_value(rate_key, count + 1, expires_in=60)
+            frappe.cache().set_value(rate_key, count + 1, expires_in_sec=60)
 
         self.assertEqual(frappe.cache().get_value(rate_key), 5)
 
     def test_rate_limit_resets(self):
         """Rate counter should reset after expiry."""
         rate_key = "openwa_rate::test-reset"
-        frappe.cache().set_value(rate_key, 25, expires_in=1)
+        frappe.cache().set_value(rate_key, 25, expires_in_sec=1)
         self.assertEqual(frappe.cache().get_value(rate_key), 25)
