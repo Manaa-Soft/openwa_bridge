@@ -473,10 +473,12 @@ def _create_communication(
             return
 
     try:
+        subject = (message_doc.message or "").strip()[:140] or f"WhatsApp {message_doc.message_type or 'Message'}"
         communication = frappe.get_doc({
             "doctype": "Communication",
             "communication_type": "Communication",
             "communication_medium": "WhatsApp",
+            "subject": subject,
             "content": message_doc.message or "",
             "reference_doctype": "WhatsApp Message",
             "reference_name": message_doc.name,
