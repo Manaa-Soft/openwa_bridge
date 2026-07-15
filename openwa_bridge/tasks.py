@@ -124,8 +124,8 @@ def _run_health_check() -> None:
             _set_account_status(account_name, "ready")
             continue
 
-        # 3. If disconnected/created/failed, attempt restart
-        if status in ("disconnected", "created", "failed"):
+        # 3. If disconnected/created, attempt restart
+        if status in ("disconnected", "created"):
             frappe.logger().info(
                 f"OpenWA health check: session '{session_id}' on "
                 f"'{account_name}' is {status} — attempting restart"
@@ -145,6 +145,79 @@ def _run_health_check() -> None:
                     f"OpenWA health check: failed to restart session "
                     f"'{session_id}' on '{account_name}'"
                 )
+
+        # 4. Failed session — force-kill, then delete+recreate as last resort
+        elif status == "failed":
+            frappe.logger().info(
+                f"OpenWA health check: session '{session_id}' on "
+                f"'{account_name}' is failed — attempting recovery"
+            )
+            # Step 1: Try force-kill (keeps session data, no QR rescan)
+            try:
+                _http_session.post(
+                    f"{base_url.rstrip('/')}/api/sessions/{session_id}/force-kill",
+                    headers={"X-API-Key": api_key},
+                    timeout=30,
+                )
+                time.sleep(2)
+                _start_session(base_url, session_id, api_key)
+                time.sleep(3)
+                session = _check_session_status(base_url, session_id, api_key)
+                if session:
+                    status = session.get("status", status)
+            except Exception:
+                pass
+
+            # Step 2: If still failed — delete and recreate
+            if status == "failed":
+                frappe.logger().info(
+                    f"OpenWA health check: force-kill didn't help for "
+                    f"'{session_id}' on '{account_name}' — recreating session"
+                )
+                try:
+                    # Delete old session
+                    _http_session.delete(
+                        f"{base_url.rstrip('/')}/api/sessions/{session_id}",
+                        headers={"X-API-Key": api_key},
+                        timeout=15,
+                    )
+                except Exception:
+                    pass
+
+                # Create new session with same name
+                session_name = account_name.strip().lower().replace(" ", "-")
+                import re as _re
+                session_name = _re.sub(r"[^a-z0-9-]", "-", session_name)
+                session_name = _re.sub(r"-+", "-", session_name).strip("-")
+                if len(session_name) < 3:
+                    session_name = (session_name + "---")[:3]
+
+                try:
+                    resp = _http_session.post(
+                        f"{base_url.rstrip('/')}/api/sessions",
+                        json={"name": session_name},
+                        headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+                        timeout=15,
+                    )
+                    if resp.status_code in (200, 201):
+                        new_data = resp.json()
+                        new_id = new_data.get("id")
+                        if new_id:
+                            frappe.db.set_value(
+                                "WhatsApp Account", account_name,
+                                "openwa_session_id", new_id,
+                            )
+                            session_id = new_id
+                            _start_session(base_url, session_id, api_key)
+                            time.sleep(3)
+                            session = _check_session_status(base_url, session_id, api_key)
+                            if session:
+                                status = session.get("status", status)
+                except Exception as exc:
+                    frappe.logger().warning(
+                        f"OpenWA health check: failed to recreate session "
+                        f"for '{account_name}': {exc}"
+                    )
 
         _set_account_status(account_name, status)
 
