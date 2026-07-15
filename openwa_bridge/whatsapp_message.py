@@ -197,11 +197,15 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                         pass
 
                 if not params:
-                    frappe.throw(
-                        f"Template '{self.template}' requires variables but none were provided. "
-                        "Fill in 'Template Variables' on the Bulk WhatsApp Message, "
-                        "or configure the notification's 'Fields' child table."
-                    )
+                    # Check if the template body actually has placeholders
+                    tmpl_body = frappe.db.get_value("WhatsApp Templates", self.template, "template") or ""
+                    has_placeholders = bool(re.search(r"\{\{.*?\}\}", tmpl_body))
+                    if has_placeholders:
+                        frappe.throw(
+                            f"Template '{self.template}' requires variables but none were provided. "
+                            "Fill in 'Template Variables' on the Bulk WhatsApp Message, "
+                            "or configure the notification's 'Fields' child table."
+                        )
 
                 send_payload = {"chatId": chat_id, "templateId": openwa_tid, "vars": params}
                 frappe.logger().info(f"OpenWA send-template payload: {json.dumps(send_payload, default=str)}")
@@ -414,20 +418,45 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
 
             # Try to find by name on OpenWA
             try:
+                frappe_body = frappe.db.get_value("WhatsApp Templates", self.template, "template") or ""
+                converted_body = frappe_to_openwa_vars(frappe_body)
+
                 templates = openwa_api(account, "GET", "/templates")
                 for t in templates:
                     if t.get("name") == frappe_name:
-                        new_id = t.get("id")
-                        frappe.db.set_value(
-                            "WhatsApp Templates", self.template,
-                            "openwa_template_id", new_id, update_modified=False,
-                        )
-                        frappe.db.commit()
-                        frappe.log_error(
-                            title="OpenWA: Template ID recovered",
-                            message=f"Template '{self.template}' found on OpenWA → ID {new_id}",
-                        )
-                        return new_id
+                        # Found by name — check if content matches
+                        if t.get("body") == converted_body:
+                            new_id = t.get("id")
+                            frappe.db.set_value(
+                                "WhatsApp Templates", self.template,
+                                "openwa_template_id", new_id, update_modified=False,
+                            )
+                            frappe.db.commit()
+                            frappe.log_error(
+                                title="OpenWA: Template ID recovered",
+                                message=f"Template '{self.template}' found on OpenWA → ID {new_id}",
+                            )
+                            return new_id
+                        else:
+                            # Content differs — update the OpenWA template
+                            openwa_api(account, "PUT", f"/templates/{t['id']}", json_data={
+                                "name": frappe_name,
+                                "body": converted_body,
+                                "header": frappe_to_openwa_vars(
+                                    frappe.db.get_value("WhatsApp Templates", self.template, "header") or ""
+                                ) or None,
+                                "footer": frappe.db.get_value("WhatsApp Templates", self.template, "footer") or None,
+                            })
+                            frappe.db.set_value(
+                                "WhatsApp Templates", self.template,
+                                "openwa_template_id", t["id"], update_modified=False,
+                            )
+                            frappe.db.commit()
+                            frappe.log_error(
+                                title="OpenWA: Template content updated",
+                                message=f"Template '{self.template}' content was stale on OpenWA, updated.",
+                            )
+                            return t["id"]
             except Exception:
                 pass
 
@@ -468,7 +497,14 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
 
         params: list[str] = []
         if self.body_param:
-            params = list(json.loads(self.body_param).values())
+            try:
+                bp = json.loads(self.body_param)
+                if isinstance(bp, dict):
+                    params = list(bp.values())
+                elif isinstance(bp, list):
+                    params = bp
+            except (json.JSONDecodeError, TypeError):
+                pass
         elif self.template_parameters:
             params = json.loads(self.template_parameters)
 
