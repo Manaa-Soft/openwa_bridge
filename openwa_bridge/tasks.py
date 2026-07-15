@@ -218,7 +218,7 @@ def _process_outbox_entry_inner(outbox_name: str) -> None:  # noqa: C901
         return
 
     # Guard: exhausted retries
-    max_attempts = frappe.db.get_single_value("OpenWA Bridge Settings", "openwa_max_outbox_attempts") or 5
+    max_attempts = get_account_setting(account, "openwa_max_outbox_attempts", 5)
     if outbox.attempts >= max_attempts:
         frappe.db.set_value(
             "OpenWA Outbox",
@@ -239,8 +239,8 @@ def _process_outbox_entry_inner(outbox_name: str) -> None:  # noqa: C901
     # Check circuit breaker
     from openwa_bridge.utils import OpenWACircuitBreaker
 
-    cb_threshold = frappe.db.get_single_value("OpenWA Bridge Settings", "openwa_cb_threshold") or 5
-    cb_cooldown = frappe.db.get_single_value("OpenWA Bridge Settings", "openwa_cb_cooldown") or 300
+    cb_threshold = get_account_setting(account, "openwa_cb_threshold", 5)
+    cb_cooldown = get_account_setting(account, "openwa_cb_cooldown", 300)
     breaker = OpenWACircuitBreaker(account.name, threshold=cb_threshold, cooldown_seconds=cb_cooldown)
     if breaker.is_open():
         _fail_outbox(
@@ -390,7 +390,7 @@ def _fail_outbox(outbox_name: str, error: str, account=None) -> None:
     # attempts was already incremented by process_outbox_entry() before calling us
     attempts = outbox.attempts or 0
     if account:
-        max_attempts = frappe.db.get_single_value("OpenWA Bridge Settings", "openwa_max_outbox_attempts") or 5
+        max_attempts = get_account_setting(account, "openwa_max_outbox_attempts", 5)
     else:
         max_attempts = outbox.max_attempts or 5
     error_msg = str(error)[:65000]
@@ -450,6 +450,7 @@ def process_pending_outbox() -> None:
             ["next_retry_at", "is", "not set"],
         ],
         fields=["name"],
+        order_by="priority DESC, creation ASC",
         limit=batch_size,
     )
 
@@ -462,6 +463,7 @@ def process_pending_outbox() -> None:
             ["next_retry_at", "<=", now],
         ],
         fields=["name"],
+        order_by="priority DESC, next_retry_at ASC",
         limit=batch_size,
     )
 
@@ -479,6 +481,43 @@ def process_pending_outbox() -> None:
 
     if candidates:
         frappe.logger().info(f"OpenWA outbox safety-net: re-enqueued {len(candidates)} entry(ies)")
+
+
+def cleanup_old_outbox() -> None:
+    """Scheduler task: delete old outbox entries to prevent table bloat.
+
+    - Deletes Sent entries older than 7 days
+    - Deletes Failed entries older than 30 days
+    Runs weekly via the ``daily`` scheduler event.
+    """
+    now = datetime.now()
+    sent_cutoff = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+    failed_cutoff = (now - timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
+
+    deleted_sent = frappe.db.delete(
+        "OpenWA Outbox",
+        filters=[
+            ["status", "=", "Sent"],
+            ["modified", "<", sent_cutoff],
+        ],
+        run_commit=False,
+    )
+
+    deleted_failed = frappe.db.delete(
+        "OpenWA Outbox",
+        filters=[
+            ["status", "=", "Failed"],
+            ["modified", "<", failed_cutoff],
+        ],
+        run_commit=False,
+    )
+
+    if deleted_sent or deleted_failed:
+        frappe.db.commit()
+        frappe.logger().info(
+            f"OpenWA outbox cleanup: deleted {deleted_sent} Sent, "
+            f"{deleted_failed} Failed entries"
+        )
 
 
 # ---------------------------------------------------------------------------

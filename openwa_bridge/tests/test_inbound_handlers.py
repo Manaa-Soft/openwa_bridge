@@ -225,3 +225,180 @@ class TestAttachOpenwaMedia(IntegrationTestCase):
         self.handler(msg_doc, {"mimetype": "image/png", "data": large_data})
         mock_frappe.log_error.assert_called_once()
         self.assertIn("too large", mock_frappe.log_error.call_args.kwargs.get("title", ""))
+
+
+class TestHandleMessageRevoked(IntegrationTestCase):
+    """Test _handle_message_revoked handler."""
+
+    def setUp(self):
+        super().setUp()
+        from openwa_bridge.inbound import _handle_message_revoked
+        self.handler = _handle_message_revoked
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_sets_revoked_status(self, mock_frappe):
+        """Should set message status to Revoked."""
+        mock_frappe.db.get_value.return_value = "MSG-001"
+        self.handler({"messageId": "msg-001"})
+        mock_frappe.db.set_value.assert_called_once_with(
+            "WhatsApp Message", "MSG-001", "status", "Revoked"
+        )
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_missing_message_id_noop(self, mock_frappe):
+        """Missing message_id should not crash."""
+        self.handler({})
+        mock_frappe.db.get_value.assert_not_called()
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_unknown_message_noop(self, mock_frappe):
+        """Unknown message_id should not crash."""
+        mock_frappe.db.get_value.return_value = None
+        self.handler({"messageId": "unknown"})
+        mock_frappe.db.set_value.assert_not_called()
+
+
+class TestHandleMessageReaction(IntegrationTestCase):
+    """Test _handle_message_reaction handler."""
+
+    def setUp(self):
+        super().setUp()
+        from openwa_bridge.inbound import _handle_message_reaction
+        self.handler = _handle_message_reaction
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_logs_reaction(self, mock_frappe):
+        """Should log the reaction."""
+        mock_frappe.db.get_value.return_value = "MSG-001"
+        self.handler({"messageId": "msg-001", "emoji": "👍"})
+        mock_frappe.logger.return_value.info.assert_called_once()
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_missing_message_id_noop(self, mock_frappe):
+        """Missing message_id should not crash."""
+        self.handler({"emoji": "👍"})
+        mock_frappe.db.get_value.assert_not_called()
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_missing_emoji_noop(self, mock_frappe):
+        """Missing emoji should not crash."""
+        self.handler({"messageId": "msg-001"})
+        mock_frappe.db.get_value.assert_not_called()
+
+
+class TestHandleSessionQr(IntegrationTestCase):
+    """Test _handle_session_qr handler."""
+
+    def setUp(self):
+        super().setUp()
+        from openwa_bridge.inbound import _handle_session_qr
+        self.handler = _handle_session_qr
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_sets_inactive_status(self, mock_frappe):
+        """Should set account status to Inactive when QR is ready."""
+        mock_frappe.db.get_value.return_value = "Test Account"
+        self.handler({}, "session-001")
+        mock_frappe.db.set_value.assert_called_once_with(
+            "WhatsApp Account", "Test Account", "status", "Inactive"
+        )
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_unknown_session_noop(self, mock_frappe):
+        """Unknown session_id should not crash."""
+        mock_frappe.db.get_value.return_value = None
+        self.handler({}, "unknown-session")
+        mock_frappe.db.set_value.assert_not_called()
+
+
+class TestHandleSessionAuthenticated(IntegrationTestCase):
+    """Test _handle_session_authenticated handler."""
+
+    def setUp(self):
+        super().setUp()
+        from openwa_bridge.inbound import _handle_session_authenticated
+        self.handler = _handle_session_authenticated
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_sets_active_status(self, mock_frappe):
+        """Should set account status to Active when authenticated."""
+        mock_frappe.db.get_value.return_value = "Test Account"
+        self.handler("session-001")
+        mock_frappe.db.set_value.assert_called_once_with(
+            "WhatsApp Account", "Test Account", "status", "Active"
+        )
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_unknown_session_noop(self, mock_frappe):
+        """Unknown session_id should not crash."""
+        mock_frappe.db.get_value.return_value = None
+        self.handler("unknown-session")
+        mock_frappe.db.set_value.assert_not_called()
+
+
+class TestCreateCommunication(IntegrationTestCase):
+    """Test _create_communication helper."""
+
+    def setUp(self):
+        super().setUp()
+        from openwa_bridge.inbound import _create_communication
+        self.handler = _create_communication
+
+    @patch("openwa_bridge.inbound.frappe")
+    @patch("openwa_bridge.inbound.format_number")
+    def test_creates_communication_for_existing_contact(self, mock_format, mock_frappe):
+        """Should create Communication when Contact exists."""
+        mock_format.return_value = "1234567890"
+        mock_frappe.db.get_value.return_value = "Contact-001"
+
+        msg_doc = MagicMock()
+        msg_doc.name = "MSG-001"
+        msg_doc.message = "Hello"
+
+        mock_comm = MagicMock()
+        mock_frappe.get_doc.return_value = mock_comm
+
+        self.handler(msg_doc, "1234567890", "Test User")
+
+        mock_frappe.get_doc.assert_called_once()
+        call_args = mock_frappe.get_doc.call_args[0][0]
+        self.assertEqual(call_args["doctype"], "Communication")
+        self.assertEqual(call_args["party_type"], "Contact")
+        self.assertEqual(call_args["party"], "Contact-001")
+        mock_comm.insert.assert_called_once_with(ignore_permissions=True)
+
+    @patch("openwa_bridge.inbound.frappe")
+    @patch("openwa_bridge.inbound.format_number")
+    def test_creates_lead_and_contact_when_none_exists(self, mock_format, mock_frappe):
+        """Should create Lead + Contact when no Contact found."""
+        mock_format.return_value = "1234567890"
+        # First call: db.get_value for Contact → None
+        # Lead and Contact creation will use get_doc
+        mock_frappe.db.get_value.return_value = None
+
+        msg_doc = MagicMock()
+        msg_doc.name = "MSG-001"
+        msg_doc.message = "Hello"
+
+        lead_doc = MagicMock()
+        lead_doc.name = "LEAD-001"
+        contact_doc = MagicMock()
+        contact_doc.name = "CONTACT-001"
+        comm_doc = MagicMock()
+
+        def get_doc_side_effect(args):
+            if args.get("doctype") == "Lead":
+                return lead_doc
+            elif args.get("doctype") == "Contact":
+                return contact_doc
+            elif args.get("doctype") == "Communication":
+                return comm_doc
+            return MagicMock()
+
+        mock_frappe.get_doc.side_effect = get_doc_side_effect
+
+        self.handler(msg_doc, "1234567890", "Test User")
+
+        lead_doc.insert.assert_called_once_with(ignore_permissions=True)
+        contact_doc.insert.assert_called_once_with(ignore_permissions=True)
+        comm_doc.insert.assert_called_once_with(ignore_permissions=True)

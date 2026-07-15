@@ -10,19 +10,19 @@ from openwa_bridge.tests.conftest import mock_openwa_api
 
 
 class TestIsOpenwaAccountTemplates(IntegrationTestCase):
-    """Test the _is_openwa_account wrapper in templates module."""
+    """Test the is_openwa_account helper used in templates module."""
 
-    @patch("openwa_bridge.whatsapp_templates.frappe")
+    @patch("openwa_bridge.utils.frappe")
     def test_returns_true_when_enabled(self, mock_frappe):
-        from openwa_bridge.whatsapp_templates import _is_openwa_account
+        from openwa_bridge.utils import is_openwa_account
         mock_frappe.db.get_value.return_value = 1
-        self.assertTrue(_is_openwa_account("test-account"))
+        self.assertTrue(is_openwa_account("test-account"))
 
-    @patch("openwa_bridge.whatsapp_templates.frappe")
+    @patch("openwa_bridge.utils.frappe")
     def test_returns_false_when_disabled(self, mock_frappe):
-        from openwa_bridge.whatsapp_templates import _is_openwa_account
+        from openwa_bridge.utils import is_openwa_account
         mock_frappe.db.get_value.return_value = 0
-        self.assertFalse(_is_openwa_account("test-account"))
+        self.assertFalse(is_openwa_account("test-account"))
 
 
 class TestOverrideWhatsAppTemplates(IntegrationTestCase):

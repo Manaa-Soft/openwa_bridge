@@ -52,7 +52,7 @@ class TestOpenWACircuitBreaker(IntegrationTestCase):
         # Simulate cooldown expiry by manipulating the cached timestamp
         import datetime
         old_time = (datetime.datetime.now() - datetime.timedelta(seconds=120)).isoformat()
-        frappe.cache().set_value(f"{self.cb._key_tripped}", old_time, expires_in=600)
+        frappe.cache().set_value(f"{self.cb._key_tripped}", old_time, expires_in_sec=600)
 
         self.assertFalse(self.cb.is_open())
 

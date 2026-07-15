@@ -64,13 +64,14 @@ OpenWA Bridge is a Frappe app that intercepts `frappe_whatsapp` DocType operatio
 │  │  │  Scheduled health checks (hourly, daily)              │   │  │
 │  │  │  Query all OpenWA-enabled accounts, check status,     │   │  │
 │  │  │  restart disconnected sessions, sync status field     │   │  │
+│  │  │  Daily cleanup: archive old outbox entries            │   │  │
 │  │  └──────────────────────────────────────────────────────┘   │  │
 │  └────────────────────────────────────────────────────────────┘  │
 │                                                                    │
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │                 Custom Fields (fixtures)                    │  │
-│  │  WhatsApp Account:     9 fields (OpenWA section +          │  │
-│  │                          QR HTML)                          │  │
+│  │  WhatsApp Account:    16 fields (OpenWA section +             │  │
+│  │                          settings + QR HTML)                 │  │
 │  │  WhatsApp Templates:   8 fields (sync + dynamic header     │  │
 │  │                          + letterhead control)             │  │
 │  │  WhatsApp Notification: 1 field  (openwa_send_type)        │  │
@@ -90,6 +91,7 @@ OpenWA Bridge is a Frappe app that intercepts `frappe_whatsapp` DocType operatio
 │  │           scheduler_events (hooks.py)                      │  │
 │  │  hourly → tasks.hourly → _run_health_check()              │  │
 │  │  daily  → tasks.daily  → _run_health_check()              │  │
+│  │  daily  → tasks.cleanup_old_outbox()                      │  │
 │  └────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────┬─────────────────────────────────────┘
                                │
@@ -113,6 +115,14 @@ OpenWA Bridge is a Frappe app that intercepts `frappe_whatsapp` DocType operatio
 │    /api/sessions/:id/messages/send-loc   │
 │    /api/sessions/:id/messages/send-contact│
 │    /api/sessions/:id/messages/send-poll  │
+│    /api/sessions/:id/messages/send-sticker│
+│    /api/sessions/:id/messages/send-bulk  │
+│    /api/sessions/:id/messages/forward    │
+│    /api/sessions/:id/messages/:id (DEL)  │
+│    /api/sessions/:id/chats/typing        │
+│    /api/sessions/:id/contacts/check/:num │
+│    /api/sessions/:id/contacts/:jid/block │
+│    /api/sessions/:id/pairing-code        │
 │    /api/sessions/:id/templates (CRUD)    │
 │                                          │
 │  Dashboard: localhost:2886               │
@@ -145,10 +155,11 @@ override_doctype_class = {
 
 Each override class extends the parent and selectively intercepts methods:
 
-- **OverrideWhatsAppMessage**: Intercepts `notify()` — if OpenWA enabled, routes via OpenWA; otherwise falls back to parent (Meta API).
+- **OverrideWhatsAppMessage**: Intercepts `notify()` — if OpenWA enabled, routes via OpenWA; otherwise falls back to parent (Meta API). Supports `sticker` content type and `@mention` extraction in text messages.
 - **OverrideWhatsAppTemplates**: Intercepts `before_save()` — skips Meta API calls for OpenWA accounts, syncs to OpenWA REST API instead.
 - **OverrideWhatsAppNotification**: Overrides `send_template_message()` and `notify()` — routes by `openwa_send_type` (Template/Jinja/fallback).
-- **whatsapp_account.py**: Not an override class — provides whitelisted methods for QR code display and one-click session setup. Registered via `doc_events` for `on_trash` cleanup.
+- **whatsapp_account.py**: Not an override class — provides whitelisted methods for QR code display, one-click session setup, contact management, typing indicators, bulk messaging, stickers, and pairing code auth. Registered via `doc_events` for `on_trash` cleanup.
+- **inbound.py**: Webhook endpoint handles 10 event types: `message.received`, `message.sent`, `message.ack`, `message.failed`, `message.revoked`, `message.reaction`, `session.status`, `session.qr`, `session.authenticated`, `session.disconnected`. Auto-creates Communication and Lead/Contact for new inbound messages.
 
 ### doc_events Hooks
 

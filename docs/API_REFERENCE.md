@@ -201,6 +201,139 @@ React to a message with an emoji.
 
 ---
 
+### POST /messages/send-sticker
+
+Send a sticker message. Supports URL or base64.
+
+```json
+{
+  "chatId": "967777715787@c.us",
+  "url": "https://example.com/sticker.webp"
+}
+```
+
+**DTO fields**:
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `chatId` | string | Yes | `phone@c.us` or `groupId@g.us` |
+| `url` | string | One of url/base64 | HTTP(S) URL to sticker image |
+| `base64` | string | One of url/base64 | Raw base64 sticker data |
+
+---
+
+### POST /messages/send-bulk
+
+Send a text message to multiple contacts.
+
+```json
+{
+  "chatIds": ["967777715787@c.us", "967777711111@c.us"],
+  "text": "Hello everyone!"
+}
+```
+
+**DTO fields**:
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `chatIds` | string[] | Yes | Array of WhatsApp JIDs |
+| `text` | string | Yes | Message body |
+
+---
+
+### POST /messages/forward
+
+Forward an existing message to another chat.
+
+```json
+{
+  "messageId": "true_967777715787@c.us_3EB0...",
+  "chatId": "967777711111@c.us"
+}
+```
+
+---
+
+### DELETE /messages/:messageId
+
+Delete a message. Add `?revoke=true` to delete for everyone (revoke).
+
+```
+DELETE /api/sessions/:sessionId/messages/true_967777715787@c.us_3EB0...?revoke=true
+```
+
+---
+
+### POST /chats/typing
+
+Send a typing indicator to a chat.
+
+```json
+{
+  "chatId": "967777715787@c.us",
+  "state": "typing"
+}
+```
+
+**States**: `typing`, `recording`, `paused`
+
+---
+
+### POST /pairing-code
+
+Request an 8-character pairing code as an alternative to QR scanning.
+
+```json
+{
+  "phoneNumber": "967777715787"
+}
+```
+
+**Response** (201):
+```json
+{
+  "pairingCode": "ABCD1234"
+}
+```
+
+---
+
+### GET /contacts/check/:number
+
+Check if a phone number is registered on WhatsApp.
+
+```
+GET /api/sessions/:sessionId/contacts/check/967777715787
+```
+
+**Response** (200):
+```json
+{
+  "isRegistered": true
+}
+```
+
+---
+
+### POST /contacts/:jid/block
+
+Block a contact.
+
+```
+POST /api/sessions/:sessionId/contacts/967777715787@c.us/block
+```
+
+---
+
+### DELETE /contacts/:jid/block
+
+Unblock a contact.
+
+```
+DELETE /api/sessions/:sessionId/contacts/967777715787@c.us/block
+```
+
+---
+
 ## Templates
 
 Templates are scoped per session. Name must be unique within a session.
@@ -269,7 +402,22 @@ Unmatched placeholders remain as-is in the output.
 
 ## Inbound Webhooks
 
-OpenWA sends webhooks to Frappe for incoming messages.
+OpenWA sends webhooks to Frappe for incoming messages and status changes.
+
+### Supported Events
+
+| Event | Description | Handler |
+|---|---|---|
+| `message.received` | Incoming message from a contact | `_handle_inbound_message()` — creates WhatsApp Message, Communication, Lead |
+| `message.sent` | Outgoing message acknowledged by server | `_handle_status_update()` — updates message status |
+| `message.ack` | Delivery/read receipt | `_handle_status_update()` — updates message status |
+| `message.failed` | Send failure | `_handle_status_update()` — marks message as Failed |
+| `message.revoked` | Message deleted by sender | `_handle_message_revoked()` — marks message as Revoked |
+| `message.reaction` | Reaction to a message | `_handle_message_reaction()` — logs reaction |
+| `session.status` | Session status changed | `_handle_session_status()` — updates account Active/Inactive |
+| `session.qr` | QR code generated (needs scan) | `_handle_session_qr()` — sets account Inactive |
+| `session.authenticated` | Session authenticated successfully | `_handle_session_authenticated()` — sets account Active |
+| `session.disconnected` | Session disconnected | `_handle_session_status()` — sets account Inactive |
 
 ### Webhook Payload Structure
 
@@ -445,3 +593,113 @@ Not whitelisted — called automatically when WhatsApp Account is saved.
 5. If found → `PUT /webhooks/:id { secret }`
 6. If not found → `POST /webhooks { url, events, secret }`
 7. On error → `frappe.log_error()` (best-effort)
+
+---
+
+### check_whatsapp_number
+
+Check if a phone number is registered on WhatsApp.
+
+**Method**: `openwa_bridge.whatsapp_account.check_whatsapp_number`
+
+**Args**: `{ account_name: string, number: string }`
+
+**Returns**: `{ exists: true, jid: "12345@c.us" }` or `{ exists: false }`
+
+---
+
+### block_contact
+
+Block a contact via OpenWA.
+
+**Method**: `openwa_bridge.whatsapp_account.block_contact`
+
+**Args**: `{ account_name: string, contact_id: string }`
+
+**Returns**: `{ status: "blocked" }`
+
+---
+
+### unblock_contact
+
+Unblock a contact via OpenWA.
+
+**Method**: `openwa_bridge.whatsapp_account.unblock_contact`
+
+**Args**: `{ account_name: string, contact_id: string }`
+
+**Returns**: `{ status: "unblocked" }`
+
+---
+
+### send_typing_indicator
+
+Send a typing indicator to a chat.
+
+**Method**: `openwa_bridge.whatsapp_account.send_typing_indicator`
+
+**Args**: `{ account_name: string, chat_id: string, state: "typing"|"recording"|"paused" }`
+
+**Returns**: `{ status: "ok" }`
+
+---
+
+### send_bulk_openwa
+
+Send a text message to multiple contacts via OpenWA's send-bulk endpoint.
+
+**Method**: `openwa_bridge.whatsapp_account.send_bulk_openwa`
+
+**Args**: `{ account_name: string, contacts: string, message: string }`
+
+- `contacts`: comma-separated phone numbers or JIDs
+
+**Returns**: `{ status: "ok", sent: 2, failed: 0 }`
+
+---
+
+### forward_message
+
+Forward an existing message to another chat.
+
+**Method**: `openwa_bridge.whatsapp_account.forward_message`
+
+**Args**: `{ account_name: string, message_id: string, chat_id: string }`
+
+**Returns**: `{ status: "ok", result: {...} }`
+
+---
+
+### delete_message
+
+Delete a message. Set `revoke=1` to delete for everyone.
+
+**Method**: `openwa_bridge.whatsapp_account.delete_message`
+
+**Args**: `{ account_name: string, message_id: string, revoke?: 0|1 }`
+
+**Returns**: `{ status: "deleted", message_id: "..." }`
+
+---
+
+### request_pairing_code
+
+Request an 8-character pairing code as an alternative to QR scanning.
+
+**Method**: `openwa_bridge.whatsapp_account.request_pairing_code`
+
+**Args**: `{ account_name: string, phone_number: string }`
+
+**Returns**: `{ status: "ok", pairingCode: "ABCD1234" }`
+
+---
+
+### send_sticker
+
+Send a sticker message by URL or base64.
+
+**Method**: `openwa_bridge.whatsapp_account.send_sticker`
+
+**Args**: `{ account_name: string, chat_id: string, url?: string, base64?: string }`
+
+**Returns**: `{ status: "ok", messageId: "..." }`

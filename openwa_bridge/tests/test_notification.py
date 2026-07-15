@@ -6,22 +6,24 @@ from unittest.mock import patch, MagicMock
 import frappe
 from frappe.tests import IntegrationTestCase
 
-from openwa_bridge.tests.conftest import mock_openwa_api
+from openwa_bridge.utils import is_openwa_account
 
 
 class TestIsOpenwaAccount(IntegrationTestCase):
-    """Test the _is_openwa_account wrapper."""
+    """Test the is_openwa_account helper."""
 
-    @patch("openwa_bridge.whatsapp_notification.frappe")
+    @patch("openwa_bridge.utils.frappe")
     def test_returns_true_when_enabled(self, mock_frappe):
-        from openwa_bridge.whatsapp_notification import _is_openwa_account
         mock_frappe.db.get_value.return_value = 1
-        self.assertTrue(_is_openwa_account("test-account"))
+        self.assertTrue(is_openwa_account("test-account"))
 
-    @patch("openwa_bridge.whatsapp_notification.frappe")
-    def test_returns_false_when_none(self, mock_frappe):
-        from openwa_bridge.whatsapp_notification import _is_openwa_account
-        self.assertFalse(_is_openwa_account(None))
+    def test_returns_false_when_none(self):
+        self.assertFalse(is_openwa_account(None))
+
+    @patch("openwa_bridge.utils.frappe")
+    def test_returns_false_when_disabled(self, mock_frappe):
+        mock_frappe.db.get_value.return_value = 0
+        self.assertFalse(is_openwa_account("test-account"))
 
 
 class TestSendTemplateMessage(IntegrationTestCase):
@@ -37,13 +39,14 @@ class TestSendTemplateMessage(IntegrationTestCase):
         """Empty openwa_send_type should return silently."""
         mock_notif = MagicMock()
         mock_notif.openwa_send_type = ""
+        mock_notif.whatsapp_account = None
+        mock_notif.template = None
 
-        # Should not raise
         self.notif_class.send_template_message(mock_notif, {})
 
 
-class TestOpenwaTemplateFlow(IntegrationTestCase):
-    """Test _send_openwa_template flow."""
+class TestOpenwaTextFlow(IntegrationTestCase):
+    """Test _send_openwa_text creates a WhatsApp Message doc."""
 
     def setUp(self):
         super().setUp()
@@ -51,61 +54,125 @@ class TestOpenwaTemplateFlow(IntegrationTestCase):
         self.notif_class = OverrideWhatsAppNotification
 
     @patch("openwa_bridge.whatsapp_notification.frappe")
-    def test_missing_template_logs_error(self, mock_frappe):
-        """Missing template should log error."""
-        mock_frappe.db.get_value.return_value = None
+    def test_creates_whatsapp_message_doc(self, mock_frappe):
+        """Should create a WhatsApp Message doc via frappe.get_doc().insert()."""
+        mock_insert = MagicMock()
+        mock_doc = MagicMock()
+        mock_doc.insert = mock_insert
+        mock_frappe.get_doc.return_value = mock_doc
+
+        account = MagicMock()
+        account.name = "test-account"
+
+        data = {"to": "1234567890"}
 
         instance = self.notif_class.__new__(self.notif_class)
-        instance.template = "nonexistent-template"
-        instance.openwa_dynamic_header = 0
-        instance.openwa_print_format = None
+        instance.template = "test-template"
+
+        instance._send_openwa_text(account, data, "Hello World")
+
+        mock_frappe.get_doc.assert_called_once()
+        call_args = mock_frappe.get_doc.call_args[0][0]
+        self.assertEqual(call_args["doctype"], "WhatsApp Message")
+        self.assertEqual(call_args["type"], "Outgoing")
+        self.assertEqual(call_args["message"], "Hello World")
+        self.assertEqual(call_args["to"], "1234567890")
+        self.assertEqual(call_args["content_type"], "text")
+        self.assertEqual(call_args["whatsapp_account"], "test-account")
+        mock_insert.assert_called_once_with(ignore_permissions=True)
+
+    @patch("openwa_bridge.whatsapp_notification.frappe")
+    def test_includes_reference_when_doc_data(self, mock_frappe):
+        """Should include reference_doctype/name when doc_data provided."""
+        mock_insert = MagicMock()
+        mock_doc = MagicMock()
+        mock_doc.insert = mock_insert
+        mock_frappe.get_doc.return_value = mock_doc
+
+        account = MagicMock()
+        account.name = "test-account"
+
+        data = {"to": "1234567890"}
+        doc_data = {"doctype": "Sales Invoice", "name": "SI-001"}
+
+        instance = self.notif_class.__new__(self.notif_class)
+        instance.template = None
+
+        instance._send_openwa_text(account, data, "Hello", doc_data)
+
+        call_args = mock_frappe.get_doc.call_args[0][0]
+        self.assertEqual(call_args["reference_doctype"], "Sales Invoice")
+        self.assertEqual(call_args["reference_name"], "SI-001")
+
+    @patch("openwa_bridge.whatsapp_notification.frappe")
+    def test_logs_error_on_failure(self, mock_frappe):
+        """Insert failure should log error, not raise."""
+        mock_frappe.get_doc.side_effect = Exception("DB error")
+
+        account = MagicMock()
+        account.name = "test-account"
+        data = {"to": "1234567890"}
+
+        instance = self.notif_class.__new__(self.notif_class)
+        instance.template = None
 
         # Should not raise
-        result = instance._send_openwa_template(
-            MagicMock(), MagicMock(), "1234567890", {}
-        )
+        instance._send_openwa_text(account, data, "Hello")
+
+        mock_frappe.log_error.assert_called_once()
 
 
-class TestOpenwaTextFlow(IntegrationTestCase):
-    """Test _send_openwa_text flow."""
+class TestOpenwaTemplateFlow(IntegrationTestCase):
+    """Test _send_openwa_template creates a WhatsApp Message doc."""
 
     def setUp(self):
         super().setUp()
         from openwa_bridge.whatsapp_notification import OverrideWhatsAppNotification
         self.notif_class = OverrideWhatsAppNotification
 
-    @patch("openwa_bridge.whatsapp_notification._http_session")
     @patch("openwa_bridge.whatsapp_notification.frappe")
-    def test_sends_text_message(self, mock_frappe, mock_session):
-        """Should POST to send-text endpoint."""
-        mock_session.post.return_value = mock_openwa_api("POST", 200, {"key": {"id": "msg-789"}})
+    def test_creates_whatsapp_message_doc(self, mock_frappe):
+        """Should create a WhatsApp Message doc with use_template=1."""
+        mock_insert = MagicMock()
+        mock_doc = MagicMock()
+        mock_doc.insert = mock_insert
+        mock_frappe.get_doc.return_value = mock_doc
 
-        mock_account = MagicMock()
-        mock_account.get.return_value = "http://localhost:2785"
-        mock_account.openwa_session_id = "session-001"
-        mock_account.get_password.return_value = "api-key-123"
+        account = MagicMock()
+        account.name = "test-account"
+        data = {"to": "1234567890"}
 
         instance = self.notif_class.__new__(self.notif_class)
+        instance.template = "welcome-template"
+        instance.code = None
+        instance.fields = None
+        instance.set_property_after_alert = None
+        instance.property_value = None
 
-        instance._send_openwa_text(mock_account, "1234567890", "Hello World")
+        instance._send_openwa_template(account, data)
 
-        mock_session.post.assert_called_once()
-        call_args = mock_session.post.call_args
-        self.assertIn("send-text", call_args[0][0])
+        call_args = mock_frappe.get_doc.call_args[0][0]
+        self.assertEqual(call_args["doctype"], "WhatsApp Message")
+        self.assertEqual(call_args["use_template"], 1)
+        self.assertEqual(call_args["template"], "welcome-template")
+        self.assertEqual(call_args["whatsapp_account"], "test-account")
+        mock_insert.assert_called_once_with(ignore_permissions=True)
 
-    @patch("openwa_bridge.whatsapp_notification._http_session")
     @patch("openwa_bridge.whatsapp_notification.frappe")
-    def test_send_failure_logs_error(self, mock_frappe, mock_session):
-        """Send failure should log error."""
-        mock_session.post.return_value = mock_openwa_api("POST", 500, {"error": "fail"})
+    def test_logs_error_on_failure(self, mock_frappe):
+        """Insert failure should log error, not raise."""
+        mock_frappe.get_doc.side_effect = Exception("DB error")
 
-        mock_account = MagicMock()
-        mock_account.get.return_value = "http://localhost:2785"
-        mock_account.openwa_session_id = "session-001"
-        mock_account.get_password.return_value = "api-key-123"
+        account = MagicMock()
+        account.name = "test-account"
+        data = {"to": "1234567890"}
 
         instance = self.notif_class.__new__(self.notif_class)
+        instance.template = "welcome-template"
+        instance.code = None
+        instance.fields = None
 
-        instance._send_openwa_text(mock_account, "1234567890", "Hello")
+        # Should not raise
+        instance._send_openwa_template(account, data)
 
-        mock_frappe.log_error.assert_called()
+        mock_frappe.log_error.assert_called_once()

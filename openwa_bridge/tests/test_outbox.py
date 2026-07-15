@@ -33,12 +33,10 @@ class TestOpenWAOutbox(IntegrationTestCase):
 
     def test_content_type_auto_populated(self):
         """Content type should auto-populate from linked WhatsApp Message."""
-        # This tests the _set_content_type_from_message helper
-        from openwa_bridge.openwa_outbox.doctype.openwa_outbox.openwa_outbox import OpenWAOutbox
+        from openwa_bridge.openwa_bridge.doctype.openwa_outbox.openwa_outbox import OpenWAOutbox
 
         doc = OpenWAOutbox.__new__(OpenWAOutbox)
         doc.content_type = None
         doc.whatsapp_message = None
-        # Should not crash with empty fields
         doc._set_content_type_from_message()
         self.assertIsNone(doc.content_type)
