@@ -101,7 +101,7 @@ function _add_reconnect_button(frm) {
         __("Reconnect"),
         () => {
             frappe.confirm(
-                __("Reconnect the WhatsApp session? If the session is corrupted, it will be recreated."),
+                __("Reconnect the WhatsApp session? If the session is stuck, the app will force-kill the crashed process and restart it (no QR re-scan needed). If that fails, the session will be recreated."),
                 () => { _show_qr_code(frm); }
             );
         },

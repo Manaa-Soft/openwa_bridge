@@ -173,6 +173,20 @@ def _delete_and_recreate_session(account: dict) -> str | None:
         return None
 
 
+def _force_kill_session(account: dict) -> bool:
+    """Force-kill a stuck session via OpenWA's /force-kill endpoint.
+
+    This SIGKILLs the crashed Chrome/Puppeteer process but keeps the
+    session data (auth tokens, etc.) so no QR re-scan is needed.
+    Returns True on success.
+    """
+    try:
+        openwa_api(account, "POST", "/force-kill")
+        return True
+    except Exception:
+        return False
+
+
 def _extract_error(exc: requests.exceptions.HTTPError) -> str:
     """Best-effort extraction of an error message from an HTTP response."""
     if exc.response is None:
@@ -374,8 +388,28 @@ def get_openwa_qr(account_name: str) -> dict:
             "push_name": session.get("pushName"),
         }
 
-    # --- 2. Failed / stuck session — delete and recreate -------------------
+    # --- 2. Failed / stuck session — force-kill, then restart ----------------
     if status == "failed":
+        killed = _force_kill_session(account)
+        if killed:
+            # Wait for cleanup, then start fresh
+            time.sleep(2)
+            try:
+                _start_session(account)
+            except Exception:
+                pass
+            # Re-check — if still failed, fall through to delete+recreate
+            try:
+                session = _safe_get_session(account)
+                if session and session.get("status") != "failed":
+                    # Force-kill worked — save and return QR
+                    try:
+                        return _fetch_qr(account)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        # Force-kill didn't help — delete and recreate as last resort
         try:
             new_id = _delete_and_recreate_session(account)
             if new_id:
@@ -385,7 +419,7 @@ def get_openwa_qr(account_name: str) -> dict:
                 account = _get_account(account_name, require_session=True)
                 _start_session(account)
         except Exception as exc:
-            return {"status": "error", "error": f"Failed to recreate session: {exc}"}
+            return {"status": "error", "error": f"Failed to recover session: {exc}"}
 
     # --- 3. Start the session if it is not running -------------------------
     elif status in ("disconnected", "created"):
