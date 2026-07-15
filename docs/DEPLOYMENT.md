@@ -83,37 +83,55 @@ SSRF_ALLOWED_HOSTS=192.168.1.15,localhost
 rm ~/OpenWA/data/.env.generated
 ```
 
-### 3. Start OpenWA with PM2 (Production)
+### 3. Start OpenWA with systemd (Production)
 
-PM2 keeps OpenWA running across server reboots:
+systemd keeps OpenWA running across server reboots and auto-restarts on crash:
 
 ```bash
-# Install PM2 globally
-npm install -g pm2
+sudo tee /etc/systemd/system/openwa.service << 'EOF'
+[Unit]
+Description=OpenWA WhatsApp API
+After=network.target
 
-# Start OpenWA in production mode
-cd ~/OpenWA
-pm2 start dist/main.js --name "openwa-gateway"
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/Manaa-soft/OpenWA
+ExecStart=/usr/bin/node dist/main
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
 
-# Set up PM2 to auto-start on boot
-pm2 startup systemd
-# Copy and run the sudo command it prints (see note below)
+[Install]
+WantedBy=multi-user.target
+EOF
 
-# Save the current process list
-pm2 save
+sudo systemctl daemon-reload
+sudo systemctl enable openwa
+sudo systemctl restart openwa
+sudo systemctl status openwa
 ```
 
-**The `pm2 startup systemd` step**: PM2 will print a `sudo env PATH=...` command. Copy and run that exact command. It hooks PM2 into Ubuntu's boot system so OpenWA restarts automatically after reboots.
+**Important**: If Puppeteer can't find Chrome, the service may need to run as the user who installed Puppeteer (not root):
+
+```bash
+# Change User=root to User=your-username in the service file
+sudo sed -i 's/User=root/User=Manaa-soft/' /etc/systemd/system/openwa.service
+sudo systemctl daemon-reload
+sudo systemctl restart openwa
+```
 
 ```bash
 # Verify it works
-pm2 list
+curl http://localhost:2785/api/sessions
 
 # Test reboot persistence
 sudo reboot
-# Wait 30 seconds, SSH back in, run:
-pm2 list  # should show "openwa-gateway" as "online"
+# Wait 30 seconds, SSH back in:
+sudo systemctl status openwa  # should show "active (running)"
 ```
+
+**systemd boot chain**: `[VM Boots] → [systemd launches OpenWA directly] → [OpenWA auto-starts WhatsApp sessions]`
 
 ### 4. Connect WhatsApp
 
@@ -159,19 +177,30 @@ bench pip install PyMuPDF  # For dynamic image headers
 | Problem | Cause | Fix |
 |---|---|---|
 | Sessions don't auto-start on boot | `AUTO_START_SESSIONS=false` in `.env.generated` | Delete `.env.generated`, set `AUTO_START_SESSIONS=true` in `.env` |
-| OpenWA dies after server reboot | No PM2/systemd setup | `pm2 startup` + `pm2 save` |
+| OpenWA dies after server reboot | No systemd setup | `systemctl enable openwa` |
 | Frappe can't reach OpenWA | SSRF blocks private IPs | `SSRF_ALLOWED_HOSTS=192.168.1.15,localhost` |
+| "Could not find Chrome" | Wrong user or missing Chrome | See Chrome/Puppeteer section below |
 
-### PM2 Boot Chain
+### systemd Boot Chain
 
 ```
-[VM Boots] -> [systemd launches PM2] -> [PM2 launches OpenWA] -> [OpenWA auto-starts WhatsApp sessions]
+[VM Boots] -> [systemd launches OpenWA] -> [OpenWA auto-starts WhatsApp sessions]
 ```
 
-- `pm2 startup systemd` -- registers PM2 as a systemd service
-- The generated `sudo` command -- creates the permanent boot hook
-- `pm2 start dist/main.js` -- runs production code (not dev server)
-- `pm2 save` -- snapshots running processes for boot recovery
+- `systemctl enable openwa` -- registers OpenWA as a systemd service
+- `Restart=always` + `RestartSec=5` -- auto-restarts on crash
+- `WorkingDirectory` -- tells OpenWA where to find `.env` and data
+
+### Chrome / Puppeteer Not Found
+
+Puppeteer looks for Chrome in the **running user's** cache directory:
+- Root: `/root/.cache/puppeteer/`
+- Your user: `/home/your-username/.cache/puppeteer/`
+
+**Fix** (pick one):
+1. Change systemd `User=root` to `User=your-username`
+2. Set `PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium` in `.env`
+3. Install Chrome for root: `sudo npx puppeteer browsers install chrome`
 
 ---
 
