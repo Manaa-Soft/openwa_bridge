@@ -410,9 +410,9 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
         try:
             templates = openwa_api(account, "GET", "/templates")
             frappe.db.reload_doc("WhatsApp Templates", "name", self.template)
-            frappe_name = frappe.db.get_value("WhatsApp Templates", self.template, "openwa_name")
+            frappe_name = frappe.db.get_value("WhatsApp Templates", self.template, "actual_name")
             if not frappe_name:
-                frappe_name = self.template
+                frappe_name = self.template.lower().replace(" ", "_")
 
             for t in templates:
                 if t.get("name") == frappe_name:
