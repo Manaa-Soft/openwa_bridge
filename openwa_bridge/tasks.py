@@ -392,10 +392,11 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
     chat_id = f"{raw_number}@c.us" if "@c.us" not in raw_number else raw_number
 
     url = f"{base_url}/api/sessions/{session_id}/messages/send-image"
+    mimetype = "image/jpeg" if image_bytes[:3] == b'\xff\xd8\xff' else "image/png"
     payload = {
         "chatId": chat_id,
         "base64": base64.b64encode(image_bytes).decode("utf-8"),
-        "mimetype": "image/png",
+        "mimetype": mimetype,
     }
     if caption:
         payload["caption"] = caption
@@ -414,6 +415,7 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
                     f"Template {tmpl.name}, Doc {ref_doctype} {ref_name}\n"
                     f"POST {url}\n"
                     f"Status: {img_resp.status_code}\n"
+                    f"Image size: {len(image_bytes)} bytes ({mimetype})\n"
                     f"Response: {img_resp.text[:2000]}"
                 ),
             )

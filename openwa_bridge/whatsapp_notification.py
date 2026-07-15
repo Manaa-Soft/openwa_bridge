@@ -161,10 +161,11 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
         session_id = account.get("openwa_session_id")
         api_key = get_api_key(account)
         url = f"{base_url}/api/sessions/{session_id}/messages/send-image"
+        mimetype = "image/jpeg" if image_bytes[:3] == b'\xff\xd8\xff' else "image/png"
         payload = {
             "chatId": chat_id,
             "base64": base64.b64encode(image_bytes).decode("utf-8"),
-            "mimetype": "image/png",
+            "mimetype": mimetype,
         }
         try:
             img_resp = _http_session.post(
