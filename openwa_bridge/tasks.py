@@ -408,6 +408,20 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
             timeout=30,
         )
         if img_resp.status_code >= 400:
+            # 5xx = server-side error — WhatsApp likely already delivered the
+            # image.  Treat as "sent" to avoid a duplicate text fallback.
+            if img_resp.status_code >= 500:
+                frappe.log_error(
+                    title="OpenWA: Dynamic header image (5xx, likely delivered)",
+                    message=(
+                        f"Template {tmpl.name}, Doc {ref_doctype} {ref_name}\n"
+                        f"POST {url}\n"
+                        f"Status: {img_resp.status_code}\n"
+                        f"Response: {img_resp.text[:2000]}\n"
+                        f"Treating as delivered to avoid duplicate text send."
+                    ),
+                )
+                return True
             frappe.log_error(
                 title="OpenWA: Dynamic header image failed",
                 message=(
