@@ -39,7 +39,7 @@ git checkout -- .
 git clean -fd openwa_bridge/public/
 
 # Pull latest from GitHub
-git pull --no-rebase origin feature/enterprise-queue-retry
+git pull --no-rebase origin feature/improvements
 
 # Migrate + build + restart
 bench migrate --site erp.manaasoft.com
@@ -75,6 +75,8 @@ OpenWA uses `.env` files for configuration. The key settings:
 AUTO_START_SESSIONS=true
 PORT=2785
 SSRF_ALLOWED_HOSTS=192.168.1.15,localhost
+MEDIA_DOWNLOAD_ENABLED=false
+STORE_EPHEMERAL_MESSAGES=false
 ```
 
 **Important**: If `~/OpenWA/data/.env.generated` exists, delete it -- it overrides your `.env` and may force `AUTO_START_SESSIONS=false`:
@@ -180,6 +182,10 @@ bench pip install PyMuPDF  # For dynamic image headers
 | OpenWA dies after server reboot | No systemd setup | `systemctl enable openwa` |
 | Frappe can't reach OpenWA | SSRF blocks private IPs | `SSRF_ALLOWED_HOSTS=192.168.1.15,localhost` |
 | "Could not find Chrome" | Wrong user or missing Chrome | See Chrome/Puppeteer section below |
+| `send-image` returns 500 | WhatsApp Web.js returns `undefined` for media | Apply OpenWA media send patch (see below) |
+| `send-template` returns 404 | Template deleted when session recreated | Bridge auto-recovers: looks up by name, re-creates if missing |
+| Template not found in error logs | Stale `openwa_template_id` after session recreate | Re-save template in Frappe to re-sync, or let outbox auto-recover |
+| Messages stuck as Pending | Session dead or API key wrong | Check `curl http://localhost:2785/api/sessions`, verify session ID matches Frappe |
 
 ### systemd Boot Chain
 
@@ -201,6 +207,58 @@ Puppeteer looks for Chrome in the **running user's** cache directory:
 1. Change systemd `User=root` to `User=your-username`
 2. Set `PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium` in `.env`
 3. Install Chrome for root: `sudo npx puppeteer browsers install chrome`
+
+### OpenWA Media Send Patch (500 on send-image)
+
+WhatsApp Web.js sometimes returns `undefined` for media sends when the session is partially degraded. This causes `TypeError: Cannot read properties of undefined (reading 'id')` in OpenWA.
+
+**Symptoms**: text/template messages work, but `send-image` returns 500.
+
+**Fix**: Patch the compiled OpenWA adapter:
+
+```bash
+cd /home/Manaa-soft/OpenWA
+
+# Backup
+cp dist/engine/adapters/whatsapp-web-js.adapter.js dist/engine/adapters/whatsapp-web-js.adapter.js.bak
+
+# Patch: add null check in sendMediaMessage
+python3 -c "
+with open('dist/engine/adapters/whatsapp-web-js.adapter.js', 'r') as f:
+    c = f.read()
+
+idx = c.find('sendMediaMessage')
+ret_idx = c.find('return { id: msg.id._serialized', idx)
+if ret_idx > 0:
+    c = c[:ret_idx] + 'if (!msg) { throw new Error(\"Media send returned undefined - session may need reconnect\"); } ' + c[ret_idx:]
+    with open('dist/engine/adapters/whatsapp-web-js.adapter.js', 'w') as f:
+        f.write(c)
+    print('PATCHED')
+else:
+    print('Pattern not found — check file manually')
+"
+
+# Restart
+sudo systemctl restart openwa
+```
+
+### Template Troubleshooting
+
+**Template 404 errors** (`Template with id '...' not found`):
+- Happens when session is deleted+recreated — templates are session-scoped
+- Bridge auto-recovers: looks up by name on OpenWA, re-creates if missing
+- If recovery fails, re-save the template in Frappe to force re-sync
+
+**Template variables mismatch**:
+- Frappe uses numbered placeholders: `{{1}}`, `{{2}}`
+- Bridge converts to OpenWA format: `{{param1}}`, `{{param2}}`
+- If you create templates directly in OpenWA UI with named placeholders (e.g. `{{customer}}`), variables won't match — create in Frappe instead
+
+**Template not sending**:
+- Check `openwa_template_id` is populated on the WhatsApp Templates doc
+- Check `openwa_synced` is checked
+- Re-save the template to trigger re-sync
+- Check Error Logs for "OpenWA Template Sync Failed"
 
 ---
 
