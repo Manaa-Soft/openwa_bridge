@@ -26,6 +26,7 @@ frappe.ui.form.on("WhatsApp Account", {
                 if (s === "ready") {
                     frm.page.set_indicator(__("Connected"), "green");
                     _add_disconnect_button(frm);
+                    _add_manage_events_button(frm);
                 } else if (s === "qr_ready" || s === "initializing") {
                     frm.page.set_indicator(__("Scan QR Code"), "orange");
                     _show_qr_code(frm);
@@ -45,6 +46,7 @@ frappe.ui.form.on("WhatsApp Account", {
                     // disconnected / created / unknown
                     frm.page.set_indicator(__("Disconnected"), "red");
                     _add_reconnect_button(frm);
+                    _add_manage_events_button(frm);
                 }
             },
         });
@@ -234,4 +236,97 @@ function _clear_qr_timer(frm) {
         clearInterval(frm._qr_refresh_timer);
         frm._qr_refresh_timer = null;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Webhook Events Management
+// ---------------------------------------------------------------------------
+
+const _ALL_WEBHOOK_EVENTS = [
+    { event: "message.received", label: __("Message Received"), desc: __("When a message is received") },
+    { event: "message.sent", label: __("Message Sent"), desc: __("When a message is sent") },
+    { event: "message.ack", label: __("Message ACK"), desc: __("Message acknowledgment status") },
+    { event: "message.failed", label: __("Message Failed"), desc: __("When a message fails to send") },
+    { event: "message.revoked", label: __("Message Revoked"), desc: __("When a message is deleted/revoked") },
+    { event: "message.reaction", label: __("Message Reaction"), desc: __("When a reaction is received") },
+    { event: "session.status", label: __("Session Status"), desc: __("Session status changes") },
+    { event: "session.qr", label: __("Session QR"), desc: __("When QR code is generated") },
+    { event: "session.authenticated", label: __("Session Authenticated"), desc: __("When session is authenticated") },
+    { event: "session.disconnected", label: __("Session Disconnected"), desc: __("When a session disconnects") },
+    { event: "group.join", label: __("Group Join"), desc: __("When someone joins a group") },
+    { event: "group.leave", label: __("Group Leave"), desc: __("When someone leaves a group") },
+    { event: "group.update", label: __("Group Update"), desc: __("When group info is updated") },
+    { event: "*", label: __("All Events"), desc: __("Subscribe to all events (wildcard)") },
+];
+
+function _add_manage_events_button(frm) {
+    frm.add_custom_button(__("Manage Webhook Events"), () => {
+        _show_events_dialog(frm);
+    }, __("OpenWA"));
+}
+
+function _show_events_dialog(frm) {
+    let current_events = [];
+    try {
+        current_events = JSON.parse(frm.doc.openwa_webhook_events || "[]");
+    } catch (e) {
+        current_events = [];
+    }
+
+    const is_wildcard = current_events.includes("*");
+
+    let rows = _ALL_WEBHOOK_EVENTS.map((item) => {
+        const checked = is_wildcard || current_events.includes(item.event);
+        return `
+            <div style="display:flex; align-items:center; padding:8px 12px; border-bottom:1px solid #e5e7eb;">
+                <input type="checkbox" class="openwa-event-cb" value="${item.event}"
+                    ${checked ? "checked" : ""}
+                    style="margin-right:12px; width:18px; height:18px; cursor:pointer;" />
+                <div>
+                    <div style="font-weight:500; font-size:13px;">${item.label}</div>
+                    <div style="color:#6b7280; font-size:11px;">${item.desc} <code style="font-size:10px;">${item.event}</code></div>
+                </div>
+            </div>
+        `;
+    }).join("");
+
+    const d = new frappe.ui.Dialog({
+        title: __("Manage Webhook Events"),
+        size: "large",
+        fields: [
+            {
+                fieldtype: "HTML",
+                fieldname: "events_html",
+                options: `
+                    <div style="margin-bottom:12px; padding:10px; background:#f3f4f6; border-radius:6px; font-size:12px; color:#374151;">
+                        ${__("Select which events OpenWA should send to this webhook URL. Changes take effect when you save the account.")}
+                    </div>
+                    <div style="border:1px solid #d1d5db; border-radius:6px; overflow:hidden;">
+                        ${rows}
+                    </div>
+                `,
+            },
+        ],
+        primary_action_label: __("Apply"),
+        primary_action: () => {
+            const selected = [];
+            d.$wrapper.find(".openwa-event-cb:checked").each(function () {
+                selected.push($(this).val());
+            });
+
+            if (selected.length === 0) {
+                frappe.msgprint(__("Please select at least one event."));
+                return;
+            }
+
+            frm.set_value("openwa_webhook_events", JSON.stringify(selected));
+            d.hide();
+            frappe.show_alert({
+                message: __("Selected {0} event(s). Save the account to apply.", [selected.length]),
+                indicator: "blue",
+            });
+        },
+    });
+
+    d.show();
 }

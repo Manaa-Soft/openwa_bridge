@@ -484,9 +484,26 @@ def on_account_validate(doc, method):  # noqa: ANN001
 # ---------------------------------------------------------------------------
 
 _WEBHOOK_PATH = "/api/method/openwa_bridge.inbound.receive_openwa_message"
-_WEBHOOK_EVENTS = [
-    "message.received", "message.ack", "message.failed", "session.status",
+_DEFAULT_WEBHOOK_EVENTS = [
+    "message.received", "message.sent", "message.ack", "message.failed",
+    "message.revoked", "message.reaction", "session.status", "session.qr",
+    "session.authenticated", "session.disconnected",
 ]
+
+
+def _get_webhook_events(doc):  # noqa: ANN001
+    """Parse the webhook events field and return a list of event names."""
+    raw = getattr(doc, "openwa_webhook_events", None)
+    if not raw:
+        return _DEFAULT_WEBHOOK_EVENTS
+    try:
+        import json
+        events = json.loads(raw)
+        if isinstance(events, list) and events:
+            return events
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return _DEFAULT_WEBHOOK_EVENTS
 
 
 def on_account_update(doc, method):  # noqa: ANN001
@@ -503,6 +520,7 @@ def on_account_update(doc, method):  # noqa: ANN001
 
     secret = doc.get_password("openwa_webhook_secret") if doc.get("openwa_webhook_secret") else None
     frappe_url = frappe.utils.get_url(_WEBHOOK_PATH)
+    events = _get_webhook_events(doc)
 
     try:
         webhooks = openwa_api(doc, "GET", "/webhooks")
@@ -518,7 +536,7 @@ def on_account_update(doc, method):  # noqa: ANN001
             openwa_api(
                 doc, "PUT",
                 f"/webhooks/{existing['id']}",
-                json_data={"secret": secret or ""},
+                json_data={"secret": secret or "", "events": events},
             )
         else:
             openwa_api(
@@ -526,7 +544,7 @@ def on_account_update(doc, method):  # noqa: ANN001
                 "/webhooks",
                 json_data={
                     "url": frappe_url,
-                    "events": _WEBHOOK_EVENTS,
+                    "events": events,
                     "secret": secret or "",
                 },
             )
