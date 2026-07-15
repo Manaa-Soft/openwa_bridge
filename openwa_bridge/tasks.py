@@ -408,20 +408,6 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
             timeout=30,
         )
         if img_resp.status_code >= 400:
-            # 5xx = server-side error — WhatsApp likely already delivered the
-            # image.  Treat as "sent" to avoid a duplicate text fallback.
-            if img_resp.status_code >= 500:
-                frappe.log_error(
-                    title="OpenWA: Dynamic header image (5xx, likely delivered)",
-                    message=(
-                        f"Template {tmpl.name}, Doc {ref_doctype} {ref_name}\n"
-                        f"POST {url}\n"
-                        f"Status: {img_resp.status_code}\n"
-                        f"Response: {img_resp.text[:2000]}\n"
-                        f"Treating as delivered to avoid duplicate text send."
-                    ),
-                )
-                return True
             frappe.log_error(
                 title="OpenWA: Dynamic header image failed",
                 message=(
@@ -444,14 +430,31 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
 def _send_outbox_message(msg, account, outbox) -> None:  # noqa: C901
     """Actually send the message via OpenWA. Reuses the dispatcher from whatsapp_message."""
 
-    # Phase 1: Send dynamic header image with rendered text as caption
-    image_sent = _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
+    has_dynamic_header = False
+    if msg.template:
+        try:
+            tmpl = frappe.get_doc("WhatsApp Templates", msg.template)
+            has_dynamic_header = bool(
+                getattr(tmpl, "openwa_dynamic_header", False)
+                and getattr(tmpl, "openwa_print_format", None)
+            )
+        except Exception:
+            pass
 
-    # Phase 2: If image was sent with caption, we're done
-    if image_sent:
+    if has_dynamic_header:
+        # Image+caption is ATOMIC. If the image fails, raise to trigger
+        # outbox retry — never fall through to send-text, which creates
+        # a duplicate (the caption already contains the full message).
+        image_sent = _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
+        if not image_sent:
+            raise Exception(
+                "Dynamic header image failed to send. "
+                "The outbox entry will be retried. "
+                "Check OpenWA session status and error logs."
+            )
         return
 
-    # Phase 3: No image — send text/template message directly
+    # No dynamic header — send text/template message directly
     from frappe_whatsapp.utils import format_number
 
     # msg is already an OverrideWhatsAppMessage instance via override_doctype_class.

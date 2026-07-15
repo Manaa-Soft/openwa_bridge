@@ -174,8 +174,6 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
                 timeout=30,
             )
             if img_resp.status_code >= 400:
-                # 5xx = server-side error — WhatsApp may have already delivered.
-                # Log but don't raise; the caller handles fallback.
                 frappe.log_error(
                     title="OpenWA: Dynamic header image failed",
                     message=(
