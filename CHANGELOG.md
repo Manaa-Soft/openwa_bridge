@@ -78,6 +78,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **`use_json_request_body = True`** — removed (was causing 417 rejection)
 
 ### Changed
+- **Settings moved to WhatsApp Account** — 7 settings (HMAC strict, API timeout, session start timeout, rate limit, CB threshold, CB cooldown, max outbox attempts) moved from OpenWA Bridge Settings to per-account WhatsApp Account. Each account now has independent config.
+- **WhatsApp Account custom fields** — expanded from 9 to 16 fields (7 new settings in collapsible "Settings" section)
+- **OpenWA Bridge Settings** — reduced from 10 to 3 fields (only idempotency TTL, outbox batch size, media size limit remain global)
 - **All `requests.get/post` calls** — replaced with `_http_session` for connection pooling
 - **All `get_password("openwa_api_key")` calls** — replaced with `get_api_key()` helper
 - **All `_is_openwa_account()` definitions** — consolidated to single `is_openwa_account()` in utils.py
