@@ -9,7 +9,7 @@ User creates WhatsApp Message in Desk
 frappe.get_doc(new_doc).insert()
   │
   ▼
-after_insert → WhatsAppMessage.notify(data)
+after_insert → outbox entry (if OpenWA + outbox needed)
   │
   ▼
 OverrideWhatsAppMessage.notify(data)
@@ -41,7 +41,7 @@ OverrideWhatsAppMessage.notify(data)
   ▼
 _send_via_openwa(account, data)
   │
-  ├─ self.template is set?
+  ├─ self.use_template AND self.template is set?
   │    │
   │    ▼
   │  openwa_tid = frappe.db.get_value("WhatsApp Templates", self.template, "openwa_template_id")
@@ -67,6 +67,9 @@ _send_via_openwa(account, data)
   │       POST /messages/send-text
   │       { chatId, text: "Dear Faissal, your invoice..." }
   │
+  ├─ self.template set but self.use_template NOT set?
+  │    └─ Jinja path: falls through to content_type check below
+  │
   ▼
 Update WhatsApp Message: message_id + status="Sent"
 ```
@@ -84,92 +87,62 @@ OverrideWhatsAppNotification.send_template_message(doc)
   │
   ├─ not OpenWA account? → super().send_template_message() → Meta API
   │
-  ├─ openwa_send_type != "Template"? → super().send_template_message() → Meta API
+  ├─ openwa_send_type not in ("Template", "Jinja")? → super().send_template_message() → Meta API
   │
-  └─ OpenWA Template path:
-       │
-       ▼
-     1. Check disabled → return if yes
-     2. Check condition → return if fails
-     3. Get template doc
-     4. Get phone number from field_name
-     5. Build data dict with template name, language, components
-     6. Extract parameters from fields child table (live doc values)
-       │
-        ├─ Dynamic header enabled?
+  └─ OpenWA path: builds data dict, calls self.notify(data, doc_data)
+        │
+        ▼
+      OverrideWhatsAppNotification.notify(data)
+        │
+        ▼
+      openwa_send_type routing:
+        │
+        ├─ "Template" → _send_openwa_template(account, data, doc_data)
         │    │
         │    ▼
-        │  _send_dynamic_header_image(doc, template, data)
+        │  Create WhatsApp Message doc:
+        │    { type: "Outgoing", message_type: "Template",
+        │      use_template: 1, template: ...,
+        │      template_parameters: '["val1","val2",...]',
+        │      message: <rendered notification code>,
+        │      content_type: "text" }
         │    │
-        │    ├─ openwa_include_letterhead = 1?
-        │    │    └─ Read openwa_letterhead → pass letterhead name to render_doc_as_image()
+        │    ▼
+        │  frappe.get_doc(new_doc).insert()
         │    │
-        │    ├─ openwa_include_letterhead = 0?
-        │    │    └─ Pass no_letterhead=1 → no letterhead in image
+        │    ▼
+        │  after_insert → outbox entry → process_outbox_entry
         │    │
-        │    ├─ render_doc_as_image(doctype, name, print_format, letterhead)
-        │    │    ├─ frappe.get_print(doctype, name, print_format, no_letterhead=0)
-        │    │    ├─ fitz.open() → page 0 → pixmap → PNG bytes
-        │    │    └─ (Chrome PDF generator, no fallback)
-        │    │
-        │    └─ POST /messages/send-image
-        │       { chatId, base64: <png>, mimetype: "image/png" }
-        │       (errors are caught and logged, don't block template send)
-       │
-       ▼
-     7. notify(data, doc_data)
-       │
-       ▼
-     OverrideWhatsAppNotification.notify(data)
-       │
-       ▼
-     openwa_send_type routing:
-       │
-       ├─ "Template" → _send_openwa_template(account, data, doc_data)
-       │    │
-       │    ▼
-       │  Create WhatsApp Message doc:
-       │    { type: "Outgoing", message_type: "Template", template: ...,
-       │      template_parameters: '["val1","val2",...]', content_type: "text" }
-       │    │
-       │    ▼
-       │  frappe.get_doc(new_doc).insert()
-       │    │
-       │    ▼
-       │  after_insert → OverrideWhatsAppMessage.notify()
-       │    │
-       │    ▼
-       │  _send_via_openwa() → POST /messages/send-template
-       │
+        │    ▼
+        │  _send_outbox_message():
+        │    ├─ _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
+        │    │    ├─ Template has openwa_dynamic_header? → render doc as PNG → send image
+        │    │    └─ Returns True if sent (done, no separate text send)
+        │    └─ If no image: _send_via_openwa()
+        │         ├─ use_template=1 AND template set? → POST /messages/send-template
+        │         └─ Otherwise → POST /messages/send-text
+        │
         ├─ "Jinja" → notify() with rendered message
         │    │
         │    ▼
-        │  1. Template linked AND has dynamic header?
-        │       │
-        │       ├─ YES → _send_dynamic_header_image(doc, template)
-        │       │    │
-        │       │    ├─ openwa_include_letterhead=1?
-        │       │    │    └─ Read openwa_letterhead → pass name to frappe.get_print()
-        │       │    ├─ openwa_include_letterhead=0 → no_letterhead=1
-        │       │    ├─ render_doc_as_image(doctype, name, print_format, letterhead)
-        │       │    │    ├─ frappe.get_print(doctype, name, print_format, no_letterhead=0)
-        │       │    │    ├─ fitz.open() → page 0 → pixmap → PNG bytes
-        │       │    │    └─ (Chrome PDF generator, no fallback)
-        │       │    ├─ POST /messages/send-image
-        │       │    │   { chatId, base64: <png>, mimetype: "image/png" }
-        │       │    │   (errors caught and logged, don't block send)
-        │       │    │
-        │       │    └─ Continue to text send
-        │       │
-        │       └─ NO → skip image, go to text send
+        │  1. Render self.code via frappe.render_template(self.code, {"doc": doc})
         │    │
         │    ▼
         │  2. _send_openwa_text(account, data, rendered_message, doc_data)
+        │    │    Creates WhatsApp Message with template set (for dynamic header)
+        │    │    but use_template NOT set → send-text path
         │    │
         │    ▼
-        │  frappe.render_template(self.code, {"doc": doc})
-        │  Create WhatsApp Message doc with rendered text
-        │  → OverrideWhatsAppMessage.notify() → POST /messages/send-text
+        │  after_insert → outbox entry → process_outbox_entry
+        │    │
+        │    ▼
+        │  _send_outbox_message():
+        │    ├─ _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
+        │    │    ├─ Template has openwa_dynamic_header? → render doc as PNG → send image with caption
+        │    │    └─ Returns True if sent (done)
+        │    └─ If no image: _send_via_openwa()
+        │         └─ use_template NOT set → content_type == "text" → POST /messages/send-text
+        │              (sends rendered Jinja text as plain text)
         │
         └─ (empty) → fallback to _send_openwa_template()
 ```
@@ -228,44 +201,51 @@ OpenWA receives message from WhatsApp
   ▼
 OpenWA webhook → POST /api/method/openwa_bridge.inbound.receive_openwa_message
   │
-  Headers: X-Openwa-Signature: sha256=<hmac-hex>
-  Body: { event, data: { from, to, body, type, ... } }
+  Headers: X-OpenWA-Signature: sha256=<hmac-hex> (optional)
+  Headers: X-OpenWA-Idempotency-Key: <unique-id> (optional)
+  Body: { event, sessionId, data: { from, to, body, type, ... } }
   │
   ▼
 receive_openwa_message()
   │
-  1. Parse request body
-  2. Extract X-Openwa-Signature header (lowercase 'wa' in 'Openwa')
-  3. Get webhook secret from site_config or WhatsApp Account
-  4. Verify HMAC: verify_openwa_signature(payload_bytes, secret, sig_header)
-       │
-       ├─ Invalid → frappe.throw("Invalid signature", 403)
-       │
-       └─ Valid → continue
+  1. Parse request body (get_json(force=True))
+  2. Validate event field present
+  3. Rate limiting: 60 req/min per IP (frappe.cache)
+  4. Resolve WhatsApp Account by session ID
   │
-  5. Idempotency check: frappe.cache().set(f"owb_msg:{msg_id}", True, ex=3600)
+  5. HMAC verification (lenient mode):
        │
-       ├─ Already set → return ("Duplicate", 200)
+       ├─ Secret configured + signature present + valid → continue
+       ├─ Secret configured + signature present + INVALID → return error (200)
+       ├─ Secret configured + NO signature → warn + continue (lenient)
+       └─ No secret configured → skip verification
+  │
+  6. Idempotency check: frappe.cache().set_value("owb_msg:{key}", 1, expires_in_sec=3600)
        │
+       ├─ Already set → return {"status": "duplicate"} (200)
        └─ New message → continue
   │
-  6. Route by event type:
+  7. Route by event type (always returns 200):
        │
-       ├─ "message.reaction" → _handle_reaction(data)
-       │
-       ├─ "message" / "message.any" → _handle_message(data)
-       │    │
+       ├─ "message.received" → _handle_inbound_message()
+       │    ├─ Skip if fromMe (outgoing echo)
        │    ├─ Extract sender JID → strip_jid_suffix() (handles @lid)
-       │    ├─ Find or create Contact/Lead
+       │    ├─ Group messages → extract actual author
        │    ├─ Create WhatsApp Message doc (type="Incoming")
        │    ├─ If has media → download and attach as File
        │    ├─ If is_reply → link to reply_to_message_id
-       │    └─ Create Communication record
+       │    ├─ Create WhatsApp Profile
+       │    └─ Log success with doc name
        │
-       └─ Other events → log and ignore
+       ├─ "message.ack" / "message.failed" → _handle_status_update()
+       │    └─ Update WhatsApp Message status field
+       │
+       └─ "session.status" → _handle_session_status()
+            └─ Update WhatsApp Account status (Active/Inactive)
   │
   ▼
-  Return "OK" (200)
+  Return {"status": "ok"} (200)
+  ── All errors return HTTP 200 to prevent OpenWA retry loops ──
 ```
 
 ## Flow 6: One-Click Session Setup (WhatsApp Account → OpenWA)
@@ -403,4 +383,101 @@ _ensure_session_ready(account)
   │
   └─ 5. throw "session is {status} and could not be recovered"
        → User must open WhatsApp Account form and click "Reconnect"
+```
+
+## Flow 10: Outbox Processing (Background Worker)
+
+```
+WhatsApp Message created (type="Outgoing")
+  │
+  ▼
+OverrideWhatsAppMessage.notify() [inside before_insert]
+  │
+  ├─ openwa_enabled? → self._openwa_outbox_needed = True → return
+  │
+  ▼
+OverrideWhatsAppMessage.after_insert() [self.name now assigned]
+  │
+  ├─ _openwa_outbox_needed?
+  │    │
+  │    ▼
+  │  Create OpenWA Outbox doc:
+  │    { whatsapp_message, whatsapp_account, content_type,
+  │      status: "Pending", max_attempts: 5 }
+  │    │
+  │    ▼
+  │  frappe.enqueue(process_outbox_entry, queue="long", timeout=300)
+  │
+  ▼ [background worker — long queue]
+process_outbox_entry(outbox_name)
+  │
+  1. Load outbox (for_update=True)
+  2. Guard: status must be "Pending"
+  3. Guard: next_retry_at must be NULL or <= now
+  4. Load linked WhatsApp Message + WhatsApp Account (before guard checks)
+  5. Guard: openwa_enabled still True
+  6. Guard: attempts < max_attempts
+  7. Mark status="Sending", increment attempts
+  │
+  8. Circuit breaker check:
+       ├─ OpenWACircuitBreaker(account).is_open()
+       │    ├─ Yes → fail with cooldown message, schedule retry
+       │    └─ No → continue
+  │
+  9. _send_outbox_message(msg, account, outbox)
+       │
+       ├─ _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
+       │    ├─ msg.template set AND template has openwa_dynamic_header?
+       │    │    → render doc as PNG → send image with rendered text as caption
+       │    ├─ Returns True → done (no separate text send)
+       │    └─ Returns False → continue to text/template send
+       │
+       └─ _send_via_openwa()
+            ├─ use_template=1 AND template set? → send-template with vars
+            └─ Otherwise → send-text (plain text or rendered Jinja)
+  │
+  10. On success:
+       ├─ breaker.record_success()
+       └─ status = "Sent"
+  │
+  11. On failure:
+       ├─ breaker.record_failure()
+       └─ _fail_outbox():
+            ├─ attempts < max_attempts?
+            │    └─ Schedule retry with exponential backoff:
+            │         30s, 60s, 120s, 300s, capped at 1 hour
+            │         status remains "Pending", set next_retry_at
+            └─ attempts >= max_attempts?
+                 └─ status = "Failed", frappe.log_error()
+```
+
+## Flow 11: Webhook Auto-Sync (Account Save → OpenWA)
+
+```
+User saves WhatsApp Account in Frappe Desk
+  │
+  ▼
+doc_events["on_update"] → on_account_update(doc, method)
+  │
+  ├─ openwa_enabled = 0? → return
+  ├─ openwa_session_id empty? → return
+  │
+  └─ Sync webhook secret:
+       │
+       ├─ Build frappe_url = get_url("/api/method/openwa_bridge.inbound.receive_openwa_message")
+       │
+       ├─ GET /webhooks → list all webhooks for session
+       │    │
+       │    ├─ Find webhook with matching URL
+       │    │    │
+       │    │    └─ Found → PUT /webhooks/:id { secret: <new-secret> }
+       │    │
+       │    └─ Not found → POST /webhooks {
+       │         url: frappe_url,
+       │         events: ["message.received", "message.ack",
+       │                  "message.failed", "session.status"],
+       │         secret: <new-secret>
+       │       }
+       │
+       └─ On error → frappe.log_error() (best-effort, doesn't block save)
 ```

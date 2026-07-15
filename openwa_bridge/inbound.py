@@ -1,4 +1,6 @@
 """Inbound webhook receiver for OpenWA Gateway."""
+from __future__ import annotations
+
 import frappe
 import base64
 
@@ -8,7 +10,10 @@ from openwa_bridge.utils import (
     verify_openwa_signature,
     strip_jid_suffix,
     openwa_type_to_frappe,
+    get_account_setting,
 )
+
+MAX_MEDIA_SIZE_MB = 10
 
 
 # ── Public endpoint ──────────────────────────────────────────────────
@@ -23,12 +28,22 @@ def receive_openwa_message() -> dict[str, str]:
       URL: https://your-domain/api/method/openwa_bridge.inbound.receive_openwa_message
       Events: message.received, message.ack, message.failed
       Secret: (set same value in WhatsApp Account -> openwa_webhook_secret)
+
+    Always returns HTTP 200 to prevent OpenWA retry loops.
     """
     raw_body = frappe.request.get_data()
-    payload = frappe.request.get_json()
+    try:
+        payload = frappe.request.get_json(force=True)
+    except Exception:
+        frappe.log_error(title="OpenWA: Failed to parse webhook body")
+        return {"status": "error", "message": "Invalid JSON"}
 
     if not payload or "event" not in payload:
-        frappe.throw("Invalid webhook payload")
+        frappe.log_error(
+            title="OpenWA: Missing event field",
+            message=f"Payload keys: {list(payload.keys()) if payload else 'None'}",
+        )
+        return {"status": "error", "message": "Missing 'event' field"}
 
     session_id: str = payload.get("sessionId", "")
     event_type: str = payload.get("event", "")
@@ -36,25 +51,55 @@ def receive_openwa_message() -> dict[str, str]:
 
     whatsapp_account = _resolve_account_by_session(session_id)
 
+    # ── Rate limiting (configurable globally) ──
+    rate_limit = frappe.db.get_single_value("OpenWA Bridge Settings", "openwa_rate_limit") or 60
+    forwarded_for = frappe.request.headers.get("X-Forwarded-For", "")
+    client_ip = forwarded_for.split(",")[0].strip() if forwarded_for else (
+        frappe.request.remote_addr or "unknown"
+    )
+    rate_key = f"openwa_rate::{client_ip}"
+    count = frappe.cache().get_value(rate_key) or 0
+    if count >= rate_limit:
+        frappe.log_error(
+            title="OpenWA: Rate limit exceeded",
+            message=f"IP: {client_ip}, Count: {count}, Limit: {rate_limit}",
+        )
+        return {"status": "error", "message": "Rate limit exceeded"}
+    frappe.cache().set_value(rate_key, count + 1, expires_in_sec=60)
+
     # ── HMAC verification ──
     if whatsapp_account:
         secret = whatsapp_account.get_password("openwa_webhook_secret")
         if secret:
             signature = frappe.request.headers.get("X-OpenWA-Signature", "")
-            if not verify_openwa_signature(raw_body, secret, signature):
+            hmac_strict = frappe.db.get_single_value("OpenWA Bridge Settings", "openwa_hmac_strict") or 0
+            if not signature and hmac_strict:
+                frappe.log_error(
+                    title="OpenWA HMAC Missing (strict mode)",
+                    message=f"Session: {session_id}, strict=True",
+                )
+                return {"status": "error", "message": "HMAC signature required (strict mode)"}
+            if signature and not verify_openwa_signature(raw_body, secret, signature):
                 frappe.log_error(
                     title="OpenWA HMAC Verification Failed",
-                    message=f"Session: {session_id}, Sig: '{signature}', Body prefix: {raw_body[:100]}",
+                    message=f"Session: {session_id}, Sig: '{signature}'",
                 )
-                frappe.throw("Signature verification failed")
+                return {"status": "error", "message": "Signature verification failed"}
+            elif not signature:
+                frappe.logger().info(
+                    f"OpenWA: No HMAC signature from session {session_id} "
+                    "— messages processed without verification"
+                )
 
     # ── Idempotency check ──
     idempotency_key = frappe.request.headers.get("X-OpenWA-Idempotency-Key", "")
     if idempotency_key:
         cache_key = f"openwa_idempotent:{idempotency_key}"
-        if frappe.cache().get(cache_key):
+        idempotency_ttl = frappe.db.get_single_value("OpenWA Bridge Settings", "idempotency_ttl") or 3600
+        existing = frappe.cache().get_value(cache_key)
+        if existing is not None:
             return {"status": "duplicate"}
-        frappe.cache().set(cache_key, 1, ex=3600)
+        frappe.cache().set_value(cache_key, 1, expires_in_sec=idempotency_ttl)
 
     # ── Route to handler ──
     try:
@@ -62,10 +107,14 @@ def receive_openwa_message() -> dict[str, str]:
             _handle_inbound_message(event_data, whatsapp_account, session_id)
         elif event_type in ("message.ack", "message.failed"):
             _handle_status_update(event_data)
-    except Exception:
-        frappe.log_error(title="OpenWA Inbound Handler Error")
+        elif event_type == "session.status":
+            _handle_session_status(event_data, session_id)
+    except Exception as e:
+        frappe.log_error(
+            title="OpenWA Inbound Handler Error",
+            message=f"Event: {event_type}, Session: {session_id}\n{frappe.get_traceback()}",
+        )
 
-    frappe.db.commit()
     return {"status": "ok"}
 
 
@@ -141,6 +190,10 @@ def _handle_inbound_message(
     doc = frappe.get_doc(doc_data)
     doc.insert(ignore_permissions=True)
 
+    frappe.logger().info(
+        f"OpenWA inbound: created WhatsApp Message {doc.name} from {phone_number}"
+    )
+
     # Attach media if present
     media_info = msg_data.get("media")
     if isinstance(media_info, dict) and not media_info.get("omitted"):
@@ -165,6 +218,19 @@ def _attach_openwa_media(message_doc: "Document", media_info: dict) -> None:  # 
             message=(
                 f"Message {message_doc.name}: mimetype={mime_type}, "
                 "omitted=False but no data"
+            ),
+        )
+        return
+
+    # Check size before base64 decode to avoid memory issues
+    max_media_size_mb = frappe.db.get_single_value("OpenWA Bridge Settings", "max_media_size_mb") or 10
+    estimated_bytes = len(raw_data) * 3 // 4  # rough base64→bytes estimate
+    if estimated_bytes > max_media_size_mb * 1024 * 1024:
+        frappe.log_error(
+            title="OpenWA: Media too large",
+            message=(
+                f"Message {message_doc.name}: ~{estimated_bytes // (1024 * 1024)}MB "
+                f"(limit {max_media_size_mb}MB), mimetype={mime_type}"
             ),
         )
         return
@@ -217,6 +283,28 @@ def _handle_status_update(event_data: dict) -> None:
         return
 
     frappe.db.set_value("WhatsApp Message", name, "status", status.capitalize())
+
+
+def _handle_session_status(event_data: dict, session_id: str) -> None:
+    """Update WhatsApp Account status from OpenWA session.status events."""
+    status = event_data.get("status", "")
+    if not status:
+        return
+    status_map = {
+        "ready": "Active",
+        "disconnected": "Inactive",
+        "failed": "Inactive",
+    }
+    frappe_status = status_map.get(status)
+    if not frappe_status:
+        return
+    account_name = frappe.db.get_value(
+        "WhatsApp Account",
+        {"openwa_session_id": session_id},
+        "name",
+    )
+    if account_name:
+        frappe.db.set_value("WhatsApp Account", account_name, "status", frappe_status)
 
 
 # ── Account resolution ───────────────────────────────────────────────

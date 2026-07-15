@@ -39,7 +39,7 @@ git checkout -- .
 git clean -fd openwa_bridge/public/
 
 # Pull latest from GitHub
-git pull --no-rebase origin develop
+git pull --no-rebase origin feature/enterprise-queue-retry
 
 # Migrate + build + restart
 bench migrate --site erp.manaasoft.com
@@ -134,7 +134,7 @@ Get the API key from the OpenWA dashboard (localhost:2886).
 
 Via dashboard or API:
 - URL: `https://your-site.local/api/method/openwa_bridge.inbound.receive_openwa_message`
-- Events: message, message.any, message.reaction
+- Events: message.received, message.ack, message.failed, session.status
 
 ### 7. Configure Frappe
 
@@ -194,6 +194,19 @@ bench pip install PyMuPDF  # For dynamic image headers
 - [ ] Set Fields child table with correct field names
 - [ ] Submit Sales Invoice via POS -> verify template received on phone
 - [ ] Check Error Logs for any failures
+
+### Outbox & Reliability
+- [ ] Verify OpenWA Outbox entries are created on message send
+- [ ] Verify outbox status transitions: Pending → Sending → Sent
+- [ ] Check that retry works: temporarily break OpenWA, verify exponential backoff
+- [ ] Verify circuit breaker: 5 consecutive failures → 5 min cooldown
+- [ ] Verify scheduler safety-net picks up orphaned Pending entries
+
+### Inbound Security
+- [ ] Verify HMAC signature verification (valid signature → pass)
+- [ ] Verify lenient mode (no signature + secret configured → warn, not reject)
+- [ ] Verify rate limiting (60+ requests from same IP → 429 response)
+- [ ] Verify idempotency (duplicate message → rejected)
 
 ### Dynamic Image Header
 - [ ] Check `Dynamic Header` on template

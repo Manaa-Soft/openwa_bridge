@@ -1,4 +1,6 @@
 """Override WhatsAppNotification — Jinja code OR OpenWA template per notification."""
+from __future__ import annotations
+
 import base64
 import json
 import frappe
@@ -10,13 +12,7 @@ from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_notification.whatsapp_noti
     WhatsAppNotification,
 )
 from frappe_whatsapp.utils import get_whatsapp_account, format_number
-from openwa_bridge.utils import openwa_api, render_doc_as_image
-
-
-def _is_openwa_account(account_name: str | None) -> bool:
-    if not account_name:
-        return False
-    return bool(frappe.db.get_value("WhatsApp Account", account_name, "openwa_enabled"))
+from openwa_bridge.utils import openwa_api, render_doc_as_image, get_api_key, is_openwa_account, _http_session
 
 
 class OverrideWhatsAppNotification(WhatsAppNotification):
@@ -34,11 +30,18 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
 
     def send_template_message(self, doc, phone_no=None, default_template=None, ignore_condition=False):
         """Override to skip parent attachment/header logic for OpenWA templates."""
-        if not _is_openwa_account(self.whatsapp_account):
+        account_name = self.whatsapp_account
+        if not account_name:
+            account = get_whatsapp_account(account_type="outgoing")
+            account_name = account.name if account else None
+
+        if not is_openwa_account(account_name):
             return super().send_template_message(doc, phone_no, default_template, ignore_condition)
 
         send_type = self.openwa_send_type or ""
-        if send_type != "Template":
+        if not send_type:
+            return
+        if send_type not in ("Template", "Jinja"):
             return super().send_template_message(doc, phone_no, default_template, ignore_condition)
 
         # ── OpenWA Template path (skip parent's header/attachment logic) ──
@@ -84,10 +87,6 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
                 parameters.append({"type": "text", "text": value})
             data["template"]["components"] = [{"type": "body", "parameters": parameters}]
 
-        # ── Step 1: Dynamic image header ──
-        if getattr(template, "openwa_dynamic_header", False) and getattr(template, "openwa_print_format", None):
-            self._send_dynamic_header_image(doc, template, data)
-
         self.notify(data, doc_data)
 
     def notify(self, data: dict, doc_data=None) -> None:  # noqa: ANN001
@@ -99,11 +98,16 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
         if not whatsapp_account:
             frappe.throw(_("Please set a default outgoing WhatsApp Account"))
 
-        if not _is_openwa_account(whatsapp_account.name):
+        if not is_openwa_account(whatsapp_account.name):
             return super().notify(data, doc_data)
 
         # ── OpenWA path ──
         send_type = self.openwa_send_type or ""
+        if not send_type:
+            frappe.throw(
+                _("OpenWA Send Type is required when using OpenWA. "
+                  "Set it to 'Jinja' or 'Template' in the notification settings.")
+            )
 
         # 1) Explicit "Template" → OpenWA send-template with real doc values
         if send_type == "Template" and self.template:
@@ -113,12 +117,6 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
         # 2) Explicit "Jinja" → render code and send as free text
         if send_type == "Jinja" and self.code and doc_data:
             doc = self._resolve_document(doc_data)
-
-            # Dynamic image header (same as Template path)
-            if self.template:
-                tmpl = frappe.get_doc("WhatsApp Templates", self.template)
-                if getattr(tmpl, "openwa_dynamic_header", False) and getattr(tmpl, "openwa_print_format", None):
-                    self._send_dynamic_header_image(doc, tmpl, data)
 
             rendered_message = frappe.render_template(self.code, {"doc": doc}).strip()
             if not rendered_message:
@@ -159,11 +157,9 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
         raw_number = format_number(phone_number)
         chat_id = f"{raw_number}@c.us" if "@c.us" not in raw_number else raw_number
 
-        import requests as _req
-
         base_url = account.get("openwa_base_url").strip("/")
         session_id = account.get("openwa_session_id")
-        api_key = account.get_password("openwa_api_key") if hasattr(account, "get_password") else account.get("openwa_api_key")
+        api_key = get_api_key(account)
         url = f"{base_url}/api/sessions/{session_id}/messages/send-image"
         payload = {
             "chatId": chat_id,
@@ -171,7 +167,7 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
             "mimetype": "image/png",
         }
         try:
-            img_resp = _req.post(
+            img_resp = _http_session.post(
                 url,
                 json=payload,
                 headers={"Content-Type": "application/json", "X-API-Key": api_key},
@@ -220,6 +216,7 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
             "message": message,
             "to": data.get("to"),
             "content_type": "text",
+            "template": self.template,
             "whatsapp_account": account.name,
         }
         if doc_data:
@@ -228,12 +225,11 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
 
         try:
             frappe.get_doc(new_doc).insert(ignore_permissions=True)
-            frappe.msgprint("WhatsApp Message Triggered (OpenWA)", indicator="green", alert=True)
+            frappe.logger().info("WhatsApp Message Triggered (OpenWA)")
         except Exception as e:
-            frappe.msgprint(
-                f"Failed to trigger WhatsApp message via OpenWA: {e}",
-                indicator="red",
-                alert=True,
+            frappe.log_error(
+                title="OpenWA: Failed to trigger text message",
+                message=f"Failed to trigger WhatsApp message via OpenWA: {e}",
             )
 
     def _send_openwa_template(self, account, data, doc_data=None) -> None:
@@ -243,7 +239,7 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
         new_doc = {
             "doctype": "WhatsApp Message",
             "type": "Outgoing",
-            "message": str(data.get("template", "")),
+            "message": self._render_notification_template(doc_data) or "",
             "to": data.get("to"),
             "message_type": "Template",
             "content_type": "text",
@@ -259,12 +255,11 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
 
         try:
             frappe.get_doc(new_doc).insert(ignore_permissions=True)
-            frappe.msgprint("WhatsApp Template Triggered (OpenWA)", indicator="green", alert=True)
+            frappe.logger().info("WhatsApp Template Triggered (OpenWA)")
         except Exception as e:
-            frappe.msgprint(
-                f"Failed to trigger WhatsApp template via OpenWA: {e}",
-                indicator="red",
-                alert=True,
+            frappe.log_error(
+                title="OpenWA: Failed to trigger template message",
+                message=f"Failed to trigger WhatsApp template via OpenWA: {e}",
             )
 
         # Set property after alert if configured
@@ -284,6 +279,38 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
                         frappe.db.set_value(doctype, name, fieldname, value)
             except Exception:
                 pass
+
+    def _render_notification_template(self, doc_data) -> str:
+        """Render the notification's code template with actual doc values.
+
+        Replaces ``{{1}}``, ``{{2}}``, etc. in ``self.code`` with formatted
+        field values from the linked document.
+        """
+        if not self.code:
+            return ""
+
+        doc = self._resolve_document(doc_data) if doc_data else None
+        if not doc:
+            return ""
+
+        values = []
+        if self.fields:
+            for field_row in self.fields:
+                field_name = field_row.field_name
+                try:
+                    if hasattr(doc, "get_formatted"):
+                        value = doc.get_formatted(field_name)
+                    else:
+                        value = getattr(doc, field_name, "") or doc.get(field_name, "")
+                    values.append(str(value) if value is not None else "")
+                except Exception:
+                    values.append("")
+
+        text = self.code
+        for i, val in enumerate(values, 1):
+            text = text.replace(f"{{{{{i}}}}}", val)
+
+        return text
 
     def _extract_template_parameters(self, data, doc_data=None) -> str | None:
         """Extract variable values from the actual document for OpenWA send-template.

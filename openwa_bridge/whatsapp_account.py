@@ -7,7 +7,7 @@ import time
 import frappe
 import requests
 
-from openwa_bridge.utils import openwa_api
+from openwa_bridge.utils import openwa_api, get_api_key, validate_openwa_url, _http_session
 
 
 # ---------------------------------------------------------------------------
@@ -29,23 +29,23 @@ def _get_account(account_name: str, require_session: bool = True) -> dict:
 
 
 def _raw_openwa_call(account: dict, method: str, url_path: str,
-                     json_data: dict | None = None, timeout: int = 30) -> dict:
+                     json_data: dict | None = None, timeout: int | None = None) -> dict:
     """Call an OpenWA endpoint that is NOT scoped under ``/api/sessions/:id``.
 
     Used for session listing and creation where the session ID is not yet
     known.
     """
+    if timeout is None:
+        timeout = frappe.db.get_single_value("OpenWA Bridge Settings", "openwa_api_timeout") or 30
     base_url = account.get("openwa_base_url").strip("/")
-    api_key = (account.get_password("openwa_api_key")
-               if hasattr(account, "get_password")
-               else account.get("openwa_api_key"))
+    api_key = get_api_key(account)
 
     headers = {
         "Content-Type": "application/json",
         "X-API-Key": api_key,
     }
     url = f"{base_url}{url_path}"
-    resp = requests.request(method, url, json=json_data, headers=headers,
+    resp = _http_session.request(method, url, json=json_data, headers=headers,
                             timeout=timeout)
     resp.raise_for_status()
     if resp.status_code == 204:
@@ -80,13 +80,22 @@ def _safe_get_session(account: dict) -> dict | None:
 
 def _start_session(account: dict) -> None:
     """Start an OpenWA session, ignoring 'already started' errors."""
+    timeout = frappe.db.get_single_value("OpenWA Bridge Settings", "openwa_session_start_timeout") or 60
     try:
-        openwa_api(account, "POST", "/start", timeout=60)
+        openwa_api(account, "POST", "/start", timeout=timeout)
     except requests.exceptions.HTTPError as exc:
         if exc.response is not None and exc.response.status_code == 400:
             return  # already started — fine
         raise
-    time.sleep(5)
+    # Poll for readiness (up to 15s, 1s intervals)
+    for _ in range(15):
+        time.sleep(1)
+        try:
+            status = openwa_api(account, "GET", "")
+            if status.get("status") in ("ready", "qr_ready"):
+                return
+        except Exception:
+            pass
 
 
 def _fetch_qr(account: dict) -> dict:
@@ -101,7 +110,15 @@ def _fetch_qr(account: dict) -> dict:
         error_msg = _extract_error(exc)
 
         if "not started" in error_msg.lower():
-            time.sleep(3)
+            # Poll for QR readiness (up to 10s, 1s intervals)
+            for _ in range(10):
+                time.sleep(1)
+                try:
+                    qr = openwa_api(account, "GET", "/qr")
+                    return {"qr_code": qr.get("qrCode"), "status": qr.get("status", "qr_ready")}
+                except Exception:
+                    pass
+            # Final attempt — let it raise
             qr = openwa_api(account, "GET", "/qr")
             return {"qr_code": qr.get("qrCode"), "status": qr.get("status", "qr_ready")}
 
@@ -139,17 +156,30 @@ def setup_openwa_session(account_name: str) -> dict:
 
         { status: "error", error: "..." }
     """
+    if not frappe.has_permission("WhatsApp Account", "write", account_name):
+        frappe.throw("Insufficient permissions to manage WhatsApp Account.", frappe.PermissionError)
     account = _get_account(account_name, require_session=False)
     base_url = account.get("openwa_base_url")
     if not base_url:
         frappe.throw("OpenWA Base URL is not set.")
 
+    # Warn if using HTTP in production (not localhost)
+    if base_url.startswith("http://"):
+        from urllib.parse import urlparse
+        host = urlparse(base_url).hostname or ""
+        if host not in ("localhost", "127.0.0.1", "::1"):
+            frappe.msgprint(
+                "Warning: OpenWA Base URL uses HTTP instead of HTTPS. "
+                "API keys and messages are transmitted in plaintext. "
+                "Use HTTPS in production environments.",
+                indicator="orange",
+                alert=True,
+            )
+
     # Quick connectivity check — fail fast with a clear message.
     try:
-        requests.get(base_url.rstrip("/") + "/api/sessions",
-                     headers={"X-API-Key": (account.get_password("openwa_api_key")
-                               if hasattr(account, "get_password")
-                               else account.get("openwa_api_key") or "")},
+        _http_session.get(base_url.rstrip("/") + "/api/sessions",
+                     headers={"X-API-Key": get_api_key(account)},
                      timeout=10)
     except requests.exceptions.ConnectionError:
         return {"status": "error",
@@ -245,6 +275,8 @@ def get_openwa_session_status(account_name: str) -> dict:
         dict: { status, phone, push_name, connected_at, last_active } or
               { status: "error", error: "..." }
     """
+    if not frappe.has_permission("WhatsApp Account", "read", account_name):
+        frappe.throw("Insufficient permissions to read WhatsApp Account.", frappe.PermissionError)
     account = _get_account(account_name)
     session = _safe_get_session(account)
     if session is None:
@@ -271,6 +303,8 @@ def get_openwa_qr(account_name: str) -> dict:
               { status: "ready", phone, push_name } or
               { status: "error", error: "..." }
     """
+    if not frappe.has_permission("WhatsApp Account", "read", account_name):
+        frappe.throw("Insufficient permissions to read WhatsApp Account.", frappe.PermissionError)
     account = _get_account(account_name)
 
     # --- 1. Check current session status -----------------------------------
@@ -309,12 +343,83 @@ def stop_openwa_session(account_name: str) -> dict:
     Returns:
         dict: { status: "disconnected" } or { status: "error", error: "..." }
     """
+    if not frappe.has_permission("WhatsApp Account", "write", account_name):
+        frappe.throw("Insufficient permissions to manage WhatsApp Account.", frappe.PermissionError)
     account = _get_account(account_name)
     try:
         openwa_api(account, "POST", "/stop")
         return {"status": "disconnected"}
     except Exception as exc:
         return {"status": "error", "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# Doc event hook — called by Frappe when a WhatsApp Account is validated
+# ---------------------------------------------------------------------------
+
+
+def on_account_validate(doc, method):  # noqa: ANN001
+    """Validate the OpenWA base URL on save."""
+    if getattr(doc, "openwa_enabled", 0) and doc.openwa_base_url:
+        validate_openwa_url(doc.openwa_base_url)
+
+
+# ---------------------------------------------------------------------------
+# Doc event hook — called by Frappe when a WhatsApp Account is saved
+# ---------------------------------------------------------------------------
+
+_WEBHOOK_PATH = "/api/method/openwa_bridge.inbound.receive_openwa_message"
+_WEBHOOK_EVENTS = [
+    "message.received", "message.ack", "message.failed", "session.status",
+]
+
+
+def on_account_update(doc, method):  # noqa: ANN001
+    """Sync the OpenWA webhook secret to the gateway when the account is saved.
+
+    If a webhook for our Frappe URL already exists on the session the secret
+    is updated.  Otherwise a new webhook is created with the configured events.
+    """
+    if not getattr(doc, "openwa_enabled", 0):
+        return
+    session_id = getattr(doc, "openwa_session_id", None)
+    if not session_id:
+        return
+
+    secret = doc.get_password("openwa_webhook_secret") if doc.get("openwa_webhook_secret") else None
+    frappe_url = frappe.utils.get_url(_WEBHOOK_PATH)
+
+    try:
+        webhooks = openwa_api(doc, "GET", "/webhooks")
+
+        existing = None
+        if isinstance(webhooks, list):
+            for wh in webhooks:
+                if wh.get("url") == frappe_url:
+                    existing = wh
+                    break
+
+        if existing:
+            openwa_api(
+                doc, "PUT",
+                f"/webhooks/{existing['id']}",
+                json_data={"secret": secret or ""},
+            )
+        else:
+            openwa_api(
+                doc, "POST",
+                "/webhooks",
+                json_data={
+                    "url": frappe_url,
+                    "events": _WEBHOOK_EVENTS,
+                    "secret": secret or "",
+                },
+            )
+    except Exception as exc:
+        frappe.log_error(
+            title="OpenWA: Failed to sync webhook secret",
+            message=f"Account: {doc.name}, Session: {session_id}: {exc}",
+        )
 
 
 # ---------------------------------------------------------------------------

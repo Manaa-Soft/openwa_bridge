@@ -7,12 +7,12 @@ app_license = "gpl-3.0"
 
 # Send non-GET requests for this app's endpoints as native `application/json`
 # bodies instead of form-encoded, per-key JSON-stringified values.
-use_json_request_body = True
+# use_json_request_body = True
 
 # Apps
 # ------------------
 
-# required_apps = []
+required_apps = ["frappe_whatsapp"]
 
 # Each item in the list will be shown as an app in the apps page
 # add_to_apps_screen = [
@@ -91,13 +91,13 @@ doctype_js = {
 # Installation
 # ------------
 
-# before_install = "openwa_bridge.install.before_install"
+before_install = "openwa_bridge.install.before_install"
 # after_install = "openwa_bridge.install.after_install"
 
 # Uninstallation
 # ------------
 
-# before_uninstall = "openwa_bridge.uninstall.before_uninstall"
+before_uninstall = "openwa_bridge.uninstall.before_uninstall"
 # after_uninstall = "openwa_bridge.uninstall.after_uninstall"
 
 # Integration Setup
@@ -146,6 +146,8 @@ doctype_js = {
 
 doc_events = {
 	"WhatsApp Account": {
+		"validate": "openwa_bridge.whatsapp_account.on_account_validate",
+		"on_update": "openwa_bridge.whatsapp_account.on_account_update",
 		"on_trash": "openwa_bridge.whatsapp_account.on_account_trash"
 	}
 }
@@ -156,10 +158,14 @@ doc_events = {
 
 scheduler_events = {
 	"hourly": [
-		"openwa_bridge.tasks.hourly"
+		"openwa_bridge.tasks.hourly",
+		"openwa_bridge.tasks.process_pending_outbox",
 	],
 	"daily": [
-		"openwa_bridge.tasks.daily"
+		"openwa_bridge.tasks.daily",
+	],
+	"all": [
+		"openwa_bridge.tasks.process_pending_outbox",
 	],
 }
 

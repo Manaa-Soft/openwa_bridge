@@ -257,3 +257,106 @@ else:
 | WhatsApp Notification | 1 | openwa_send_type |
 | Property Setters | 7 | depends_on for: token, url, version, webhook_verify_token, phone_id, app_id, business_id |
 | **Total** | **24** | |
+
+---
+
+## Session 8: Enterprise Reliability & Security Hardening
+
+**Date**: 2026-07-13  
+**Goal**: Add offline queue, retry logic, circuit breaker, and security hardening
+
+### What was built:
+
+1. **OpenWA Outbox DocType** (`openwa_bridge/openwa_bridge/doctype/openwa_outbox/`):
+   - Fields: whatsapp_message, whatsapp_account, content_type, status, attempts, max_attempts, next_retry_at, last_error
+   - Status flow: Pending → Sending → Sent/Failed
+   - Created in `after_insert()` after doc is persisted (self.name available)
+
+2. **Two-phase notification pattern** (`whatsapp_message.py`):
+   - Phase 1 (sync, <1s): Create WhatsApp Message doc → outbox entry → return to user
+   - Phase 2 (async background): Render PDF → send image → send text/template
+   - Eliminates 10-40s form submission delay
+
+3. **Exponential backoff retry** (`tasks.py` → `_fail_outbox()`):
+   - Schedule: 30s, 60s, 120s, 300s, capped at 1 hour
+   - Max 5 attempts before marking as Failed
+   - `frappe.log_error()` only on final failure (prevents error log flood)
+
+4. **Circuit breaker** (`utils.py` → `OpenWACircuitBreaker`):
+   - Threshold: 5 consecutive failures per account
+   - Cooldown: 5 minutes (300s)
+   - Redis-backed (uses `frappe.cache().set_value()` with `expires_in_sec`)
+   - Prevents cascade failures when OpenWA is down
+
+5. **Scheduler safety-net** (`tasks.py` → `process_pending_outbox()`):
+   - Runs every ~4 minutes via `"all"` scheduler event
+   - Picks up orphaned Pending entries (worker crash, Redis restart)
+   - Re-enqueues to `long` queue with deduplication
+
+6. **Inbound webhook hardening** (`inbound.py`):
+   - Always returns HTTP 200 (prevents OpenWA retry loops)
+   - `get_json(force=True)` for robust JSON parsing
+   - Rate limiting: 60 req/min per IP
+   - Lenient HMAC: no signature + secret configured → warn, not reject
+   - Idempotency: `frappe.cache().set_value()` with `expires_in_sec=3600`
+   - `session.status` event handler updates WhatsApp Account status
+   - Full traceback in catch-all error handler
+
+7. **Auto-sync webhook secret** (`whatsapp_account.py` → `on_account_update()`):
+   - Registered via `doc_events` on WhatsApp Account `on_update`
+   - Lists OpenWA webhooks, finds by URL match
+   - Updates via PUT or creates via POST
+   - Events: `message.received`, `message.ack`, `message.failed`, `session.status`
+
+8. **Dynamic image optimization** (`tasks.py`):
+   - Image sent with text as caption (1 message instead of 2)
+   - Moved from sync path to background worker
+   - Returns bool to skip separate text send
+
+### Commits:
+- `271f361`: Removed premature frappe.db.commit() from notify() inside before_insert()
+- `081f630`: Moved outbox creation from notify() to after_insert()
+- `6ebe47d`: Fixed expires_in → expires_in_sec in CircuitBreaker
+- `f526453`: Moved openwa_send_type field, added required validation
+- `6894591`: Two-phase pattern — moved image send to background worker
+- `10884e6`: Added template field to outbox, image+caption optimization
+- `d06c6e6`: Fixed expires_in → expires_in_sec in inbound rate limiter
+- `9392890`: Full inbound webhook rewrite (always 200, rate limit, lenient HMAC)
+- `a042430`: Removed use_json_request_body from hooks.py
+- `3ff8b9f`: Fixed frappe.request.get_data() kwarg
+- `6c842a4`: HMAC lenient mode (no signature = warn, not reject)
+- `bb26d91`: Auto-sync webhook secret on account save
+- `40139b3`: Error log cleanup (HMAC info-level, success logging, traceback)
+- `7f4d55a`: Fixed idempotency cache kwarg (frappe.cache().set_value())
+- `52df0cc`: Fixed send_template_message account resolution before OpenWA check
+
+### Key discoveries:
+- `frappe.cache().set()` calls Redis native `set()` which doesn't accept `expires_in_sec`
+- `frappe.request.get_data(as_bytes=False)` — `as_bytes` not valid kwarg in this Frappe version
+- `frappe.throw()` doesn't accept `http_status_code=` kwarg
+- Base `frappe_whatsapp` has wildcard `doc_events = {"*": {...}}` that fires for ALL doctypes
+- `before_insert()` → `self.name` is None; `after_insert()` → `self.name` is assigned
+- Base WhatsAppMessage has NO `after_insert()` — safe to add without breaking
+
+---
+
+## Session 9: Documentation & "Password not found" Fix
+
+**Date**: 2026-07-14  
+**Goal**: Fix token crash and comprehensive documentation update
+
+### Fix applied:
+- **"Password not found for WhatsApp Account X token"**: `send_template_message()` now resolves account from `self.whatsapp_account` or default outgoing BEFORE checking `_is_openwa_account()`. Changed `frappe.throw()` on empty `openwa_send_type` to silent return (wildcard doc_events hook fires for all doc types).
+
+### Documentation updated:
+- `README.md` — Added enterprise features section, updated file structure and key methods
+- `ARCHITECTURE.md` — Added outbox pattern diagram, on_update hook, enterprise design decisions
+- `FLOWS.md` — Updated inbound flow (lenient HMAC, rate limiting), added outbox and webhook auto-sync flows
+- `KNOWN_ISSUES.md` — Moved 18 issues to resolved, updated active issues
+- `DEPLOYMENT.md` — Updated branch reference, added outbox/security testing checklist
+- `API_REFERENCE.md` — Added HMAC lenient mode, rate limiting, idempotency, on_account_update docs
+- `CUSTOM_FIELDS.md` — Added OpenWA Outbox DocType reference
+- `SESSION_LOG.md` — Added session 8 and 9 entries
+
+### Commit:
+- `52df0cc`: Fixed send_template_message account resolution before OpenWA check

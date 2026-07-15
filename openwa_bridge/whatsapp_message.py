@@ -1,6 +1,7 @@
 """Outbound message router — overrides WhatsAppMessage.notify() to route via OpenWA."""
+from __future__ import annotations
+
 import frappe
-import requests
 import json
 import time
 
@@ -8,7 +9,7 @@ from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message i
     WhatsAppMessage,
 )
 from frappe_whatsapp.utils import format_number
-from openwa_bridge.utils import openwa_api, frappe_to_openwa_vars
+from openwa_bridge.utils import openwa_api, frappe_to_openwa_vars, get_api_key, _http_session
 
 
 class OverrideWhatsAppMessage(WhatsAppMessage):
@@ -30,16 +31,48 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 )
                 return super().notify(data)
 
-            try:
-                return self._send_via_openwa(account, data)
-            except Exception as e:
-                frappe.log_error(
-                    title="OpenWA Transmission Failure",
-                    message=f"Failed sending message {self.name}: {str(e)}",
-                )
-                frappe.throw(f"OpenWA Routing Failed: {str(e)}")
+            # Do NOT create the outbox entry here — we are inside before_insert()
+            # where self.name is still None (db_insert hasn't run yet).  Instead,
+            # set a flag so after_insert() can create the entry with the real name.
+            self._openwa_outbox_needed = True
+            return
 
         return super().notify(data)
+
+    def after_insert(self):
+        """Create the outbox entry now that self.name is assigned.
+
+        ``notify()`` sets ``_openwa_outbox_needed`` during ``before_insert()``
+        when ``self.name`` is still ``None``.  We create the outbox entry here
+        so the background worker can find the linked WhatsApp Message.
+        """
+        if not getattr(self, "_openwa_outbox_needed", False):
+            return
+
+        outbox = frappe.get_doc({
+            "doctype": "OpenWA Outbox",
+            "whatsapp_message": self.name,
+            "whatsapp_account": self.whatsapp_account,
+            "content_type": self.content_type,
+            "status": "Pending",
+            "max_attempts": 5,
+        })
+        outbox.insert(ignore_permissions=True)
+
+        try:
+            frappe.enqueue(
+                "openwa_bridge.tasks.process_outbox_entry",
+                queue="long",
+                timeout=300,
+                job_id=f"openwa_outbox::{outbox.name}",
+                deduplicate=True,
+                outbox_name=outbox.name,
+            )
+        except Exception:
+            frappe.log_error(
+                title="OpenWA: Failed to enqueue outbox entry",
+                message=f"Outbox {outbox.name} will be picked up by scheduler safety-net.",
+            )
 
     # ------------------------------------------------------------------
     # OpenWA dispatchers
@@ -52,13 +85,13 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
         """
         base_url = account.get("openwa_base_url").strip("/")
         session_id = account.get("openwa_session_id")
-        api_key = account.get_password("openwa_api_key")
+        api_key = get_api_key(account)
 
         headers = {"Content-Type": "application/json", "X-API-Key": api_key}
 
         # Check current status
         try:
-            resp = requests.get(
+            resp = _http_session.get(
                 f"{base_url}/api/sessions/{session_id}",
                 headers=headers,
                 timeout=10,
@@ -78,7 +111,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             f"attempting restart before sending message {self.name}"
         )
         try:
-            start_resp = requests.post(
+            start_resp = _http_session.post(
                 f"{base_url}/api/sessions/{session_id}/start",
                 headers=headers,
                 timeout=60,
@@ -92,33 +125,37 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 f"OpenWA session is {status} and restart failed: {exc}"
             )
 
-        # Give OpenWA a moment to initialize, then verify
-        time.sleep(5)
-        try:
-            verify = requests.get(
-                f"{base_url}/api/sessions/{session_id}",
-                headers=headers,
-                timeout=10,
-            )
-            if verify.status_code == 200:
-                new_status = verify.json().get("status", "unknown")
-                if new_status == "ready":
-                    frappe.logger().info(
-                        f"OpenWA pre-send: session '{session_id}' restarted "
-                        f"successfully — status is now 'ready'"
-                    )
-                    return
-                if new_status == "qr_ready":
-                    frappe.throw(
-                        "OpenWA session restarted but requires QR re-scan. "
-                        "Please open the WhatsApp Account form and scan the QR code."
-                    )
-        except Exception:
-            pass
+        # Poll for readiness (up to 3s, 1s intervals) — keep brief to avoid
+        # blocking the worker thread.  The outbox retry handles longer waits.
+        for _ in range(3):
+            time.sleep(1)
+            try:
+                verify = _http_session.get(
+                    f"{base_url}/api/sessions/{session_id}",
+                    headers=headers,
+                    timeout=5,
+                )
+                if verify.status_code == 200:
+                    new_status = verify.json().get("status", "unknown")
+                    if new_status == "ready":
+                        frappe.logger().info(
+                            f"OpenWA pre-send: session '{session_id}' restarted "
+                            f"successfully — status is now 'ready'"
+                        )
+                        return
+                    if new_status == "qr_ready":
+                        frappe.throw(
+                            "OpenWA session restarted but requires QR re-scan. "
+                            "Please open the WhatsApp Account form and scan the QR code."
+                        )
+            except Exception:
+                pass
 
+        # Not ready after brief wait — let outbox retry handle it
         frappe.throw(
             f"OpenWA session is {status} and could not be recovered automatically. "
-            "Please open the WhatsApp Account form and click 'Reconnect'."
+            "The message will be retried. You can also click 'Reconnect' on the "
+            "WhatsApp Account form."
         )
 
     def _send_via_openwa(self, account: "WhatsAppAccount", meta_payload: dict) -> None:  # noqa: F821
@@ -128,7 +165,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
 
         base_url = account.get("openwa_base_url").strip("/")
         session_id = account.get("openwa_session_id")
-        api_key = account.get_password("openwa_api_key")
+        api_key = get_api_key(account)
 
         raw_number = format_number(self.to)
         chat_id = f"{raw_number}@c.us" if "@c.us" not in raw_number else raw_number
@@ -139,13 +176,17 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
         }
 
         # --- template via OpenWA send-template endpoint ---
-        if self.template:
+        if self.use_template and self.template:
             openwa_tid = frappe.db.get_value("WhatsApp Templates", self.template, "openwa_template_id")
             if openwa_tid:
                 params: dict[str, str] = {}
                 if self.body_param:
                     try:
-                        params = {f"param{k}": v for k, v in json.loads(self.body_param).items()}
+                        bp = json.loads(self.body_param)
+                        if isinstance(bp, dict):
+                            params = {f"param{k}": v for k, v in bp.items()}
+                        elif isinstance(bp, list):
+                            params = {f"param{i + 1}": v for i, v in enumerate(bp)}
                     except (json.JSONDecodeError, TypeError):
                         pass
                 elif self.template_parameters:
@@ -155,9 +196,16 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     except (json.JSONDecodeError, TypeError):
                         pass
 
+                if not params:
+                    frappe.throw(
+                        f"Template '{self.template}' requires variables but none were provided. "
+                        "Fill in 'Template Variables' on the Bulk WhatsApp Message, "
+                        "or configure the notification's 'Fields' child table."
+                    )
+
                 send_payload = {"chatId": chat_id, "templateId": openwa_tid, "vars": params}
                 frappe.logger().info(f"OpenWA send-template payload: {json.dumps(send_payload, default=str)}")
-                resp = requests.post(
+                resp = _http_session.post(
                     f"{base_url}/api/sessions/{session_id}/messages/send-template",
                     json=send_payload,
                     headers=headers,
@@ -165,7 +213,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 )
             else:
                 message_body = self._translate_template_payload()
-                resp = requests.post(
+                resp = _http_session.post(
                     f"{base_url}/api/sessions/{session_id}/messages/send-text",
                     json={"chatId": chat_id, "text": message_body},
                     headers=headers,
@@ -178,7 +226,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     "OpenWA bridge does not support media replies. "
                     "Send the media and reply separately, or use a Meta account."
                 )
-            resp = requests.post(
+            resp = _http_session.post(
                 f"{base_url}/api/sessions/{session_id}/messages/reply",
                 json={
                     "chatId": chat_id,
@@ -190,7 +238,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             )
 
         elif self.content_type == "text":
-            resp = requests.post(
+            resp = _http_session.post(
                 f"{base_url}/api/sessions/{session_id}/messages/send-text",
                 json={"chatId": chat_id, "text": self.message},
                 headers=headers,
@@ -203,7 +251,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             if self.content_type != "audio":
                 payload["caption"] = self.message
             endpoint = f"send-{self.content_type}"
-            resp = requests.post(
+            resp = _http_session.post(
                 f"{base_url}/api/sessions/{session_id}/messages/{endpoint}",
                 json=payload,
                 headers=headers,
@@ -211,7 +259,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             )
 
         elif self.content_type == "reaction":
-            resp = requests.post(
+            resp = _http_session.post(
                 f"{base_url}/api/sessions/{session_id}/messages/react",
                 json={
                     "chatId": chat_id,
@@ -231,7 +279,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     "Location messages require JSON in the message field: "
                     '{"latitude": -6.2088, "longitude": 106.8456, "description": "...", "address": "..."}'
                 )
-            resp = requests.post(
+            resp = _http_session.post(
                 f"{base_url}/api/sessions/{session_id}/messages/send-location",
                 json={
                     "chatId": chat_id,
@@ -253,7 +301,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     "Contact messages require JSON in the message field: "
                     '{"contact_name": "John Doe", "contact_number": "+1234567890"}'
                 )
-            resp = requests.post(
+            resp = _http_session.post(
                 f"{base_url}/api/sessions/{session_id}/messages/send-contact",
                 json={
                     "chatId": chat_id,
@@ -273,7 +321,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     "Poll messages require JSON in the message field: "
                     '{"name": "Question?", "options": ["Option 1", "Option 2"], "allowMultipleAnswers": false}'
                 )
-            resp = requests.post(
+            resp = _http_session.post(
                 f"{base_url}/api/sessions/{session_id}/messages/send-poll",
                 json={
                     "chatId": chat_id,

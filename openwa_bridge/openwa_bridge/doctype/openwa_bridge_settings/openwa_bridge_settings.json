@@ -1,0 +1,133 @@
+{
+ "name": "OpenWA Bridge Settings",
+ "module": "OpenWA Bridge",
+ "doctype": "DocType",
+ "document_type": "Document",
+ "engine": "InnoDB",
+ "issingle": 1,
+ "fields": [
+  {
+   "fieldname": "general_section",
+   "fieldtype": "Section Break",
+   "label": "General"
+  },
+  {
+   "fieldname": "idempotency_ttl",
+   "fieldtype": "Int",
+   "label": "Idempotency TTL (seconds)",
+   "default": "3600",
+   "description": "How long to remember duplicate webhook events. Default: 3600 (1 hour)."
+  },
+  {
+   "fieldname": "outbox_batch_size",
+   "fieldtype": "Int",
+   "label": "Outbox Batch Size",
+   "default": "25",
+   "description": "Max outbox entries re-enqueued per scheduler cycle. Default: 25."
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "media_section",
+   "fieldtype": "Section Break",
+   "label": "Media"
+  },
+   {
+    "fieldname": "max_media_size_mb",
+    "fieldtype": "Int",
+    "label": "Max Inbound Media Size (MB)",
+    "default": "10",
+    "description": "Maximum size for inbound media attachments. Default: 10 MB."
+   },
+   {
+    "fieldname": "security_section",
+    "fieldtype": "Section Break",
+    "label": "Security"
+   },
+   {
+    "fieldname": "openwa_hmac_strict",
+    "fieldtype": "Check",
+    "label": "Require HMAC Signature",
+    "description": "When checked, incoming webhooks without a valid HMAC signature are rejected."
+   },
+   {
+    "fieldname": "openwa_rate_limit",
+    "fieldtype": "Int",
+    "label": "Webhook Rate Limit (req/min)",
+    "default": "60",
+    "description": "Max inbound webhook requests per minute per IP. Default: 60."
+   },
+   {
+    "fieldname": "column_break_2",
+    "fieldtype": "Column Break"
+   },
+   {
+    "fieldname": "timeout_section",
+    "fieldtype": "Section Break",
+    "label": "Timeouts"
+   },
+   {
+    "fieldname": "openwa_api_timeout",
+    "fieldtype": "Int",
+    "label": "API Timeout (seconds)",
+    "default": "30",
+    "description": "HTTP timeout for OpenWA REST API calls. Default: 30s."
+   },
+   {
+    "fieldname": "openwa_session_start_timeout",
+    "fieldtype": "Int",
+    "label": "Session Start Timeout (seconds)",
+    "default": "60",
+    "description": "HTTP timeout when starting an OpenWA session. Default: 60s."
+   },
+   {
+    "fieldname": "column_break_3",
+    "fieldtype": "Column Break"
+   },
+   {
+    "fieldname": "circuit_breaker_section",
+    "fieldtype": "Section Break",
+    "label": "Circuit Breaker"
+   },
+   {
+    "fieldname": "openwa_cb_threshold",
+    "fieldtype": "Int",
+    "label": "Circuit Breaker Threshold",
+    "default": "5",
+    "description": "Number of consecutive send failures before circuit breaker trips. Default: 5."
+   },
+   {
+    "fieldname": "openwa_cb_cooldown",
+    "fieldtype": "Int",
+    "label": "Circuit Breaker Cooldown (seconds)",
+    "default": "300",
+    "description": "Seconds to wait before retrying after circuit breaker trips. Default: 300."
+   },
+   {
+    "fieldname": "column_break_4",
+    "fieldtype": "Column Break"
+   },
+   {
+    "fieldname": "outbox_section",
+    "fieldtype": "Section Break",
+    "label": "Outbox"
+   },
+   {
+    "fieldname": "openwa_max_outbox_attempts",
+    "fieldtype": "Int",
+    "label": "Max Outbox Retry Attempts",
+    "default": "5",
+    "description": "Max delivery retries per outbox entry before marking as Failed. Default: 5."
+   }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1
+  }
+ ]
+}

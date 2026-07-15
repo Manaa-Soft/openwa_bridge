@@ -165,7 +165,7 @@
         "fieldname":  "openwa_send_type",
         "fieldtype":  "Select",
         "options":  "\nJinja\nTemplate",
-        "insert_after":  "code",
+        "insert_after":  "doctype_event",
         "label":  "OpenWA Send Type"
     },
     {

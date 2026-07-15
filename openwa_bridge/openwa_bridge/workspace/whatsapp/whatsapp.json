@@ -1,0 +1,69 @@
+{
+ "name": "WhatsApp",
+ "module": "OpenWA Bridge",
+ "doctype": "Workspace",
+ "title": "WhatsApp",
+ "icon": "octicon octicon-comment-discussion",
+ "type": "Link",
+ "link": "whatsapp",
+ "app": "openwa_bridge",
+ "label": "WhatsApp",
+ "category": "Modules",
+ "shortcuts": [
+  {
+   "label": "WhatsApp Account",
+   "type": "Link",
+   "link": "Form/WhatsApp Account",
+   "description": "Manage WhatsApp accounts and OpenWA sessions",
+   "onboard": 1,
+   "dependencies": "WhatsApp Account"
+  },
+  {
+   "label": "WhatsApp Message",
+   "type": "Link",
+   "link": "List/WhatsApp Message",
+   "description": "View all WhatsApp messages (incoming and outgoing)",
+   "onboard": 1,
+   "dependencies": "WhatsApp Message"
+  },
+  {
+   "label": "WhatsApp Templates",
+   "type": "Link",
+   "link": "List/WhatsApp Templates",
+   "description": "Manage message templates synced with OpenWA",
+   "dependencies": "WhatsApp Templates"
+  },
+  {
+   "label": "WhatsApp Notification",
+   "type": "Link",
+   "link": "List/WhatsApp Notification",
+   "description": "Configure notification rules for documents",
+   "dependencies": "WhatsApp Notification"
+  },
+  {
+   "label": "OpenWA Outbox",
+   "type": "Link",
+   "link": "List/OpenWA Outbox",
+   "description": "View queued outgoing messages and retry status",
+   "dependencies": "OpenWA Outbox"
+  },
+  {
+   "label": "OpenWA Bridge Settings",
+   "type": "Link",
+   "link": "Form/OpenWA Bridge Settings",
+   "description": "System-wide OpenWA Bridge configuration"
+  }
+ ],
+ "charts": [
+  {
+   "label": "Outbox Status",
+   "chart_name": "Outbox Status",
+   "chart_type": "Donut",
+   "doctype": "OpenWA Outbox",
+   "filters_json": "{}",
+   "is_custom": 0
+  }
+ ],
+ "quick_lists": [],
+ "onboard": 1
+}
