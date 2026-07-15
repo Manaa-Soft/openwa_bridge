@@ -241,12 +241,14 @@ def openwa_to_frappe_vars(text: str) -> str:
 def render_doc_as_image(
     doctype: str, name: str, print_format: str = "Standard",
     letterhead: str | None = None,
+    max_bytes: int = 3 * 1024 * 1024,
 ) -> bytes | None:
-    """Render a Frappe document as a PNG image using a print format.
+    """Render a Frappe document as a JPEG image using a print format.
 
     1. Generate PDF bytes via ``frappe.get_print``.
-    2. Convert the first page to PNG via PyMuPDF (fitz).
-    3. Return PNG bytes, or ``None`` on failure.
+    2. Convert the first page to image via PyMuPDF (fitz).
+    3. Auto-compress: start at 2x zoom, downscale to 1x if over max_bytes.
+    4. Returns JPEG bytes (smaller than PNG), or ``None`` on failure.
     """
     try:
         import fitz  # PyMuPDF
@@ -272,13 +274,39 @@ def render_doc_as_image(
             doc.close()
             return None
 
-        zoom = 2  # 2x for reasonable quality
-        mat = fitz.Matrix(zoom, zoom)
         page = doc.load_page(0)
-        pix = page.get_pixmap(matrix=mat)
-        png_bytes = pix.tobytes("png")
+
+        for zoom in (2, 1):
+            mat = fitz.Matrix(zoom, zoom)
+            pix = page.get_pixmap(matrix=mat)
+            img_bytes = pix.tobytes("png")
+
+            # If within size limit, convert to JPEG for smaller payload
+            if len(img_bytes) <= max_bytes:
+                # Try JPEG conversion for smaller size
+                try:
+                    from PIL import Image
+                    import io
+                    pil_img = Image.open(io.BytesIO(img_bytes))
+                    buf = io.BytesIO()
+                    # Scale down quality if still large
+                    quality = 85 if len(img_bytes) < max_bytes else 60
+                    pil_img.save(buf, format="JPEG", quality=quality, optimize=True)
+                    jpeg_bytes = buf.getvalue()
+                    doc.close()
+                    return jpeg_bytes
+                except Exception:
+                    # Fallback to PNG if PIL not available
+                    doc.close()
+                    return img_bytes
+
+        # Even at 1x it's too large — return it anyway, let OpenWA reject
+        frappe.log_error(
+            title="OpenWA: Large image",
+            message=f"{doctype} {name} rendered at {len(img_bytes)} bytes (1x zoom)",
+        )
         doc.close()
-        return png_bytes
+        return img_bytes
 
     except Exception:
         frappe.log_error(

@@ -118,10 +118,12 @@ class OverrideWhatsAppTemplates(WhatsAppTemplates):
             template_id = result.get("id") or existing_id or ""
             if not template_id:
                 self.openwa_synced = 0
+            self.openwa_template_id = template_id
+            self.openwa_synced = 1 if template_id else 0
             frappe.db.set_value(
                 "WhatsApp Templates",
                 self.name,
-                {"openwa_template_id": template_id, "openwa_synced": 1},
+                {"openwa_template_id": template_id, "openwa_synced": 1 if template_id else 0},
                 update_modified=False,
             )
             frappe.db.commit()
@@ -138,8 +140,11 @@ class OverrideWhatsAppTemplates(WhatsAppTemplates):
             for t in templates:
                 if t.get("name") == name:
                     return t.get("id")
-        except Exception:
-            pass
+        except Exception as e:
+            frappe.log_error(
+                title="OpenWA: Template name lookup failed",
+                message=f"Looking up '{name}': {e}",
+            )
         return None
 
     def _delete_from_openwa(self):

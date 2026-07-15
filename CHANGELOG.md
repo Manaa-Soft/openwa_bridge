@@ -49,6 +49,17 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 - **Duplicate message bug** — notification flow with dynamic header sent duplicate messages (user confirmed resolved)
+- **Atomic image+caption** — dynamic header image failures now raise exception for outbox retry instead of falling through to text send (which created duplicates)
+- **Templates with no variables always threw** — templates without `{{...}}` placeholders now send without requiring variables
+- **Stale template ID after session recreate** — recovery code now looks up template by name on OpenWA, re-creates it if missing, and verifies content matches before returning ID
+- **`_recover_template_id` used non-existent field** — changed `openwa_name` to `actual_name` (the real Frappe field)
+- **`frappe.db.reload_doc` crash** — removed invalid call that crashed template recovery
+- **Recovery returned stale ID** — `_sync_to_openwa()` used `db.set_value()` but didn't update in-memory doc attribute; now sets `self.openwa_template_id` directly
+- **Recovery didn't verify sync success** — now re-reads from DB after sync and checks ID actually changed
+- **`_translate_template_payload` crashed on list body_param** — `.values()` on list raised `AttributeError`; now handles both dict and list formats
+- **`_find_openwa_by_name` silently swallowed errors** — now logs exceptions instead of `pass`
+- **Image size unbounded** — dynamic header images rendered at 2x zoom could exceed WhatsApp limits; now auto-compresses to JPEG with 2x→1x fallback and 3MB cap
+- **Image mimetype hardcoded** — now auto-detects JPEG vs PNG from file header bytes
 - **Broken test imports** — corrected `is_openwa_account` import path, outbox test import path, frappe cache `expires_in_sec` param name
 - **`RedisWrapper.set_value()` `only_set` unsupported** — Frappe's RedisWrapper doesn't support `only_set`. Changed to `get_value` + `set_value` pattern.
 - **Global settings on wrong DocType** — Moved 7 settings (HMAC strict, API timeout, session start timeout, rate limit, CB threshold, CB cooldown, max outbox attempts) from per-account WhatsApp Account to global OpenWA Bridge Settings.

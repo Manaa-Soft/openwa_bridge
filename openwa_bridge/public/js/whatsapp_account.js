@@ -26,13 +26,27 @@ frappe.ui.form.on("WhatsApp Account", {
                 if (s === "ready") {
                     frm.page.set_indicator(__("Connected"), "green");
                     _add_disconnect_button(frm);
+                    _add_manage_events_button(frm);
                 } else if (s === "qr_ready" || s === "initializing") {
                     frm.page.set_indicator(__("Scan QR Code"), "orange");
                     _show_qr_code(frm);
+                } else if (s === "not_found") {
+                    // Session was deleted from OpenWA — stale ID in Frappe
+                    frm.page.set_indicator(__("Session Deleted — Re-setup Required"), "red");
+                    _add_reset_and_setup_button(frm);
+                } else if (s === "error") {
+                    // OpenWA server unreachable
+                    frm.page.set_indicator(__("OpenWA Unreachable"), "red");
+                    _add_reconnect_button(frm);
+                } else if (s === "failed") {
+                    // Session is corrupted/failed — reconnect will delete + recreate
+                    frm.page.set_indicator(__("Session Failed — Reconnect to Fix"), "red");
+                    _add_reconnect_button(frm);
                 } else {
-                    // disconnected / created / failed / unknown
+                    // disconnected / created / unknown
                     frm.page.set_indicator(__("Disconnected"), "red");
                     _add_reconnect_button(frm);
+                    _add_manage_events_button(frm);
                 }
             },
         });
@@ -88,7 +102,38 @@ function _add_reconnect_button(frm) {
     frm.add_custom_button(
         __("Reconnect"),
         () => {
-            _show_qr_code(frm);
+            frappe.confirm(
+                __("Reconnect the WhatsApp session? If the session is stuck, the app will force-kill the crashed process and restart it (no QR re-scan needed). If that fails, the session will be recreated."),
+                () => { _show_qr_code(frm); }
+            );
+        },
+        __("OpenWA")
+    );
+}
+
+function _add_reset_and_setup_button(frm) {
+    frm.add_custom_button(
+        __("Setup OpenWA (New Session)"),
+        () => {
+            frappe.confirm(
+                __("The old session was deleted from OpenWA. Clear the stale session ID and create a new one?"),
+                () => {
+                    frappe.call({
+                        method: "openwa_bridge.whatsapp_account.reset_openwa_session",
+                        args: { account_name: frm.doc.name },
+                        freeze: true,
+                        freeze_message: __("Resetting session..."),
+                        callback() {
+                            frappe.show_alert({
+                                message: __("Session ID cleared. Starting new setup..."),
+                                indicator: "green",
+                            });
+                            // Reload to clear stale ID, then run setup
+                            frm.reload_doc();
+                        },
+                    });
+                }
+            );
         },
         __("OpenWA")
     );
@@ -191,4 +236,97 @@ function _clear_qr_timer(frm) {
         clearInterval(frm._qr_refresh_timer);
         frm._qr_refresh_timer = null;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Webhook Events Management
+// ---------------------------------------------------------------------------
+
+const _ALL_WEBHOOK_EVENTS = [
+    { event: "message.received", label: __("Message Received"), desc: __("When a message is received") },
+    { event: "message.sent", label: __("Message Sent"), desc: __("When a message is sent") },
+    { event: "message.ack", label: __("Message ACK"), desc: __("Message acknowledgment status") },
+    { event: "message.failed", label: __("Message Failed"), desc: __("When a message fails to send") },
+    { event: "message.revoked", label: __("Message Revoked"), desc: __("When a message is deleted/revoked") },
+    { event: "message.reaction", label: __("Message Reaction"), desc: __("When a reaction is received") },
+    { event: "session.status", label: __("Session Status"), desc: __("Session status changes") },
+    { event: "session.qr", label: __("Session QR"), desc: __("When QR code is generated") },
+    { event: "session.authenticated", label: __("Session Authenticated"), desc: __("When session is authenticated") },
+    { event: "session.disconnected", label: __("Session Disconnected"), desc: __("When a session disconnects") },
+    { event: "group.join", label: __("Group Join"), desc: __("When someone joins a group") },
+    { event: "group.leave", label: __("Group Leave"), desc: __("When someone leaves a group") },
+    { event: "group.update", label: __("Group Update"), desc: __("When group info is updated") },
+    { event: "*", label: __("All Events"), desc: __("Subscribe to all events (wildcard)") },
+];
+
+function _add_manage_events_button(frm) {
+    frm.add_custom_button(__("Manage Webhook Events"), () => {
+        _show_events_dialog(frm);
+    }, __("OpenWA"));
+}
+
+function _show_events_dialog(frm) {
+    let current_events = [];
+    try {
+        current_events = JSON.parse(frm.doc.openwa_webhook_events || "[]");
+    } catch (e) {
+        current_events = [];
+    }
+
+    const is_wildcard = current_events.includes("*");
+
+    let rows = _ALL_WEBHOOK_EVENTS.map((item) => {
+        const checked = is_wildcard || current_events.includes(item.event);
+        return `
+            <div style="display:flex; align-items:center; padding:8px 12px; border-bottom:1px solid #e5e7eb;">
+                <input type="checkbox" class="openwa-event-cb" value="${item.event}"
+                    ${checked ? "checked" : ""}
+                    style="margin-right:12px; width:18px; height:18px; cursor:pointer;" />
+                <div>
+                    <div style="font-weight:500; font-size:13px;">${item.label}</div>
+                    <div style="color:#6b7280; font-size:11px;">${item.desc} <code style="font-size:10px;">${item.event}</code></div>
+                </div>
+            </div>
+        `;
+    }).join("");
+
+    const d = new frappe.ui.Dialog({
+        title: __("Manage Webhook Events"),
+        size: "large",
+        fields: [
+            {
+                fieldtype: "HTML",
+                fieldname: "events_html",
+                options: `
+                    <div style="margin-bottom:12px; padding:10px; background:#f3f4f6; border-radius:6px; font-size:12px; color:#374151;">
+                        ${__("Select which events OpenWA should send to this webhook URL. Changes take effect when you save the account.")}
+                    </div>
+                    <div style="border:1px solid #d1d5db; border-radius:6px; overflow:hidden;">
+                        ${rows}
+                    </div>
+                `,
+            },
+        ],
+        primary_action_label: __("Apply"),
+        primary_action: () => {
+            const selected = [];
+            d.$wrapper.find(".openwa-event-cb:checked").each(function () {
+                selected.push($(this).val());
+            });
+
+            if (selected.length === 0) {
+                frappe.msgprint(__("Please select at least one event."));
+                return;
+            }
+
+            frm.set_value("openwa_webhook_events", JSON.stringify(selected));
+            d.hide();
+            frappe.show_alert({
+                message: __("Selected {0} event(s). Save the account to apply.", [selected.length]),
+                indicator: "blue",
+            });
+        },
+    });
+
+    d.show();
 }

@@ -124,8 +124,8 @@ def _run_health_check() -> None:
             _set_account_status(account_name, "ready")
             continue
 
-        # 3. If disconnected/created/failed, attempt restart
-        if status in ("disconnected", "created", "failed"):
+        # 3. If disconnected/created, attempt restart
+        if status in ("disconnected", "created"):
             frappe.logger().info(
                 f"OpenWA health check: session '{session_id}' on "
                 f"'{account_name}' is {status} — attempting restart"
@@ -145,6 +145,79 @@ def _run_health_check() -> None:
                     f"OpenWA health check: failed to restart session "
                     f"'{session_id}' on '{account_name}'"
                 )
+
+        # 4. Failed session — force-kill, then delete+recreate as last resort
+        elif status == "failed":
+            frappe.logger().info(
+                f"OpenWA health check: session '{session_id}' on "
+                f"'{account_name}' is failed — attempting recovery"
+            )
+            # Step 1: Try force-kill (keeps session data, no QR rescan)
+            try:
+                _http_session.post(
+                    f"{base_url.rstrip('/')}/api/sessions/{session_id}/force-kill",
+                    headers={"X-API-Key": api_key},
+                    timeout=30,
+                )
+                time.sleep(2)
+                _start_session(base_url, session_id, api_key)
+                time.sleep(3)
+                session = _check_session_status(base_url, session_id, api_key)
+                if session:
+                    status = session.get("status", status)
+            except Exception:
+                pass
+
+            # Step 2: If still failed — delete and recreate
+            if status == "failed":
+                frappe.logger().info(
+                    f"OpenWA health check: force-kill didn't help for "
+                    f"'{session_id}' on '{account_name}' — recreating session"
+                )
+                try:
+                    # Delete old session
+                    _http_session.delete(
+                        f"{base_url.rstrip('/')}/api/sessions/{session_id}",
+                        headers={"X-API-Key": api_key},
+                        timeout=15,
+                    )
+                except Exception:
+                    pass
+
+                # Create new session with same name
+                session_name = account_name.strip().lower().replace(" ", "-")
+                import re as _re
+                session_name = _re.sub(r"[^a-z0-9-]", "-", session_name)
+                session_name = _re.sub(r"-+", "-", session_name).strip("-")
+                if len(session_name) < 3:
+                    session_name = (session_name + "---")[:3]
+
+                try:
+                    resp = _http_session.post(
+                        f"{base_url.rstrip('/')}/api/sessions",
+                        json={"name": session_name},
+                        headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+                        timeout=15,
+                    )
+                    if resp.status_code in (200, 201):
+                        new_data = resp.json()
+                        new_id = new_data.get("id")
+                        if new_id:
+                            frappe.db.set_value(
+                                "WhatsApp Account", account_name,
+                                "openwa_session_id", new_id,
+                            )
+                            session_id = new_id
+                            _start_session(base_url, session_id, api_key)
+                            time.sleep(3)
+                            session = _check_session_status(base_url, session_id, api_key)
+                            if session:
+                                status = session.get("status", status)
+                except Exception as exc:
+                    frappe.logger().warning(
+                        f"OpenWA health check: failed to recreate session "
+                        f"for '{account_name}': {exc}"
+                    )
 
         _set_account_status(account_name, status)
 
@@ -319,10 +392,11 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
     chat_id = f"{raw_number}@c.us" if "@c.us" not in raw_number else raw_number
 
     url = f"{base_url}/api/sessions/{session_id}/messages/send-image"
+    mimetype = "image/jpeg" if image_bytes[:3] == b'\xff\xd8\xff' else "image/png"
     payload = {
         "chatId": chat_id,
         "base64": base64.b64encode(image_bytes).decode("utf-8"),
-        "mimetype": "image/png",
+        "mimetype": mimetype,
     }
     if caption:
         payload["caption"] = caption
@@ -341,6 +415,7 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
                     f"Template {tmpl.name}, Doc {ref_doctype} {ref_name}\n"
                     f"POST {url}\n"
                     f"Status: {img_resp.status_code}\n"
+                    f"Image size: {len(image_bytes)} bytes ({mimetype})\n"
                     f"Response: {img_resp.text[:2000]}"
                 ),
             )
@@ -357,14 +432,31 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
 def _send_outbox_message(msg, account, outbox) -> None:  # noqa: C901
     """Actually send the message via OpenWA. Reuses the dispatcher from whatsapp_message."""
 
-    # Phase 1: Send dynamic header image with rendered text as caption
-    image_sent = _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
+    has_dynamic_header = False
+    if msg.template:
+        try:
+            tmpl = frappe.get_doc("WhatsApp Templates", msg.template)
+            has_dynamic_header = bool(
+                getattr(tmpl, "openwa_dynamic_header", False)
+                and getattr(tmpl, "openwa_print_format", None)
+            )
+        except Exception:
+            pass
 
-    # Phase 2: If image was sent with caption, we're done
-    if image_sent:
+    if has_dynamic_header:
+        # Image+caption is ATOMIC. If the image fails, raise to trigger
+        # outbox retry — never fall through to send-text, which creates
+        # a duplicate (the caption already contains the full message).
+        image_sent = _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
+        if not image_sent:
+            raise Exception(
+                "Dynamic header image failed to send. "
+                "The outbox entry will be retried. "
+                "Check OpenWA session status and error logs."
+            )
         return
 
-    # Phase 3: No image — send text/template message directly
+    # No dynamic header — send text/template message directly
     from frappe_whatsapp.utils import format_number
 
     # msg is already an OverrideWhatsAppMessage instance via override_doctype_class.

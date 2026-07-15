@@ -138,18 +138,51 @@ OpenWA Bridge connects the [frappe\_whatsapp](https://github.com/Shridar2101/fra
 
 ### 1. Install OpenWA Gateway
 
-Follow the [OpenWA documentation](https://docs.openwa.dev/) to set up the gateway on your server.
+Follow the [OpenWA Production Setup](https://github.com/Manaa-Soft/openwa_bridge/wiki/OpenWA-Production-Setup) guide for a full production deployment (Docker or Bare Metal), or install quickly:
 
 ```bash
-# Example: install OpenWA via npm
+# Quick install (development)
 npm install -g @open-wa/wa-automate
+openwa --port 2785
 ```
+
+**Production** — use systemd to keep OpenWA running:
+
+```bash
+cd ~/OpenWA
+npm ci && npm run build
+
+sudo tee /etc/systemd/system/openwa.service << 'EOF'
+[Unit]
+Description=OpenWA WhatsApp API
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/your-user/OpenWA
+ExecStart=/usr/bin/node dist/main
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable openwa
+sudo systemctl restart openwa
+```
+
+See [OpenWA Production Setup](https://github.com/Manaa-Soft/openwa_bridge/wiki/OpenWA-Production-Setup) for PostgreSQL, Docker Compose, Nginx, and HTTPS configuration.
 
 ### 2. Connect your WhatsApp number
 
 ```bash
 # Start OpenWA and scan the QR code with your phone
 openwa --port 2785
+# Or use the Frappe Desk: WhatsApp Account → Setup OpenWA → Scan QR
 ```
 
 ### 3. Install OpenWA Bridge
@@ -174,10 +207,10 @@ bench pip install PyMuPDF
 
 ### Auto-Reconnect (Scheduled Tasks)
 
-The app includes scheduled tasks that automatically restart disconnected OpenWA sessions:
+The app includes scheduled tasks that automatically manage OpenWA sessions:
 
-- **Hourly**: Checks all OpenWA accounts — restarts any disconnected sessions
-- **Daily**: Backup health check
+- **Hourly**: Checks all OpenWA accounts — force-kills failed sessions (keeps auth, no QR re-scan), then deletes and recreates as last resort
+- **Daily**: Cleanup of old outbox entries
 
 The scheduler is enabled in `hooks.py`. Frappe's worker must be running for scheduled tasks to execute:
 
@@ -226,7 +259,7 @@ Create a webhook in OpenWA to forward inbound messages to Frappe:
 If OpenWA and Frappe are on the same server, allow the Frappe IP in OpenWA's `.env`:
 
 ```bash
-# In OpenWA's .env file (typically OpenWA/data/.env.generated)
+# In ~/OpenWA/.env
 SSRF_ALLOWED_HOSTS=192.168.1.15,localhost
 ```
 
@@ -536,7 +569,7 @@ This error occurs when `frappe_whatsapp`'s wildcard doc_events hook fires `send_
 ### Setup timeout / "Cannot connect to OpenWA"
 
 1. Verify OpenWA is running: `curl http://localhost:2785/api/sessions`
-2. If OpenWA is down, restart it: `cd ~/OpenWA && pm2 restart openwa-gateway`
+2. If OpenWA is down, restart it: `sudo systemctl restart openwa`
 3. The setup flow has increased timeouts (30s for API calls, 60s for session start)
 4. Check that `openwa_base_url` in the WhatsApp Account matches your OpenWA address
 
@@ -555,9 +588,42 @@ This error occurs when `frappe_whatsapp`'s wildcard doc_events hook fires `send_
 4. The pre-send check auto-restarts sessions on next message attempt
 5. If session shows "requires QR re-scan", open WhatsApp Account form and scan again
 
+### Session connects then disconnects after 1-2 minutes
+
+**Cause**: OpenWA auto-downloads media from all incoming messages. On reconnect, the catch-up flood of media downloads overwhelms Chrome/Puppeteer.
+
+**Fix**: Disable media pre-download in OpenWA's `.env`:
+
+```bash
+# In ~/OpenWA/.env
+MEDIA_DOWNLOAD_ENABLED=false
+STORE_EPHEMERAL_MESSAGES=false
+
+# Delete generated env if it exists
+rm -f ~/OpenWA/data/.env.generated
+
+# Restart
+sudo systemctl restart openwa
+```
+
+Our bridge handles media on-demand via webhooks, so you lose nothing. The health check also now automatically recovers failed sessions (force-kill → delete+recreate).
+
+### "Could not find Chrome" error
+
+Puppeteer looks for Chrome in the **running user's** cache (`/root/.cache/puppeteer/` vs `/home/you/.cache/puppeteer/`).
+
+**Fix** (pick one):
+1. Change systemd `User=root` to `User=your-username`
+2. Set `PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium` in OpenWA's `.env`
+3. Install Chrome for root: `sudo npx puppeteer browsers install chrome`
+
 ### Template translation errors
 
 The app includes fallback logic -- if `frappe.get_doc()` fails, it falls back to `frappe.db.get_value()` for template lookup. Check the error log if templates aren't rendering correctly.
+
+---
+
+For the full troubleshooting guide, see the [Troubleshooting](https://github.com/Manaa-Soft/openwa_bridge/wiki/Troubleshooting) wiki page.
 
 ---
 
