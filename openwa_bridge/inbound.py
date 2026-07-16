@@ -11,6 +11,7 @@ from openwa_bridge.utils import (
     strip_jid_suffix,
     openwa_type_to_frappe,
     get_account_setting,
+    openwa_api,
 )
 
 MAX_MEDIA_SIZE_MB = 10
@@ -152,6 +153,11 @@ def _handle_inbound_message(
     sender_phone: str = msg_data.get("senderPhone") or ""
     if sender_phone and sender_phone.strip().isdigit():
         phone_number = sender_phone.strip()
+    elif "@lid" in sender_jid or (msg_data.get("isGroup", False) and "@lid" in (msg_data.get("author", "") or "")):
+        # Fallback: resolve LID→phone via OpenWA contact API
+        resolved = _resolve_lid_phone(session_id, sender_jid)
+        if resolved:
+            phone_number = resolved
 
     if not whatsapp_account:
         whatsapp_account = _resolve_account_by_session(session_id)
@@ -497,3 +503,41 @@ def _create_communication(
             title="OpenWA: Failed to create Communication",
             message=f"Msg: {message_doc.name}, Contact: {contact_name}\n{frappe.get_traceback()}",
         )
+
+
+# ── LID→phone resolution ────────────────────────────────────────────
+
+
+def _resolve_lid_phone(session_id: str, lid_jid: str) -> str | None:
+    """Resolve a WhatsApp LID (privacy ID) to a real phone number via OpenWA API.
+
+    Calls GET /api/sessions/:sessionId/contacts/:contactId/phone
+    Returns the phone digits string, or None on failure.
+    """
+    if not session_id or not lid_jid:
+        return None
+
+    whatsapp_account = _resolve_account_by_session(session_id)
+    if not whatsapp_account:
+        return None
+
+    try:
+        result = openwa_api(
+            whatsapp_account,
+            "GET",
+            f"/contacts/{lid_jid}/phone",
+            timeout=5,
+        )
+        phone = (result or {}).get("phone")
+        if phone and phone.strip().isdigit():
+            frappe.logger().info(
+                f"OpenWA: Resolved LID {lid_jid} → {phone}"
+            )
+            return phone.strip()
+    except Exception:
+        frappe.logger().debug(
+            f"OpenWA: LID resolution failed for {lid_jid} "
+            f"(session {session_id}), using raw JID"
+        )
+
+    return None
