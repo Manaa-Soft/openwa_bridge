@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import frappe
 import base64
+import hashlib
 
 from frappe_whatsapp.utils import get_whatsapp_account, format_number
 
@@ -11,6 +12,7 @@ from openwa_bridge.utils import (
     strip_jid_suffix,
     openwa_type_to_frappe,
     get_account_setting,
+    openwa_api,
 )
 
 MAX_MEDIA_SIZE_MB = 10
@@ -52,7 +54,7 @@ def receive_openwa_message() -> dict[str, str]:
     whatsapp_account = _resolve_account_by_session(session_id)
 
     # ── Rate limiting (configurable per account) ──
-    rate_limit = get_account_setting(whatsapp_account, "openwa_rate_limit", 60) if whatsapp_account else 60
+    rate_limit = get_account_setting(whatsapp_account, "openwa_rate_limit", 600) if whatsapp_account else 600
     forwarded_for = frappe.request.headers.get("X-Forwarded-For", "")
     client_ip = forwarded_for.split(",")[0].strip() if forwarded_for else (
         frappe.request.remote_addr or "unknown"
@@ -94,6 +96,17 @@ def receive_openwa_message() -> dict[str, str]:
     # ── Idempotency check ──
     idempotency_key = frappe.request.headers.get("X-OpenWA-Idempotency-Key", "")
     if idempotency_key:
+        # OpenWA generates idempotency keys as `msg_{sessionId}_{messageId}`.
+        # When the engine provides an empty/null messageId, OpenWA falls back to
+        # "unknown", producing identical keys for DIFFERENT rapid-fire messages
+        # (e.g. `msg_<sid>_unknown_<webhookId>`).  This causes the second message
+        # to be silently deduplicated.  To prevent that, we augment the key with
+        # the message body + sender when the key carries the "unknown" sentinel.
+        if "_unknown_" in idempotency_key and event_type == "message.received":
+            body = event_data.get("body", "")
+            sender = event_data.get("from", "")
+            content_hash = hashlib.md5(f"{body}:{sender}".encode()).hexdigest()[:12]
+            idempotency_key = f"{idempotency_key}_{content_hash}"
         cache_key = f"openwa_idempotent:{idempotency_key}"
         idempotency_ttl = frappe.db.get_single_value("OpenWA Bridge Settings", "idempotency_ttl") or 3600
         existing = frappe.cache().get_value(cache_key)
@@ -148,12 +161,30 @@ def _handle_inbound_message(
         if author_jid and author_jid != sender_jid:
             phone_number = strip_jid_suffix(author_jid)
 
+    # Prefer real phone from OpenWA's LID resolution when available
+    sender_phone: str = msg_data.get("senderPhone") or ""
+    if sender_phone and sender_phone.strip().isdigit():
+        phone_number = sender_phone.strip()
+    elif "@lid" in sender_jid or (msg_data.get("isGroup", False) and "@lid" in (msg_data.get("author", "") or "")):
+        # Try cache first, then API — but never block the handler
+        cached = _get_cached_lid_phone(session_id, sender_jid)
+        if cached:
+            phone_number = cached
+        # If not cached, message saves with LID digits; resolve later via background job
+        _queue_lid_resolution(session_id, sender_jid)
+
+    # Back-fill LID recipients: if the raw LID digits are in a Recipient List, replace with real phone
+    _fix_lid_recipients(sender_jid, phone_number)
+
     if not whatsapp_account:
         whatsapp_account = _resolve_account_by_session(session_id)
     if not whatsapp_account:
         frappe.log_error(
             title="OpenWA: No matching WhatsApp Account",
             message=f"Session: {session_id}, Sender: {phone_number}",
+        )
+        frappe.logger().info(
+            f"OpenWA: DROPPED - no account for session={session_id} from={phone_number}"
         )
         return
 
@@ -195,23 +226,49 @@ def _handle_inbound_message(
             f"({location.get('latitude')}, {location.get('longitude')})"
         )
 
-    doc = frappe.get_doc(doc_data)
-    doc.insert(ignore_permissions=True)
+    try:
+        doc = frappe.get_doc(doc_data)
+        doc.insert(ignore_permissions=True)
+    except Exception:
+        frappe.log_error(
+            title="OpenWA: WhatsApp Message insert FAILED",
+            message=(
+                f"From: {phone_number}, Msg: {message_body[:100]}\n"
+                f"Doc data: {doc_data}\n{frappe.get_traceback()}"
+            ),
+        )
+        return
 
     frappe.logger().info(
         f"OpenWA inbound: created WhatsApp Message {doc.name} from {phone_number}"
     )
 
-    # Attach media if present
-    media_info = msg_data.get("media")
-    if isinstance(media_info, dict) and not media_info.get("omitted"):
-        _attach_openwa_media(doc, media_info)
+    # These are best-effort — a failure here should NOT prevent the message from being saved
+    try:
+        media_info = msg_data.get("media")
+        if isinstance(media_info, dict) and not media_info.get("omitted"):
+            _attach_openwa_media(doc, media_info)
+    except Exception:
+        frappe.log_error(
+            title="OpenWA: Media attach failed",
+            message=f"Msg: {doc.name}\n{frappe.get_traceback()}",
+        )
 
-    # Create / update WhatsApp Profile
-    _ensure_whatsapp_profile(phone_number, profile_name, whatsapp_account.name)
+    try:
+        _ensure_whatsapp_profile(phone_number, profile_name, whatsapp_account.name)
+    except Exception:
+        frappe.log_error(
+            title="OpenWA: Profile create failed",
+            message=f"Phone: {phone_number}\n{frappe.get_traceback()}",
+        )
 
-    # Create Communication and optionally Lead/Contact
-    _create_communication(doc, phone_number, profile_name)
+    try:
+        _create_communication(doc, phone_number, profile_name)
+    except Exception:
+        frappe.log_error(
+            title="OpenWA: Communication create failed",
+            message=f"Msg: {doc.name}, Contact: {phone_number}\n{frappe.get_traceback()}",
+        )
 
 
 # ── Media handler ────────────────────────────────────────────────────
@@ -477,7 +534,7 @@ def _create_communication(
         communication = frappe.get_doc({
             "doctype": "Communication",
             "communication_type": "Communication",
-            "communication_medium": "WhatsApp",
+            "communication_medium": "Chat",
             "subject": subject,
             "content": message_doc.message or "",
             "reference_doctype": "WhatsApp Message",
@@ -492,3 +549,200 @@ def _create_communication(
             title="OpenWA: Failed to create Communication",
             message=f"Msg: {message_doc.name}, Contact: {contact_name}\n{frappe.get_traceback()}",
         )
+
+
+# ── LID→phone resolution ────────────────────────────────────────────
+
+_LID_CACHE_TTL = 86400  # 24 hours
+
+
+def _get_cached_lid_phone(session_id: str, lid_jid: str) -> str | None:
+    """Check in-memory/Redis cache for a previously resolved LID→phone."""
+    cache_key = f"openwa_lid::{session_id}::{lid_jid}"
+    return frappe.cache().get_value(cache_key)
+
+
+def _set_cached_lid_phone(session_id: str, lid_jid: str, phone: str) -> None:
+    """Cache a resolved LID→phone mapping."""
+    cache_key = f"openwa_lid::{session_id}::{lid_jid}"
+    frappe.cache().set_value(cache_key, phone, expires_in_sec=_LID_CACHE_TTL)
+
+
+def _queue_lid_resolution(session_id: str, lid_jid: str) -> None:
+    """Enqueue a background job to resolve LID→phone (non-blocking)."""
+    cache_key = f"openwa_lid::{session_id}::{lid_jid}"
+    if frappe.cache().get_value(cache_key) is not None:
+        return  # already resolved recently
+    # Dedup: don't queue the same LID twice within 60 seconds
+    dedup_key = f"openwa_lid_queued::{session_id}::{lid_jid}"
+    if frappe.cache().get_value(dedup_key):
+        return
+    frappe.cache().set_value(dedup_key, 1, expires_in_sec=60)
+    frappe.enqueue(
+        "openwa_bridge.inbound._resolve_lid_phone_background",
+        queue="short",
+        session_id=session_id,
+        lid_jid=lid_jid,
+    )
+
+
+def _resolve_lid_phone_background(session_id: str, lid_jid: str) -> None:
+    """Background job: resolve LID→phone and update cached data + recipient lists."""
+    phone = _resolve_lid_phone(session_id, lid_jid)
+    if phone:
+        _set_cached_lid_phone(session_id, lid_jid, phone)
+        _fix_lid_recipients(lid_jid, phone)
+
+
+def _resolve_lid_phone(session_id: str, lid_jid: str) -> str | None:
+    """Resolve a WhatsApp LID (privacy ID) to a real phone number via OpenWA API.
+
+    Calls GET /api/sessions/:sessionId/contacts/:contactId/phone
+    Returns the phone digits string, or None on failure.
+    """
+    if not session_id or not lid_jid:
+        return None
+
+    whatsapp_account = _resolve_account_by_session(session_id)
+    if not whatsapp_account:
+        return None
+
+    try:
+        result = openwa_api(
+            whatsapp_account,
+            "GET",
+            f"/contacts/{lid_jid}/phone",
+            timeout=5,
+        )
+        phone = (result or {}).get("phone")
+        if phone and phone.strip().isdigit():
+            frappe.logger().info(
+                f"OpenWA: Resolved LID {lid_jid} → {phone}"
+            )
+            return phone.strip()
+    except Exception:
+        frappe.logger().debug(
+            f"OpenWA: LID resolution failed for {lid_jid} "
+            f"(session {session_id}), using raw JID"
+        )
+
+    return None
+
+
+def _fix_lid_recipients(sender_jid: str, resolved_phone: str) -> None:
+    """Replace LID numbers in WhatsApp Recipient List with real phone numbers.
+
+    When a LID sender is resolved to a real phone, scan Recipient Lists for
+    entries that still hold the raw LID digits as mobile_number and update them.
+    """
+    lid_digits = strip_jid_suffix(sender_jid)
+    if not resolved_phone or not lid_digits or resolved_phone == lid_digits:
+        return
+    if "@lid" not in sender_jid:
+        return
+
+    try:
+        if not frappe.db.exists("DocType", "WhatsApp Recipient"):
+            return
+        recipients = frappe.get_all(
+            "WhatsApp Recipient",
+            filters={"mobile_number": lid_digits},
+            fields=["name", "parent", "mobile_number"],
+        )
+        for r in recipients:
+            frappe.db.set_value("WhatsApp Recipient", r.name, "mobile_number", resolved_phone)
+            frappe.logger().info(
+                f"OpenWA: Fixed recipient {r.name} in list {r.parent}: "
+                f"{lid_digits} → {resolved_phone}"
+            )
+    except Exception:
+        frappe.logger().debug(
+            f"OpenWA: Could not fix recipients for LID {lid_digits}"
+        )
+
+
+# ── Bulk LID fix (one-time) ────────────────────────────────────────
+
+
+def _is_likely_lid(number: str) -> bool:
+    """Heuristic: a number is likely a LID if it doesn't match a phone pattern.
+
+    Real phone numbers (MSISDN) are 7-15 digits. LID numbers tend to be
+    15+ digits or start with patterns like 120xxx.
+    """
+    if not number or not number.isdigit():
+        return False
+    # LIDs from WhatsApp are typically very long or start with known LID prefixes
+    if len(number) > 15:
+        return True
+    if number.startswith("120") and len(number) > 13:
+        return True
+    return False
+
+
+@frappe.whitelist()
+def bulk_fix_lid_recipients(session_id: str | None = None) -> dict:
+    """One-time fix: resolve all LID numbers in WhatsApp Recipient Lists.
+
+    Call from bench console or API:
+        bench --site your-site execute openwa_bridge.inbound.bulk_fix_lid_recipients
+
+    Returns stats: {fixed: int, failed: int, skipped: int}
+    """
+    if not session_id:
+        # Pick the first active OpenWA session
+        account = frappe.db.get_value(
+            "WhatsApp Account",
+            {"openwa_enabled": 1, "status": "Active"},
+            ["name", "openwa_session_id"],
+            as_dict=True,
+        )
+        if not account or not account.openwa_session_id:
+            return {"fixed": 0, "failed": 0, "skipped": 0, "error": "No active OpenWA session found"}
+        session_id = account.openwa_session_id
+        whatsapp_account = frappe.get_doc("WhatsApp Account", account.name)
+    else:
+        whatsapp_account = _resolve_account_by_session(session_id)
+
+    if not whatsapp_account:
+        return {"fixed": 0, "failed": 0, "skipped": 0, "error": "Cannot resolve WhatsApp Account"}
+
+    recipients = frappe.get_all(
+        "WhatsApp Recipient",
+        fields=["name", "mobile_number", "recipient_name"],
+    )
+
+    fixed = 0
+    failed = 0
+    skipped = 0
+
+    for r in recipients:
+        num = r.mobile_number or ""
+        if not _is_likely_lid(num):
+            skipped += 1
+            continue
+
+        lid_jid = f"{num}@lid"
+        try:
+            result = openwa_api(
+                whatsapp_account,
+                "GET",
+                f"/contacts/{lid_jid}/phone",
+                timeout=5,
+            )
+            phone = (result or {}).get("phone")
+            if phone and phone.strip().isdigit() and phone.strip() != num:
+                frappe.db.set_value("WhatsApp Recipient", r.name, "mobile_number", phone.strip())
+                fixed += 1
+                frappe.logger().info(
+                    f"OpenWA bulk fix: {r.name} ({r.recipient_name}): "
+                    f"{num} → {phone.strip()}"
+                )
+            else:
+                skipped += 1
+        except Exception:
+            failed += 1
+            frappe.logger().debug(f"OpenWA bulk fix: failed for {r.name} ({num})")
+
+    frappe.db.commit()
+    return {"fixed": fixed, "failed": failed, "skipped": skipped}
