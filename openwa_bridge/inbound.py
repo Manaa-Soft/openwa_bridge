@@ -159,6 +159,9 @@ def _handle_inbound_message(
         if resolved:
             phone_number = resolved
 
+    # Back-fill LID recipients: if the raw LID digits are in a Recipient List, replace with real phone
+    _fix_lid_recipients(sender_jid, phone_number)
+
     if not whatsapp_account:
         whatsapp_account = _resolve_account_by_session(session_id)
     if not whatsapp_account:
@@ -541,3 +544,35 @@ def _resolve_lid_phone(session_id: str, lid_jid: str) -> str | None:
         )
 
     return None
+
+
+def _fix_lid_recipients(sender_jid: str, resolved_phone: str) -> None:
+    """Replace LID numbers in WhatsApp Recipient List with real phone numbers.
+
+    When a LID sender is resolved to a real phone, scan Recipient Lists for
+    entries that still hold the raw LID digits as mobile_number and update them.
+    """
+    lid_digits = strip_jid_suffix(sender_jid)
+    if not resolved_phone or not lid_digits or resolved_phone == lid_digits:
+        return
+    if "@lid" not in sender_jid:
+        return
+
+    try:
+        recipients = frappe.get_all(
+            "WhatsApp Recipient",
+            filters={"mobile_number": lid_digits},
+            fields=["name", "parent", "mobile_number"],
+        )
+        for r in recipients:
+            frappe.db.set_value("WhatsApp Recipient", r.name, "mobile_number", resolved_phone)
+            frappe.logger().info(
+                f"OpenWA: Fixed recipient {r.name} in list {r.parent}: "
+                f"{lid_digits} → {resolved_phone}"
+            )
+        if recipients:
+            frappe.db.commit()
+    except Exception:
+        frappe.logger().debug(
+            f"OpenWA: Could not fix recipients for LID {lid_digits}"
+        )
