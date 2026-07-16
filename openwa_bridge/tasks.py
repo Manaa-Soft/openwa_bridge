@@ -471,17 +471,19 @@ def _send_outbox_message(msg, account, outbox) -> None:  # noqa: C901
             pass
 
     if has_dynamic_header:
-        # Image+caption is ATOMIC. If the image fails, raise to trigger
-        # outbox retry — never fall through to send-text, which creates
-        # a duplicate (the caption already contains the full message).
+        # Try sending image+caption.  If the image fails (e.g. OpenWA 500),
+        # fall back to text/template so the message is still delivered.
         image_sent = _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
-        if not image_sent:
-            raise Exception(
-                "Dynamic header image failed to send. "
-                "The outbox entry will be retried. "
-                "Check OpenWA session status and error logs."
-            )
-        return
+        if image_sent:
+            return
+        frappe.log_error(
+            title="OpenWA: Dynamic header failed, falling back to text",
+            message=(
+                f"Msg {msg.name}, Template {msg.template}: "
+                "image send failed, falling back to text/template delivery."
+            ),
+        )
+        # Fall through to text/template send below
 
     # No dynamic header — send text/template message directly
     from frappe_whatsapp.utils import format_number
