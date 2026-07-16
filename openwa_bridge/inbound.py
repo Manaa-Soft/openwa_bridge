@@ -148,6 +148,11 @@ def _handle_inbound_message(
         if author_jid and author_jid != sender_jid:
             phone_number = strip_jid_suffix(author_jid)
 
+    # Prefer real phone from OpenWA's LID resolution when available
+    sender_phone: str = msg_data.get("senderPhone") or ""
+    if sender_phone and sender_phone.strip().isdigit():
+        phone_number = sender_phone.strip()
+
     if not whatsapp_account:
         whatsapp_account = _resolve_account_by_session(session_id)
     if not whatsapp_account:
