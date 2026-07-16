@@ -559,6 +559,8 @@ def _fix_lid_recipients(sender_jid: str, resolved_phone: str) -> None:
         return
 
     try:
+        if not frappe.db.exists("DocType", "WhatsApp Recipient"):
+            return
         recipients = frappe.get_all(
             "WhatsApp Recipient",
             filters={"mobile_number": lid_digits},
@@ -570,8 +572,6 @@ def _fix_lid_recipients(sender_jid: str, resolved_phone: str) -> None:
                 f"OpenWA: Fixed recipient {r.name} in list {r.parent}: "
                 f"{lid_digits} → {resolved_phone}"
             )
-        if recipients:
-            frappe.db.commit()
     except Exception:
         frappe.logger().debug(
             f"OpenWA: Could not fix recipients for LID {lid_digits}"
