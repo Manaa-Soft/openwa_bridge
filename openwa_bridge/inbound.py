@@ -477,7 +477,7 @@ def _create_communication(
         communication = frappe.get_doc({
             "doctype": "Communication",
             "communication_type": "Communication",
-            "communication_medium": "WhatsApp",
+            "communication_medium": "Chat",
             "subject": subject,
             "content": message_doc.message or "",
             "reference_doctype": "WhatsApp Message",
