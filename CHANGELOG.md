@@ -22,11 +22,13 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **Circuit breaker** — blocks sends after N consecutive failures per account
 - **Two-phase notification pattern** — sync outbox creation + async background send
 - **Inbound webhook hardening** — always HTTP 200, HMAC lenient/strict mode, idempotency, rate limiting
+- **Idempotency key collision fix** — augments `_unknown_` keys with MD5 of body+sender to prevent silent dedup of rapid-fire messages during reconnect cycles
 - **Auto-sync webhook secret** — saving WhatsApp Account auto-syncs secret to OpenWA
 - **Session health check** — hourly/daily scheduler restarts disconnected sessions
 - **Pre-send session verification** — auto-restarts sessions before sending messages
 - **Dynamic image headers** — renders documents as PNG via Print Format + PyMuPDF
 - **SSRF validation** — URL validation warns on private/internal IPs
+- **SSRF protection bypass** — `WEBHOOK_SSRF_PROTECT=false` in OpenWA `.env` to allow webhook delivery to private IPs (192.168.x.x) on local network
 - **Role-based access** — whitelisted methods check Frappe permissions
 - **Configurable values** — rate limit, circuit breaker, timeouts, max attempts all configurable via OpenWA Bridge Settings
 - **OpenWA Bridge Settings DocType** — system-wide config for idempotency TTL, batch size, media limits, HMAC strict, rate limit, circuit breaker, timeouts, max outbox attempts

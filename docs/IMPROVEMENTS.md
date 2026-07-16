@@ -377,6 +377,20 @@ Both set `template` field (needed for dynamic header lookup in `_send_dynamic_he
 
 ---
 
+### 9. Idempotency key collision silently dropped second message
+**Commit**: `22ae024`
+**Symptom**: When sending 2+ rapid WhatsApp messages, only the first message was received in Frappe. The second message was silently deduplicated by the idempotency check.
+**Root cause**: OpenWA generates idempotency keys as `msg_{sessionId}_{messageId}`. When whatsapp-web.js provides empty/null `messageId` (common during reconnect cycles), OpenWA falls back to `"unknown"`, producing identical keys for ALL rapid-fire messages (`msg_<sid>_unknown_<webhookId>`). The bridge's idempotency check sees the duplicate key and silently drops the second message.
+**Fix**: When the idempotency key contains `_unknown_`, augment it with `MD5(body:sender)[:12]` to ensure uniqueness per message content.
+
+### 10. SSRF protection blocked webhook delivery to private IPs
+**File**: `~/OpenWA/.env`
+**Symptom**: OpenWA logs showed `"Webhook delivery failed"` for all messages. No messages reached the Frappe bridge endpoint.
+**Root cause**: OpenWA's built-in SSRF protection (`WEBHOOK_SSRF_PROTECT=true` by default) blocks HTTP requests to private/internal IPs. Since the Frappe server is at `192.168.1.15` (a private IP), all webhook deliveries were rejected.
+**Fix**: Set `WEBHOOK_SSRF_PROTECT=false` in `~/OpenWA/.env` and added `SSRF_ALLOWED_HOSTS=localhost,minio,192.168.1.15`. This is safe because OpenWA runs on the same local network and the webhook URL is configured per-account.
+
+---
+
 ## Code Review Findings (Post-Phase 6)
 
 Comprehensive code review identified additional issues. Each fix is scoped to minimize impact on existing functions.
