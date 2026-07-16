@@ -517,10 +517,24 @@ def _send_outbox_message(msg, account, outbox) -> None:  # noqa: C901
 
     if has_dynamic_header:
         # Try sending image+caption.  If the image fails (e.g. OpenWA 500),
-        # fall back to text/template so the message is still delivered.
+        # check whether the ack webhook already confirmed delivery before
+        # falling back to text — otherwise we'd send a duplicate.
         image_sent = _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
         if image_sent:
             return
+
+        # The image returned an error, but OpenWA engines often deliver
+        # the message before the REST response is built.  The ack webhook
+        # may have already stored the message_id.  Reload and check.
+        frappe.db.commit()
+        msg.reload()
+        if msg.message_id:
+            frappe.logger().info(
+                f"OpenWA: Dynamic header image returned error but message "
+                f"was delivered (message_id={msg.message_id}). Skipping text fallback."
+            )
+            return
+
         frappe.log_error(
             title="OpenWA: Dynamic header failed, falling back to text",
             message=(

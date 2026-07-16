@@ -404,6 +404,26 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     f"Response: {err_body}"
                 ),
             )
+
+            # OpenWA engines (whatsapp-web.js/Baileys) often deliver the
+            # message before the REST response is built.  A 500 after
+            # delivery is common when the engine succeeds but internal
+            # error handling throws.  Wait briefly for the message.ack
+            # webhook to arrive and confirm delivery.
+            if resp.status_code >= 500:
+                import time as _time
+                for _ in range(5):
+                    _time.sleep(1)
+                    fresh_msg_id = frappe.db.get_value(
+                        "WhatsApp Message", self.name, "message_id"
+                    )
+                    if fresh_msg_id:
+                        frappe.logger().info(
+                            f"OpenWA: HTTP {resp.status_code} but message "
+                            f"delivered via ack webhook for {self.name}"
+                        )
+                        return
+
             resp.raise_for_status()
 
         res_data = resp.json()
