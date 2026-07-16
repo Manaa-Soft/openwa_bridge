@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import frappe
 import base64
+import hashlib
 
 from frappe_whatsapp.utils import get_whatsapp_account, format_number
 
@@ -95,6 +96,17 @@ def receive_openwa_message() -> dict[str, str]:
     # ── Idempotency check ──
     idempotency_key = frappe.request.headers.get("X-OpenWA-Idempotency-Key", "")
     if idempotency_key:
+        # OpenWA generates idempotency keys as `msg_{sessionId}_{messageId}`.
+        # When the engine provides an empty/null messageId, OpenWA falls back to
+        # "unknown", producing identical keys for DIFFERENT rapid-fire messages
+        # (e.g. `msg_<sid>_unknown_<webhookId>`).  This causes the second message
+        # to be silently deduplicated.  To prevent that, we augment the key with
+        # the message body + sender when the key carries the "unknown" sentinel.
+        if "_unknown_" in idempotency_key and event_type == "message.received":
+            body = event_data.get("body", "")
+            sender = event_data.get("from", "")
+            content_hash = hashlib.md5(f"{body}:{sender}".encode()).hexdigest()[:12]
+            idempotency_key = f"{idempotency_key}_{content_hash}"
         cache_key = f"openwa_idempotent:{idempotency_key}"
         idempotency_ttl = frappe.db.get_single_value("OpenWA Bridge Settings", "idempotency_ttl") or 3600
         existing = frappe.cache().get_value(cache_key)
@@ -170,6 +182,9 @@ def _handle_inbound_message(
         frappe.log_error(
             title="OpenWA: No matching WhatsApp Account",
             message=f"Session: {session_id}, Sender: {phone_number}",
+        )
+        frappe.logger().info(
+            f"OpenWA: DROPPED - no account for session={session_id} from={phone_number}"
         )
         return
 
