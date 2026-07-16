@@ -154,10 +154,12 @@ def _handle_inbound_message(
     if sender_phone and sender_phone.strip().isdigit():
         phone_number = sender_phone.strip()
     elif "@lid" in sender_jid or (msg_data.get("isGroup", False) and "@lid" in (msg_data.get("author", "") or "")):
-        # Fallback: resolve LID→phone via OpenWA contact API
-        resolved = _resolve_lid_phone(session_id, sender_jid)
-        if resolved:
-            phone_number = resolved
+        # Try cache first, then API — but never block the handler
+        cached = _get_cached_lid_phone(session_id, sender_jid)
+        if cached:
+            phone_number = cached
+        # If not cached, message saves with LID digits; resolve later via background job
+        _queue_lid_resolution(session_id, sender_jid)
 
     # Back-fill LID recipients: if the raw LID digits are in a Recipient List, replace with real phone
     _fix_lid_recipients(sender_jid, phone_number)
@@ -509,6 +511,46 @@ def _create_communication(
 
 
 # ── LID→phone resolution ────────────────────────────────────────────
+
+_LID_CACHE_TTL = 86400  # 24 hours
+
+
+def _get_cached_lid_phone(session_id: str, lid_jid: str) -> str | None:
+    """Check in-memory/Redis cache for a previously resolved LID→phone."""
+    cache_key = f"openwa_lid::{session_id}::{lid_jid}"
+    return frappe.cache().get_value(cache_key)
+
+
+def _set_cached_lid_phone(session_id: str, lid_jid: str, phone: str) -> None:
+    """Cache a resolved LID→phone mapping."""
+    cache_key = f"openwa_lid::{session_id}::{lid_jid}"
+    frappe.cache().set_value(cache_key, phone, expires_in_sec=_LID_CACHE_TTL)
+
+
+def _queue_lid_resolution(session_id: str, lid_jid: str) -> None:
+    """Enqueue a background job to resolve LID→phone (non-blocking)."""
+    cache_key = f"openwa_lid::{session_id}::{lid_jid}"
+    if frappe.cache().get_value(cache_key) is not None:
+        return  # already resolved recently
+    # Dedup: don't queue the same LID twice within 60 seconds
+    dedup_key = f"openwa_lid_queued::{session_id}::{lid_jid}"
+    if frappe.cache().get_value(dedup_key):
+        return
+    frappe.cache().set_value(dedup_key, 1, expires_in_sec=60)
+    frappe.enqueue(
+        "openwa_bridge.inbound._resolve_lid_phone_background",
+        queue="short",
+        session_id=session_id,
+        lid_jid=lid_jid,
+    )
+
+
+def _resolve_lid_phone_background(session_id: str, lid_jid: str) -> None:
+    """Background job: resolve LID→phone and update cached data + recipient lists."""
+    phone = _resolve_lid_phone(session_id, lid_jid)
+    if phone:
+        _set_cached_lid_phone(session_id, lid_jid, phone)
+        _fix_lid_recipients(lid_jid, phone)
 
 
 def _resolve_lid_phone(session_id: str, lid_jid: str) -> str | None:
