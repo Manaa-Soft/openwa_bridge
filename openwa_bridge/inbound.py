@@ -576,3 +576,90 @@ def _fix_lid_recipients(sender_jid: str, resolved_phone: str) -> None:
         frappe.logger().debug(
             f"OpenWA: Could not fix recipients for LID {lid_digits}"
         )
+
+
+# ── Bulk LID fix (one-time) ────────────────────────────────────────
+
+
+def _is_likely_lid(number: str) -> bool:
+    """Heuristic: a number is likely a LID if it doesn't match a phone pattern.
+
+    Real phone numbers (MSISDN) are 7-15 digits. LID numbers tend to be
+    15+ digits or start with patterns like 120xxx.
+    """
+    if not number or not number.isdigit():
+        return False
+    # LIDs from WhatsApp are typically very long or start with known LID prefixes
+    if len(number) > 15:
+        return True
+    if number.startswith("120") and len(number) > 13:
+        return True
+    return False
+
+
+@frappe.whitelist()
+def bulk_fix_lid_recipients(session_id: str | None = None) -> dict:
+    """One-time fix: resolve all LID numbers in WhatsApp Recipient Lists.
+
+    Call from bench console or API:
+        bench --site your-site execute openwa_bridge.inbound.bulk_fix_lid_recipients
+
+    Returns stats: {fixed: int, failed: int, skipped: int}
+    """
+    if not session_id:
+        # Pick the first active OpenWA session
+        account = frappe.db.get_value(
+            "WhatsApp Account",
+            {"openwa_enabled": 1, "status": "Active"},
+            ["name", "openwa_session_id"],
+            as_dict=True,
+        )
+        if not account or not account.openwa_session_id:
+            return {"fixed": 0, "failed": 0, "skipped": 0, "error": "No active OpenWA session found"}
+        session_id = account.openwa_session_id
+        whatsapp_account = frappe.get_doc("WhatsApp Account", account.name)
+    else:
+        whatsapp_account = _resolve_account_by_session(session_id)
+
+    if not whatsapp_account:
+        return {"fixed": 0, "failed": 0, "skipped": 0, "error": "Cannot resolve WhatsApp Account"}
+
+    recipients = frappe.get_all(
+        "WhatsApp Recipient",
+        fields=["name", "mobile_number", "recipient_name"],
+    )
+
+    fixed = 0
+    failed = 0
+    skipped = 0
+
+    for r in recipients:
+        num = r.mobile_number or ""
+        if not _is_likely_lid(num):
+            skipped += 1
+            continue
+
+        lid_jid = f"{num}@lid"
+        try:
+            result = openwa_api(
+                whatsapp_account,
+                "GET",
+                f"/contacts/{lid_jid}/phone",
+                timeout=5,
+            )
+            phone = (result or {}).get("phone")
+            if phone and phone.strip().isdigit() and phone.strip() != num:
+                frappe.db.set_value("WhatsApp Recipient", r.name, "mobile_number", phone.strip())
+                fixed += 1
+                frappe.logger().info(
+                    f"OpenWA bulk fix: {r.name} ({r.recipient_name}): "
+                    f"{num} → {phone.strip()}"
+                )
+            else:
+                skipped += 1
+        except Exception:
+            failed += 1
+            frappe.logger().debug(f"OpenWA bulk fix: failed for {r.name} ({num})")
+
+    frappe.db.commit()
+    return {"fixed": fixed, "failed": failed, "skipped": skipped}
