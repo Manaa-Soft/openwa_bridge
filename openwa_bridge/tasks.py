@@ -309,6 +309,22 @@ def _process_outbox_entry_inner(outbox_name: str) -> None:  # noqa: C901
     )
     frappe.db.commit()
 
+    # Idempotency: if the WhatsApp Message already has a message_id, it was
+    # sent successfully on a prior attempt (or by a webhook callback).
+    # Mark the outbox as Sent and bail out — do NOT resend.
+    if msg.message_id:
+        frappe.db.set_value(
+            "OpenWA Outbox",
+            outbox_name,
+            {"status": "Sent"},
+        )
+        frappe.db.commit()
+        frappe.logger().info(
+            f"OpenWA outbox {outbox_name}: skipping send — "
+            f"message {msg.name} already has message_id '{msg.message_id}'"
+        )
+        return
+
     # Check circuit breaker
     from openwa_bridge.utils import OpenWACircuitBreaker
 
@@ -326,17 +342,28 @@ def _process_outbox_entry_inner(outbox_name: str) -> None:  # noqa: C901
     # Build and send payload
     try:
         _send_outbox_message(msg, account, outbox)
-        breaker.record_success()
-        # Success
-        frappe.db.set_value(
-            "OpenWA Outbox",
-            outbox_name,
-            {"status": "Sent"},
-        )
-        frappe.db.commit()
     except Exception as exc:
         breaker.record_failure()
         _fail_outbox(outbox_name, str(exc), account=account)
+        return
+
+    # Message was sent successfully.  Mark outbox as Sent even if
+    # circuit-breaker or DB commit fails — we must NOT set it back
+    # to Pending which would cause a duplicate resend.
+    try:
+        breaker.record_success()
+    except Exception:
+        pass
+
+    frappe.db.set_value(
+        "OpenWA Outbox",
+        outbox_name,
+        {"status": "Sent"},
+    )
+    try:
+        frappe.db.commit()
+    except Exception:
+        pass
 
 
 def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:

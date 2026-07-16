@@ -335,7 +335,9 @@ def _attach_openwa_media(message_doc: "Document", media_info: dict) -> None:  # 
 
 
 def _handle_status_update(event_data: dict) -> None:
-    """Map OpenWA ``message.ack`` / ``message.failed`` to WhatsApp Message status."""
+    """Map OpenWA ``message.ack`` / ``message.failed`` / ``message.sent`` to
+    WhatsApp Message status and reconcile the linked OpenWA Outbox entry.
+    """
     message_id: str = event_data.get("messageId") or event_data.get("id", "")
     status: str = event_data.get("status", "")
 
@@ -351,6 +353,40 @@ def _handle_status_update(event_data: dict) -> None:
         return
 
     frappe.db.set_value("WhatsApp Message", name, "status", status.capitalize())
+
+    # Reconcile the OpenWA Outbox: if the message was delivered/read,
+    # any linked outbox entry stuck in Pending or Sending should be
+    # marked Sent to prevent duplicate resends by the scheduler.
+    if status.lower() in ("sent", "delivered", "read"):
+        _reconcile_outbox_on_ack(name, message_id)
+
+
+def _reconcile_outbox_on_ack(whatsapp_message_name: str, message_id: str) -> None:
+    """Mark any stuck OpenWA Outbox entry as Sent when a delivery ack arrives.
+
+    This prevents the scheduler from retrying messages that were already
+    delivered.  Called from ``_handle_status_update`` when the ack carries
+    a terminal-ish status (sent / delivered / read).
+    """
+    outbox_entries = frappe.get_all(
+        "OpenWA Outbox",
+        filters={
+            "whatsapp_message": whatsapp_message_name,
+            "status": ("in", ["Pending", "Sending"]),
+        },
+        fields=["name", "status"],
+        limit_page_length=0,
+    )
+    for entry in outbox_entries:
+        frappe.db.set_value(
+            "OpenWA Outbox",
+            entry.name,
+            {"status": "Sent"},
+        )
+        frappe.logger().info(
+            f"OpenWA outbox reconciled via ack: {entry.name} "
+            f"({entry.status} -> Sent) for message {whatsapp_message_name}"
+        )
 
 
 def _handle_session_status(event_data: dict, session_id: str) -> None:

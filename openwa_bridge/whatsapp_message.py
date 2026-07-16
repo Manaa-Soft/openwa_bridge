@@ -160,6 +160,16 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
 
     def _send_via_openwa(self, account: "WhatsAppAccount", meta_payload: dict) -> None:  # noqa: F821
         """Translate and dispatch the payload to the OpenWA Gateway REST API."""
+        # Idempotency guard: if the message already has a message_id, it was
+        # already sent (possibly by a previous attempt or webhook reconciliation).
+        # Do NOT send again — just return.
+        if self.message_id:
+            frappe.logger().info(
+                f"OpenWA: skipping send for {self.name} — "
+                f"message_id '{self.message_id}' already set"
+            )
+            return
+
         # Ensure session is ready before attempting to send
         self._ensure_session_ready(account)
 
@@ -398,11 +408,33 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
 
         res_data = resp.json()
 
-        if "messageId" in res_data:
+        # Extract message ID — support both top-level messageId and nested key.id
+        msg_id = res_data.get("messageId") or (
+            res_data.get("key", {}).get("id") if isinstance(res_data.get("key"), dict) else None
+        )
+
+        if msg_id:
             frappe.db.set_value(
                 "WhatsApp Message",
                 self.name,
-                {"message_id": res_data["messageId"], "status": "Sent"},
+                {"message_id": msg_id, "status": "Sent"},
+            )
+        else:
+            # Message was accepted by OpenWA (HTTP 200+) but no ID returned.
+            # Mark as Sent anyway to prevent infinite retries — the ack
+            # webhook will set the real message_id when it arrives.
+            frappe.db.set_value(
+                "WhatsApp Message",
+                self.name,
+                {"status": "Sent"},
+            )
+            frappe.log_error(
+                title="OpenWA: No messageId in response",
+                message=(
+                    f"Msg {self.name}: POST succeeded (HTTP {resp.status_code}) "
+                    f"but response had no messageId.\n"
+                    f"Response: {json.dumps(res_data, default=str)[:2000]}"
+                ),
             )
 
     # ------------------------------------------------------------------
