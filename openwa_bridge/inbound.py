@@ -118,7 +118,9 @@ def receive_openwa_message() -> dict[str, str]:
     try:
         if event_type == "message.received":
             _handle_inbound_message(event_data, whatsapp_account, session_id)
-        elif event_type in ("message.ack", "message.failed", "message.sent"):
+        elif event_type == "message.sent":
+            _handle_message_sent(event_data)
+        elif event_type in ("message.ack", "message.failed"):
             _handle_status_update(event_data)
         elif event_type == "message.revoked":
             _handle_message_revoked(event_data)
@@ -334,8 +336,58 @@ def _attach_openwa_media(message_doc: "Document", media_info: dict) -> None:  # 
 # ── Status handler ───────────────────────────────────────────────────
 
 
+def _handle_message_sent(event_data: dict) -> None:
+    """Store message_id on the WhatsApp Message when ``message.sent`` arrives.
+
+    OpenWA fires ``message.sent`` with the full message object (``id``, ``to``,
+    ``body``, etc.) but NO ``status`` field.  This event arrives BEFORE
+    ``message.ack`` and is the earliest opportunity to link the WhatsApp
+    message ID back to the Frappe WhatsApp Message doc — which is critical
+    for the ``message.ack`` handler and the outbox idempotency guards.
+    """
+    wa_msg_id: str = event_data.get("id", "")
+    if not wa_msg_id:
+        return
+
+    # If the message already has this ID stored, nothing to do
+    existing = frappe.db.get_value(
+        "WhatsApp Message", {"message_id": wa_msg_id}, "name"
+    )
+    if existing:
+        return
+
+    # The sent event has ``to`` as a JID like "12345@c.us".  Extract phone.
+    to_jid: str = event_data.get("to") or event_data.get("chatId") or ""
+    phone = strip_jid_suffix(to_jid)
+    if not phone:
+        return
+
+    # Find the most recent outgoing WhatsApp Message to this phone that
+    # still has no message_id (i.e. was just created by the outbox flow).
+    name = frappe.db.get_value(
+        "WhatsApp Message",
+        filters={
+            "to": ("like", f"%{phone}%"),
+            "type": "Outgoing",
+            "message_id": ("is", "not set"),
+        },
+        fields=["name"],
+        order_by="creation desc",
+        limit_page_length=1,
+        pluck="name",
+    )
+    if not name:
+        return
+
+    frappe.db.set_value("WhatsApp Message", name, "message_id", wa_msg_id)
+    frappe.logger().info(
+        f"OpenWA message.sent: stored message_id '{wa_msg_id}' "
+        f"on WhatsApp Message {name}"
+    )
+
+
 def _handle_status_update(event_data: dict) -> None:
-    """Map OpenWA ``message.ack`` / ``message.failed`` / ``message.sent`` to
+    """Map OpenWA ``message.ack`` / ``message.failed`` to
     WhatsApp Message status and reconcile the linked OpenWA Outbox entry.
     """
     message_id: str = event_data.get("messageId") or event_data.get("id", "")
@@ -344,11 +396,8 @@ def _handle_status_update(event_data: dict) -> None:
     if not message_id or not status:
         return
 
-    name = frappe.db.get_value(
-        "WhatsApp Message",
-        filters={"message_id": message_id},
-        pluck="name",
-    )
+    name = _find_whatsapp_message(message_id)
+
     if not name:
         return
 
@@ -359,6 +408,50 @@ def _handle_status_update(event_data: dict) -> None:
     # marked Sent to prevent duplicate resends by the scheduler.
     if status.lower() in ("sent", "delivered", "read"):
         _reconcile_outbox_on_ack(name, message_id)
+
+
+def _find_whatsapp_message(wa_msg_id: str) -> str | None:
+    """Find a WhatsApp Message by its WhatsApp message ID.
+
+    Primary lookup: exact match on ``message_id`` column.
+    Fallback: extract the phone number from the JID embedded in the
+    message ID (e.g. ``true_12345@c.us_3EB0...`` → ``12345``) and
+    search for the most recent outgoing message to that phone that
+    still has no ``message_id`` set.
+    """
+    name = frappe.db.get_value(
+        "WhatsApp Message",
+        filters={"message_id": wa_msg_id},
+        pluck="name",
+    )
+    if name:
+        return name
+
+    # Fallback: extract phone from JID-style message ID
+    phone = strip_jid_suffix(wa_msg_id.split("_")[1]) if "_" in wa_msg_id else ""
+    if not phone or not phone.isdigit():
+        return None
+
+    name = frappe.db.get_value(
+        "WhatsApp Message",
+        filters={
+            "to": ("like", f"%{phone}%"),
+            "type": "Outgoing",
+            "message_id": ("is", "not set"),
+        },
+        fields=["name"],
+        order_by="creation desc",
+        limit_page_length=1,
+        pluck="name",
+    )
+    if name:
+        # Store the message_id now so future lookups are instant
+        frappe.db.set_value("WhatsApp Message", name, "message_id", wa_msg_id)
+        frappe.logger().info(
+            f"OpenWA: resolved message_id '{wa_msg_id}' → WhatsApp Message {name} "
+            f"(fallback by phone {phone})"
+        )
+    return name
 
 
 def _reconcile_outbox_on_ack(whatsapp_message_name: str, message_id: str) -> None:

@@ -373,7 +373,8 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
     and ``openwa_print_format``.  Renders the reference doc as an image
     and sends it via OpenWA send-image endpoint with the text as caption.
 
-    Returns True if image was sent successfully, False otherwise.
+    Returns True if image was sent successfully (or delivered despite a
+    non-2xx response — verified via message_id), False otherwise.
     """
     if not msg.template:
         return False
@@ -435,25 +436,69 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
             headers={"X-API-Key": api_key},
             timeout=30,
         )
-        if img_resp.status_code >= 400:
-            frappe.log_error(
-                title="OpenWA: Dynamic header image failed",
-                message=(
-                    f"Template {tmpl.name}, Doc {ref_doctype} {ref_name}\n"
-                    f"POST {url}\n"
-                    f"Status: {img_resp.status_code}\n"
-                    f"Image size: {len(image_bytes)} bytes ({mimetype})\n"
-                    f"Response: {img_resp.text[:2000]}"
-                ),
-            )
-            return False
-        return True
     except Exception as e:
         frappe.log_error(
             title="OpenWA: Dynamic header image failed",
             message=f"Template {tmpl.name}, Doc {ref_doctype} {ref_name}: {e}",
         )
         return False
+
+    # --- Extract and store message_id from response ---
+    resp_data = {}
+    try:
+        resp_data = img_resp.json()
+    except Exception:
+        pass
+
+    msg_id = resp_data.get("messageId") or (
+        resp_data.get("key", {}).get("id") if isinstance(resp_data.get("key"), dict) else None
+    )
+
+    if msg_id:
+        frappe.db.set_value("WhatsApp Message", msg.name, "message_id", msg_id)
+
+    # --- 2xx = success ---
+    if img_resp.status_code < 400:
+        if msg_id:
+            frappe.db.set_value("WhatsApp Message", msg.name, "status", "Sent")
+        return True
+
+    # --- Non-2xx but message may have been delivered anyway ---
+    # OpenWA engines (whatsapp-web.js/Baileys) often deliver the message
+    # before the REST response is built.  A 500 after delivery is common
+    # when the engine succeeds but post-send persistence fails on the
+    # OpenWA server side.  Detect this by waiting briefly for the
+    # message.ack webhook to arrive and set the message_id.
+    frappe.log_error(
+        title="OpenWA: Dynamic header image returned error",
+        message=(
+            f"Template {tmpl.name}, Doc {ref_doctype} {ref_name}\n"
+            f"POST {url}\n"
+            f"Status: {img_resp.status_code}\n"
+            f"Image size: {len(image_bytes)} bytes ({mimetype})\n"
+            f"Response: {img_resp.text[:2000]}"
+        ),
+    )
+
+    # If we already got a message_id from the response, trust it
+    if msg_id:
+        frappe.db.set_value("WhatsApp Message", msg.name, "status", "Sent")
+        return True
+
+    # Wait briefly for the message.ack webhook to reconcile
+    import time as _time
+    for _ in range(5):
+        _time.sleep(1)
+        fresh_msg_id = frappe.db.get_value("WhatsApp Message", msg.name, "message_id")
+        if fresh_msg_id:
+            frappe.logger().info(
+                f"OpenWA: Dynamic header image — detected delivery via ack webhook "
+                f"after {img_resp.status_code} for {msg.name}"
+            )
+            return True
+
+    # Message was NOT delivered
+    return False
 
 
 def _send_outbox_message(msg, account, outbox) -> None:  # noqa: C901
