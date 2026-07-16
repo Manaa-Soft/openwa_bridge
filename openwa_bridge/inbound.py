@@ -53,7 +53,7 @@ def receive_openwa_message() -> dict[str, str]:
     whatsapp_account = _resolve_account_by_session(session_id)
 
     # ── Rate limiting (configurable per account) ──
-    rate_limit = get_account_setting(whatsapp_account, "openwa_rate_limit", 60) if whatsapp_account else 60
+    rate_limit = get_account_setting(whatsapp_account, "openwa_rate_limit", 600) if whatsapp_account else 600
     forwarded_for = frappe.request.headers.get("X-Forwarded-For", "")
     client_ip = forwarded_for.split(",")[0].strip() if forwarded_for else (
         frappe.request.remote_addr or "unknown"
@@ -211,23 +211,49 @@ def _handle_inbound_message(
             f"({location.get('latitude')}, {location.get('longitude')})"
         )
 
-    doc = frappe.get_doc(doc_data)
-    doc.insert(ignore_permissions=True)
+    try:
+        doc = frappe.get_doc(doc_data)
+        doc.insert(ignore_permissions=True)
+    except Exception:
+        frappe.log_error(
+            title="OpenWA: WhatsApp Message insert FAILED",
+            message=(
+                f"From: {phone_number}, Msg: {message_body[:100]}\n"
+                f"Doc data: {doc_data}\n{frappe.get_traceback()}"
+            ),
+        )
+        return
 
     frappe.logger().info(
         f"OpenWA inbound: created WhatsApp Message {doc.name} from {phone_number}"
     )
 
-    # Attach media if present
-    media_info = msg_data.get("media")
-    if isinstance(media_info, dict) and not media_info.get("omitted"):
-        _attach_openwa_media(doc, media_info)
+    # These are best-effort — a failure here should NOT prevent the message from being saved
+    try:
+        media_info = msg_data.get("media")
+        if isinstance(media_info, dict) and not media_info.get("omitted"):
+            _attach_openwa_media(doc, media_info)
+    except Exception:
+        frappe.log_error(
+            title="OpenWA: Media attach failed",
+            message=f"Msg: {doc.name}\n{frappe.get_traceback()}",
+        )
 
-    # Create / update WhatsApp Profile
-    _ensure_whatsapp_profile(phone_number, profile_name, whatsapp_account.name)
+    try:
+        _ensure_whatsapp_profile(phone_number, profile_name, whatsapp_account.name)
+    except Exception:
+        frappe.log_error(
+            title="OpenWA: Profile create failed",
+            message=f"Phone: {phone_number}\n{frappe.get_traceback()}",
+        )
 
-    # Create Communication and optionally Lead/Contact
-    _create_communication(doc, phone_number, profile_name)
+    try:
+        _create_communication(doc, phone_number, profile_name)
+    except Exception:
+        frappe.log_error(
+            title="OpenWA: Communication create failed",
+            message=f"Msg: {doc.name}, Contact: {phone_number}\n{frappe.get_traceback()}",
+        )
 
 
 # ── Media handler ────────────────────────────────────────────────────
