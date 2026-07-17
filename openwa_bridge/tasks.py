@@ -440,14 +440,32 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
     if caption:
         payload["caption"] = caption
 
+    img_timeout = get_account_setting(account, "openwa_image_timeout", 90)
     try:
         img_resp = _http_session.post(
             url,
             json=payload,
             headers={"X-API-Key": api_key},
-            timeout=30,
+            timeout=img_timeout,
         )
     except Exception as e:
+        err_str = str(e)
+        is_timeout = "timed out" in err_str.lower() or "timeout" in err_str.lower()
+        if is_timeout:
+            # OpenWA engines deliver messages BEFORE the REST response is built.
+            # A timeout means OpenWA likely received the request and may have
+            # already queued/sent the image.  Falling back to text would cause
+            # a duplicate.  Raise so the outbox retry handles it — the
+            # idempotency check (message_id) will detect if it was sent.
+            frappe.log_error(
+                title="OpenWA: Dynamic header image timed out (will retry)",
+                message=(
+                    f"Template {tmpl.name}, Doc {ref_doctype} {ref_name}: {e}\n"
+                    "Not falling back to text — message may be queued in OpenWA. "
+                    "Outbox will retry with backoff; idempotency check will reconcile."
+                ),
+            )
+            raise
         frappe.log_error(
             title="OpenWA: Dynamic header image failed",
             message=f"Template {tmpl.name}, Doc {ref_doctype} {ref_name}: {e}",

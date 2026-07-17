@@ -223,7 +223,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     f"{base_url}/api/sessions/{session_id}/messages/send-template",
                     json=send_payload,
                     headers=headers,
-                    timeout=15,
+                    timeout=30,
                 )
                 # Stale template ID recovery: if 404, look up by name and retry
                 if resp.status_code == 404:
@@ -234,7 +234,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                             f"{base_url}/api/sessions/{session_id}/messages/send-template",
                             json=send_payload,
                             headers=headers,
-                            timeout=15,
+                            timeout=30,
                         )
             else:
                 message_body = self._translate_template_payload()
@@ -242,7 +242,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     f"{base_url}/api/sessions/{session_id}/messages/send-text",
                     json={"chatId": chat_id, "text": message_body},
                     headers=headers,
-                    timeout=15,
+                    timeout=30,
                 )
 
         elif self.is_reply and self.reply_to_message_id:
@@ -259,7 +259,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     "text": self.message,
                 },
                 headers=headers,
-                timeout=15,
+                timeout=30,
             )
 
         elif self.content_type == "text":
@@ -273,7 +273,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 f"{base_url}/api/sessions/{session_id}/messages/send-text",
                 json=text_payload,
                 headers=headers,
-                timeout=15,
+                timeout=30,
             )
 
         elif self.content_type in ("image", "video", "audio", "document"):
@@ -286,7 +286,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 f"{base_url}/api/sessions/{session_id}/messages/{endpoint}",
                 json=payload,
                 headers=headers,
-                timeout=30,
+                timeout=60,
             )
 
         elif self.content_type == "reaction":
@@ -298,7 +298,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     "emoji": self.message,
                 },
                 headers=headers,
-                timeout=15,
+                timeout=30,
             )
 
         elif self.content_type == "location":
@@ -320,7 +320,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     "address": location_data.get("address", ""),
                 },
                 headers=headers,
-                timeout=15,
+                timeout=30,
             )
 
         elif self.content_type == "contact":
@@ -340,7 +340,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     "contactNumber": contact_number,
                 },
                 headers=headers,
-                timeout=15,
+                timeout=30,
             )
 
         elif self.content_type == "sticker":
@@ -362,7 +362,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 f"{base_url}/api/sessions/{session_id}/messages/send-sticker",
                 json=sticker_payload,
                 headers=headers,
-                timeout=30,
+                timeout=60,
             )
 
         elif self.content_type == "order":
@@ -383,7 +383,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     "allowMultipleAnswers": poll_data.get("allowMultipleAnswers", False),
                 },
                 headers=headers,
-                timeout=15,
+                timeout=30,
             )
 
         else:
