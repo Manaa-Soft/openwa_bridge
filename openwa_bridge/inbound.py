@@ -362,12 +362,12 @@ def _handle_message_sent(event_data: dict) -> None:
     if not phone:
         return
 
-    # Find the most recent outgoing WhatsApp Message to this phone that
-    # still has no message_id (i.e. was just created by the outbox flow).
+    # Primary: find the most recent outgoing message to this EXACT phone
+    # that still has no message_id.  Use an exact match on the last segment
+    # of the `to` field (which stores the formatted phone) instead of LIKE.
     name = frappe.db.get_value(
         "WhatsApp Message",
         filters={
-            "to": ("like", f"%{phone}%"),
             "type": "Outgoing",
             "message_id": ("is", "not set"),
         },
@@ -376,6 +376,29 @@ def _handle_message_sent(event_data: dict) -> None:
         limit_page_length=1,
         pluck="name",
     )
+
+    # Verify the matched message is actually going to this phone.
+    # The `to` field may contain the full JID or just the phone.
+    if name:
+        to_field = frappe.db.get_value("WhatsApp Message", name, "to") or ""
+        to_phone = strip_jid_suffix(to_field)
+        if to_phone != phone:
+            name = None
+
+    if not name:
+        # Fallback: try LIKE but with exact phone boundary to reduce false matches
+        name = frappe.db.get_value(
+            "WhatsApp Message",
+            filters={
+                "to": ("like", f"%{phone}"),
+                "type": "Outgoing",
+                "message_id": ("is", "not set"),
+            },
+            fields=["name"],
+            order_by="creation desc",
+            limit_page_length=1,
+            pluck="name",
+        )
     if not name:
         return
 
@@ -432,10 +455,12 @@ def _find_whatsapp_message(wa_msg_id: str) -> str | None:
     if not phone or not phone.isdigit():
         return None
 
+    # Try exact match first: most recent outgoing with no message_id
+    # whose `to` field ends with this phone
     name = frappe.db.get_value(
         "WhatsApp Message",
         filters={
-            "to": ("like", f"%{phone}%"),
+            "to": ("like", f"%{phone}"),
             "type": "Outgoing",
             "message_id": ("is", "not set"),
         },
@@ -502,6 +527,30 @@ def _handle_session_status(event_data: dict, session_id: str) -> None:
     )
     if account_name:
         frappe.db.set_value("WhatsApp Account", account_name, "status", frappe_status)
+
+        # When session disconnects, log pending outbox entries for visibility
+        if status in ("disconnected", "failed"):
+            pending_count = frappe.db.count(
+                "OpenWA Outbox",
+                filters={
+                    "whatsapp_account": account_name,
+                    "status": ("in", ["Pending", "Sending"]),
+                },
+            )
+            if pending_count:
+                frappe.logger().warning(
+                    f"OpenWA session '{session_id}' on '{account_name}' "
+                    f"is {status} — {pending_count} outbox entries waiting. "
+                    f"They will be retried when the session reconnects."
+                )
+            frappe.log_error(
+                title=f"OpenWA: Session {status} on {account_name}",
+                message=(
+                    f"Session {session_id} status changed to '{status}'. "
+                    f"{pending_count} pending outbox entries will be retried "
+                    f"automatically when the session reconnects."
+                ),
+            )
 
 
 def _handle_message_revoked(event_data: dict) -> None:

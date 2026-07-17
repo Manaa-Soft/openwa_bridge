@@ -84,6 +84,7 @@ def daily() -> None:
 def hourly() -> None:
     """Run session health check every hour for faster recovery."""
     _run_health_check()
+    reconcile_stale_outbox()
 
 
 def _run_health_check() -> None:
@@ -237,11 +238,14 @@ def process_outbox_entry(outbox_name: str) -> None:  # noqa: C901
     """
     # Distributed lock — prevent duplicate processing when scheduler safety-net
     # and frappe.enqueue overlap on the same entry.
+    # Use a longer TTL (5 minutes) to cover the full processing window including
+    # session restart attempts. The lock is extended during processing.
     lock_key = f"openwa_outbox_lock::{outbox_name}"
+    lock_ttl = 300  # 5 minutes
     existing = frappe.cache().get_value(lock_key)
     if existing is not None:
         return  # another worker is already processing this entry
-    frappe.cache().set_value(lock_key, 1, expires_in_sec=30)
+    frappe.cache().set_value(lock_key, 1, expires_in_sec=lock_ttl)
 
     try:
         _process_outbox_entry_inner(outbox_name)
@@ -603,11 +607,16 @@ def _fail_outbox(outbox_name: str, error: str, account=None) -> None:
 
 
 def process_pending_outbox() -> None:
-    """Scheduler safety-net: re-enqueue orphaned Pending entries.
+    """Scheduler safety-net: re-enqueue orphaned Pending entries and recover
+    stuck Sending entries.
 
     Runs every ~4 minutes via the ``all`` scheduler event.  Picks up entries
     that were never processed (e.g. worker crash, Redis restart) and
     re-enqueues them into the ``long`` queue.
+
+    Also recovers entries stuck in ``Sending`` for more than 5 minutes —
+    these are typically caused by worker crashes or Redis restarts between
+    the status update and the final Sent/Failed mark.
     """
     now = datetime.now()
     # Use a default max attempts filter. The real guard is per-entry in
@@ -640,6 +649,32 @@ def process_pending_outbox() -> None:
         limit=batch_size,
     )
 
+    # Recover orphaned Sending entries — worker crashed before marking Sent/Failed.
+    # Give a 5-minute grace period to avoid resetting entries still being processed.
+    sending_cutoff = (now - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+    stuck_sending = frappe.get_all(
+        "OpenWA Outbox",
+        filters=[
+            ["status", "=", "Sending"],
+            ["modified", "<", sending_cutoff],
+            ["attempts", "<", max_attempts],
+        ],
+        fields=["name"],
+        order_by="creation ASC",
+        limit=batch_size,
+    )
+    for entry in stuck_sending:
+        frappe.db.set_value(
+            "OpenWA Outbox",
+            entry.name,
+            {"status": "Pending"},
+        )
+        frappe.logger().warning(
+            f"OpenWA outbox recovery: reset stuck Sending entry {entry.name} to Pending"
+        )
+    if stuck_sending:
+        frappe.db.commit()
+
     candidates = list({e.name for e in entries} | {e.name for e in retry_entries})
 
     for name in candidates:
@@ -654,6 +689,86 @@ def process_pending_outbox() -> None:
 
     if candidates:
         frappe.logger().info(f"OpenWA outbox safety-net: re-enqueued {len(candidates)} entry(ies)")
+
+
+# ---------------------------------------------------------------------------
+# Proactive outbox reconciliation
+# ---------------------------------------------------------------------------
+
+
+def reconcile_stale_outbox() -> None:
+    """Proactive reconciliation: fix outbox entries that should be Sent but aren't.
+
+    This handles the case where:
+    1. The message WAS delivered (webhook confirmed via WhatsApp Message status)
+       but the outbox entry was never updated.
+    2. The outbox entry is stuck in Sending/Pending but the WhatsApp Message
+       already has a message_id (meaning it was accepted by OpenWA).
+
+    Runs every ~4 minutes via the ``all`` scheduler event and also from the
+    hourly health check.
+    """
+    now = datetime.now()
+    stale_cutoff = (now - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+
+    # Find outbox entries stuck in Pending or Sending where the linked
+    # WhatsApp Message already has a message_id or status=Sent
+    stale_entries = frappe.get_all(
+        "OpenWA Outbox",
+        filters=[
+            ["status", "in", ["Pending", "Sending"]],
+            ["modified", "<", stale_cutoff],
+        ],
+        fields=["name", "whatsapp_message", "whatsapp_account"],
+        limit_page_length=50,
+    )
+
+    reconciled = 0
+    for entry in stale_entries:
+        if not entry.whatsapp_message:
+            continue
+        try:
+            msg_status = frappe.db.get_value(
+                "WhatsApp Message", entry.whatsapp_message, "status"
+            )
+            msg_id = frappe.db.get_value(
+                "WhatsApp Message", entry.whatsapp_message, "message_id"
+            )
+        except Exception:
+            continue
+
+        # Case 1: WhatsApp Message already confirmed sent — mark outbox Sent
+        if msg_status and msg_status.lower() in ("sent", "delivered", "read"):
+            frappe.db.set_value("OpenWA Outbox", entry.name, {"status": "Sent"})
+            reconciled += 1
+            continue
+
+        # Case 2: WhatsApp Message has a message_id but status not yet updated
+        if msg_id:
+            frappe.db.set_value(
+                "WhatsApp Message",
+                entry.whatsapp_message,
+                {"status": "Sent"},
+            )
+            frappe.db.set_value("OpenWA Outbox", entry.name, {"status": "Sent"})
+            reconciled += 1
+            continue
+
+        # Case 3: Outbox attempted >= max but still Pending/Sending
+        attempts = frappe.db.get_value("OpenWA Outbox", entry.name, "attempts") or 0
+        if attempts >= 5:
+            frappe.db.set_value(
+                "OpenWA Outbox",
+                entry.name,
+                {"status": "Failed", "last_error": "Max attempts exhausted (reconciliation)"},
+            )
+            reconciled += 1
+
+    if reconciled:
+        frappe.db.commit()
+        frappe.logger().info(
+            f"OpenWA outbox reconciliation: fixed {reconciled} stale entries"
+        )
 
 
 def cleanup_old_outbox() -> None:

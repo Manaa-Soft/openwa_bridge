@@ -159,7 +159,6 @@ doc_events = {
 scheduler_events = {
 	"hourly": [
 		"openwa_bridge.tasks.hourly",
-		"openwa_bridge.tasks.process_pending_outbox",
 	],
 	"daily": [
 		"openwa_bridge.tasks.daily",
@@ -167,6 +166,7 @@ scheduler_events = {
 	],
 	"all": [
 		"openwa_bridge.tasks.process_pending_outbox",
+		"openwa_bridge.tasks.reconcile_stale_outbox",
 	],
 }
 
