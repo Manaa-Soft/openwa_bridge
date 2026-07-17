@@ -120,9 +120,16 @@ def _run_health_check() -> None:
 
         status = session.get("status", "unknown")
 
-        # 2. If ready, sync status and move on
+        # 2. If ready, sync status, ensure webhook exists, and move on
         if status == "ready":
             _set_account_status(account_name, "ready")
+            # Auto-sync webhook on health check — ensures the webhook exists
+            # after session reconnect or OpenWA restart.
+            try:
+                from openwa_bridge.whatsapp_account import sync_webhook
+                sync_webhook(doc)
+            except Exception:
+                pass
             continue
 
         # 3. If disconnected/created, attempt restart

@@ -305,6 +305,8 @@ def setup_openwa_session(account_name: str) -> dict:
         pass
 
     if status == "ready":
+        # Auto-sync webhook even when session is already connected
+        sync_webhook(account)
         return {
             "status": "ready",
             "session_id": session_id,
@@ -321,6 +323,8 @@ def setup_openwa_session(account_name: str) -> dict:
     try:
         qr = _fetch_qr(account)
         qr["session_id"] = session_id
+        # Auto-sync webhook now that the session exists
+        sync_webhook(account)
         return qr
     except Exception as exc:
         return {"status": "error", "error": str(exc), "session_id": session_id}
@@ -380,8 +384,9 @@ def get_openwa_qr(account_name: str) -> dict:
 
     status = session.get("status", "unknown")
 
-    # Already connected — nothing to show.
+    # Already connected — nothing to show, but ensure webhook is synced.
     if status == "ready":
+        sync_webhook(account)
         return {
             "status": "ready",
             "phone": session.get("phone"),
@@ -402,7 +407,8 @@ def get_openwa_qr(account_name: str) -> dict:
             try:
                 session = _safe_get_session(account)
                 if session and session.get("status") != "failed":
-                    # Force-kill worked — save and return QR
+                    # Force-kill worked — sync webhook and return QR
+                    sync_webhook(account)
                     try:
                         return _fetch_qr(account)
                     except Exception:
@@ -418,6 +424,7 @@ def get_openwa_qr(account_name: str) -> dict:
                 frappe.db.commit()
                 account = _get_account(account_name, require_session=True)
                 _start_session(account)
+                sync_webhook(account)
         except Exception as exc:
             return {"status": "error", "error": f"Failed to recover session: {exc}"}
 
@@ -425,6 +432,7 @@ def get_openwa_qr(account_name: str) -> dict:
     elif status in ("disconnected", "created"):
         try:
             _start_session(account)
+            sync_webhook(account)
         except Exception as exc:
             return {"status": "error", "error": str(exc)}
 
@@ -506,24 +514,30 @@ def _get_webhook_events(doc):  # noqa: ANN001
     return _DEFAULT_WEBHOOK_EVENTS
 
 
-def on_account_update(doc, method):  # noqa: ANN001
-    """Sync the OpenWA webhook secret to the gateway when the account is saved.
+def sync_webhook(account) -> bool:  # noqa: ANN001
+    """Ensure the OpenWA gateway has a webhook pointing to Frappe.
 
-    If a webhook for our Frappe URL already exists on the session the secret
-    is updated.  Otherwise a new webhook is created with the configured events.
+    - On **first setup** (no existing webhook): creates one with the
+      configured events from ``_DEFAULT_WEBHOOK_EVENTS`` or the
+      ``openwa_webhook_events`` field.
+    - On **subsequent calls** (webhook already exists): updates only the
+      ``url`` and ``secret``.  The existing ``events`` list on OpenWA is
+      **preserved** so manual event selections survive account saves and
+      reconnects.
+
+    Returns ``True`` on success, ``False`` on failure (errors are logged).
     """
-    if not getattr(doc, "openwa_enabled", 0):
-        return
-    session_id = getattr(doc, "openwa_session_id", None)
+    if not getattr(account, "openwa_enabled", 0):
+        return False
+    session_id = getattr(account, "openwa_session_id", None)
     if not session_id:
-        return
+        return False
 
-    secret = doc.get_password("openwa_webhook_secret") if doc.get("openwa_webhook_secret") else None
+    secret = account.get_password("openwa_webhook_secret") if account.get("openwa_webhook_secret") else None
     frappe_url = frappe.utils.get_url(_WEBHOOK_PATH)
-    events = _get_webhook_events(doc)
 
     try:
-        webhooks = openwa_api(doc, "GET", "/webhooks")
+        webhooks = openwa_api(account, "GET", "/webhooks")
 
         existing = None
         if isinstance(webhooks, list):
@@ -533,14 +547,29 @@ def on_account_update(doc, method):  # noqa: ANN001
                     break
 
         if existing:
+            # UPDATE: only refresh url + secret; keep the events the operator
+            # configured on OpenWA (manual event selection is preserved).
+            update_payload: dict = {"secret": secret or ""}
+            # Only push events if the doc has an explicit override —
+            # this means the operator changed events in the Frappe form.
+            explicit_events = getattr(account, "openwa_webhook_events", None)
+            if explicit_events:
+                update_payload["events"] = _get_webhook_events(account)
+
             openwa_api(
-                doc, "PUT",
+                account, "PUT",
                 f"/webhooks/{existing['id']}",
-                json_data={"secret": secret or "", "events": events},
+                json_data=update_payload,
+            )
+            frappe.logger().info(
+                f"OpenWA: webhook {existing['id']} updated for session "
+                f"{session_id} (url + secret synced, events preserved)"
             )
         else:
+            # CREATE: first-time setup — use configured events
+            events = _get_webhook_events(account)
             openwa_api(
-                doc, "POST",
+                account, "POST",
                 "/webhooks",
                 json_data={
                     "url": frappe_url,
@@ -548,11 +577,22 @@ def on_account_update(doc, method):  # noqa: ANN001
                     "secret": secret or "",
                 },
             )
+            frappe.logger().info(
+                f"OpenWA: webhook created for session {session_id} "
+                f"with {len(events)} events"
+            )
+        return True
     except Exception as exc:
         frappe.log_error(
-            title="OpenWA: Failed to sync webhook secret",
-            message=f"Account: {doc.name}, Session: {session_id}: {exc}",
+            title="OpenWA: Failed to sync webhook",
+            message=f"Account: {account.name}, Session: {session_id}: {exc}",
         )
+        return False
+
+
+def on_account_update(doc, method):  # noqa: ANN001
+    """Sync the OpenWA webhook when the account is saved."""
+    sync_webhook(doc)
 
 
 # ---------------------------------------------------------------------------
