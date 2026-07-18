@@ -21,7 +21,14 @@ def _get_openwa_accounts() -> list[dict]:
 
 
 def _check_session_status(base_url: str, session_id: str, api_key: str) -> dict | None:
-    """GET /api/sessions/:id and return the session data, or None."""
+    """GET /api/sessions/:id.
+
+    Returns:
+        dict with session data if found (HTTP 200).
+        dict with ``{"_deleted": True}`` if the session was removed from
+        OpenWA (HTTP 404) — callers must check for this.
+        None if the server is unreachable or returned an unexpected status.
+    """
     try:
         resp = _http_session.get(
             f"{base_url.rstrip('/')}/api/sessions/{session_id}",
@@ -30,6 +37,8 @@ def _check_session_status(base_url: str, session_id: str, api_key: str) -> dict 
         )
         if resp.status_code == 200:
             return resp.json()
+        if resp.status_code == 404:
+            return {"_deleted": True}
     except Exception:
         pass
     return None
@@ -118,6 +127,23 @@ def _run_health_check() -> None:
             _set_account_status(account_name, "disconnected")
             continue
 
+        if session.get("_deleted"):
+            # Session was deleted from OpenWA (manually or by server).
+            # Clear the stale session ID so the user can re-setup.
+            frappe.logger().info(
+                f"OpenWA health check: session '{session_id}' on "
+                f"'{account_name}' no longer exists — clearing stale ID"
+            )
+            frappe.db.set_value(
+                "WhatsApp Account", account_name,
+                "openwa_session_id", None,
+            )
+            frappe.db.set_value(
+                "WhatsApp Account", account_name,
+                "openwa_status", "Inactive",
+            )
+            continue
+
         status = session.get("status", "unknown")
 
         # 2. If ready, sync status, ensure webhook exists, and move on
@@ -144,7 +170,7 @@ def _run_health_check() -> None:
                 for _ in range(15):
                     time.sleep(1)
                     session = _check_session_status(base_url, session_id, api_key)
-                    if session:
+                    if session and not session.get("_deleted"):
                         status = session.get("status", status)
                         if status == "ready":
                             break
@@ -171,7 +197,7 @@ def _run_health_check() -> None:
                 _start_session(base_url, session_id, api_key)
                 time.sleep(3)
                 session = _check_session_status(base_url, session_id, api_key)
-                if session:
+                if session and not session.get("_deleted"):
                     status = session.get("status", status)
             except Exception:
                 pass
@@ -219,7 +245,7 @@ def _run_health_check() -> None:
                             _start_session(base_url, session_id, api_key)
                             time.sleep(3)
                             session = _check_session_status(base_url, session_id, api_key)
-                            if session:
+                            if session and not session.get("_deleted"):
                                 status = session.get("status", status)
                 except Exception as exc:
                     frappe.logger().warning(

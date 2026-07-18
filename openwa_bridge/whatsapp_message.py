@@ -100,6 +100,12 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 status = resp.json().get("status", "unknown")
                 if status == "ready":
                     return  # all good
+            elif resp.status_code == 404:
+                frappe.throw(
+                    f"OpenWA session '{session_id}' no longer exists on the server. "
+                    "Please re-setup the WhatsApp Account from the form.",
+                    title="Session Deleted",
+                )
             else:
                 status = "disconnected"
         except Exception:
