@@ -336,29 +336,48 @@ def get_openwa_session_status(account_name: str) -> dict:
 
     Returns:
         dict: { status, phone, push_name, connected_at, last_active } or
-              { status: "not_found" } if session was deleted from OpenWA or
-              { status: "error", error: "..." } if OpenWA is unreachable
+              { status: "not_found" }  — session deleted from OpenWA
+              { status: "auth_error" } — API key invalid or missing access
+              { status: "error" }      — OpenWA server unreachable
     """
     if not frappe.has_permission("WhatsApp Account", "read", account_name):
         frappe.throw("Insufficient permissions to read WhatsApp Account.", frappe.PermissionError)
     account = _get_account(account_name)
-    session = _safe_get_session(account)
-    if session is None:
-        # Distinguish between "session deleted" (404) and "server unreachable"
-        try:
-            # If we can reach the server but session is gone, it's deleted
-            _raw_openwa_call(account, "GET", "/api/sessions")
-            return {"status": "not_found"}
-        except Exception:
-            return {"status": "error", "error": "Could not reach OpenWA server."}
 
-    return {
-        "status": session.get("status", "unknown"),
-        "phone": session.get("phone"),
-        "push_name": session.get("pushName"),
-        "connected_at": session.get("connectedAt"),
-        "last_active": session.get("lastActive"),
-    }
+    base_url = account.get("openwa_base_url", "").strip("/")
+    session_id = account.get("openwa_session_id")
+    api_key = get_api_key(account)
+    timeout = get_account_setting(account, "openwa_api_timeout", 30)
+
+    headers = {"Content-Type": "application/json", "X-API-Key": api_key}
+    url = f"{base_url}/api/sessions/{session_id}"
+
+    try:
+        resp = _http_session.get(url, headers=headers, timeout=timeout)
+    except requests.exceptions.ConnectionError:
+        return {"status": "error", "error": "Could not reach OpenWA server."}
+    except requests.exceptions.Timeout:
+        return {"status": "error", "error": "OpenWA server timed out."}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+    if resp.status_code == 200:
+        session = resp.json()
+        return {
+            "status": session.get("status", "unknown"),
+            "phone": session.get("phone"),
+            "push_name": session.get("pushName"),
+            "connected_at": session.get("connectedAt"),
+            "last_active": session.get("lastActive"),
+        }
+
+    if resp.status_code == 404:
+        return {"status": "not_found"}
+
+    if resp.status_code in (401, 403):
+        return {"status": "auth_error"}
+
+    return {"status": "error", "error": f"OpenWA returned {resp.status_code}."}
 
 
 @frappe.whitelist()

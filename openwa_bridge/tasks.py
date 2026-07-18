@@ -781,7 +781,8 @@ def reconcile_stale_outbox() -> None:
 
         # Case 3: Outbox attempted >= max but still Pending/Sending
         attempts = frappe.db.get_value("OpenWA Outbox", entry.name, "attempts") or 0
-        if attempts >= 5:
+        max_attempts = frappe.db.get_value("OpenWA Outbox", entry.name, "max_attempts") or 100
+        if attempts >= max_attempts:
             frappe.db.set_value(
                 "OpenWA Outbox",
                 entry.name,

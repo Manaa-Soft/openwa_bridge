@@ -34,6 +34,10 @@ frappe.ui.form.on("WhatsApp Account", {
                     // Session was deleted from OpenWA — stale ID in Frappe
                     frm.page.set_indicator(__("Session Deleted — Re-setup Required"), "red");
                     _add_reset_and_setup_button(frm);
+                } else if (s === "auth_error") {
+                    // API key invalid or missing access to this session
+                    frm.page.set_indicator(__("Auth Error — Check API Key"), "red");
+                    _add_reconnect_button(frm);
                 } else if (s === "error") {
                     // OpenWA server unreachable
                     frm.page.set_indicator(__("OpenWA Unreachable"), "red");

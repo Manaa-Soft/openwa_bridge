@@ -92,7 +92,7 @@ doctype_js = {
 # ------------
 
 before_install = "openwa_bridge.install.before_install"
-# after_install = "openwa_bridge.install.after_install"
+after_install = "openwa_bridge.install.after_install"
 
 # Uninstallation
 # ------------
