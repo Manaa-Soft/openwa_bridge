@@ -207,34 +207,44 @@ function _show_qr_code(frm) {
                 _clear_qr_timer(frm);
                 frm.reload_doc();
             } else {
-                frm.fields_dict.openwa_qr_html.$wrapper.html(
-                    '<p style="color:#ef4444; padding:10px;">' +
-                        (msg.error || __("Failed to get QR code")) +
-                    "</p>"
-                );
                 _clear_qr_timer(frm);
+                frappe.msgprint({
+                    title: __("QR Code Error"),
+                    indicator: "red",
+                    message: msg.error || __("Failed to get QR code"),
+                });
             }
         },
     });
 }
 
 function _render_qr(frm, qr_data_url) {
-    frm.fields_dict.openwa_qr_html.$wrapper.html(
+    // Show QR in a large modal dialog for maximum visibility.
+    _clear_qr_timer(frm);
+
+    const d = new frappe.ui.Dialog({
+        title: __("Scan QR Code with WhatsApp"),
+        size: "small",
+        onhide() {
+            _clear_qr_timer(frm);
+        },
+    });
+
+    d.$body.html(
         '<div style="text-align:center; padding:20px;">' +
-            '<img src="' +
-            qr_data_url +
-            '" ' +
-            'style="max-width:300px; border:2px solid #d1d5db; border-radius:8px;" />' +
-            '<p style="margin-top:12px; color:#6b7280; font-size:13px;">' +
-            __("Scan with WhatsApp to connect") +
+            '<img src="' + qr_data_url + '" ' +
+            'style="width:280px; height:280px; border:3px solid #d1d5db; border-radius:12px; image-rendering: pixelated;" />' +
+            '<p style="margin-top:16px; color:#374151; font-size:14px; font-weight:500;">' +
+                __("Scan with WhatsApp to connect") +
             "</p>" +
-            '<p style="color:#9ca3af; font-size:11px;">' +
-            __("QR expires in 60 seconds — auto-refreshes every 55 s") +
+            '<p style="color:#6b7280; font-size:12px;">' +
+                __("QR expires in 60 seconds — auto-refreshes every 55 s") +
             "</p>" +
         "</div>"
     );
+    d.show();
 
-    _clear_qr_timer(frm);
+    frm._qr_dialog = d;
     frm._qr_refresh_timer = setInterval(() => {
         _show_qr_code(frm);
     }, 55000);
@@ -244,6 +254,10 @@ function _clear_qr_timer(frm) {
     if (frm._qr_refresh_timer) {
         clearInterval(frm._qr_refresh_timer);
         frm._qr_refresh_timer = null;
+    }
+    if (frm._qr_dialog) {
+        frm._qr_dialog.hide();
+        frm._qr_dialog = null;
     }
 }
 
