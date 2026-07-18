@@ -31,9 +31,10 @@ frappe.ui.form.on("WhatsApp Account", {
                     frm.page.set_indicator(__("Scan QR Code"), "orange");
                     _show_qr_code(frm);
                 } else if (s === "not_found") {
-                    // Session was deleted from OpenWA — stale ID in Frappe
-                    frm.page.set_indicator(__("Session Deleted — Re-setup Required"), "red");
-                    _add_reset_and_setup_button(frm);
+                    // Session was deleted from OpenWA — Reconnect will
+                    // auto-discover or create a new session.
+                    frm.page.set_indicator(__("Session Deleted"), "red");
+                    _add_reconnect_button(frm);
                 } else if (s === "auth_error") {
                     // API key invalid or missing access to this session
                     frm.page.set_indicator(__("Auth Error — Check API Key"), "red");
