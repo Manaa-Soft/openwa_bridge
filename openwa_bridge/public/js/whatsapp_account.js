@@ -24,7 +24,10 @@ frappe.ui.form.on("WhatsApp Account", {
                 const s = r.message.status;
 
                 if (s === "ready") {
-                    frm.page.set_indicator(__("Connected"), "green");
+                    const phone = r.message.phone || "";
+                    const pushName = r.message.push_name || "";
+                    const label = [pushName, phone].filter(Boolean).join(" · ") || __("Connected");
+                    frm.page.set_indicator(label, "green");
                     _add_disconnect_button(frm);
                     _add_manage_events_button(frm);
                 } else if (s === "qr_ready" || s === "initializing") {
