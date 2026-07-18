@@ -435,7 +435,7 @@ def get_openwa_session_status(account_name: str) -> dict:
         # Rate-limited — don't treat as error.  Fall back to the Frappe
         # doc status so the UI stays accurate during rate-limit bursts.
         frappe_status = frappe.db.get_value(
-            "WhatsApp Account", account_name, "openwa_status", cache=True
+            "WhatsApp Account", account_name, "status", cache=True
         )
         if frappe_status == "Active":
             return {"status": "ready"}
