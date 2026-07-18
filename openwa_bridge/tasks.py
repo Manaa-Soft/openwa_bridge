@@ -27,6 +27,8 @@ def _check_session_status(base_url: str, session_id: str, api_key: str) -> dict 
         dict with session data if found (HTTP 200).
         dict with ``{"_deleted": True}`` if the session was removed from
         OpenWA (HTTP 404) — callers must check for this.
+        dict with ``{"_rate_limited": True}`` on HTTP 429 — callers should
+        skip this check and keep the current status.
         None if the server is unreachable or returned an unexpected status.
     """
     try:
@@ -39,6 +41,8 @@ def _check_session_status(base_url: str, session_id: str, api_key: str) -> dict 
             return resp.json()
         if resp.status_code == 404:
             return {"_deleted": True}
+        if resp.status_code == 429:
+            return {"_rate_limited": True}
     except Exception:
         pass
     return None
@@ -141,6 +145,14 @@ def _run_health_check() -> None:
             frappe.db.set_value(
                 "WhatsApp Account", account_name,
                 "openwa_status", "Inactive",
+            )
+            continue
+
+        if session.get("_rate_limited"):
+            # Rate-limited — don't change anything, just move on.
+            frappe.logger().info(
+                f"OpenWA health check: session '{session_id}' on "
+                f"'{account_name}' rate-limited — skipping"
             )
             continue
 

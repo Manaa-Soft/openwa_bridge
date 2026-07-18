@@ -431,6 +431,16 @@ def get_openwa_session_status(account_name: str) -> dict:
         )
         return {"status": "auth_error"}
 
+    if resp.status_code == 429:
+        # Rate-limited — don't treat as error.  Fall back to the Frappe
+        # doc status so the UI stays accurate during rate-limit bursts.
+        frappe_status = frappe.db.get_value(
+            "WhatsApp Account", account_name, "openwa_status", cache=True
+        )
+        if frappe_status == "Active":
+            return {"status": "ready"}
+        return {"status": "error", "error": "OpenWA rate limit — try again shortly."}
+
     frappe.logger().warning(
         f"OpenWA status check HTTP {resp.status_code}: {account_name}"
     )

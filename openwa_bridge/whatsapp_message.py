@@ -106,6 +106,13 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     "Please re-setup the WhatsApp Account from the form.",
                     title="Session Deleted",
                 )
+            elif resp.status_code == 429:
+                # Rate-limited — assume session is fine, don't restart.
+                frappe.logger().info(
+                    f"OpenWA pre-send: session '{session_id}' rate-limited "
+                    f"— assuming connected, proceeding with send"
+                )
+                return
             else:
                 status = "disconnected"
         except Exception:
