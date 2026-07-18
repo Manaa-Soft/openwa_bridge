@@ -354,11 +354,20 @@ def get_openwa_session_status(account_name: str) -> dict:
 
     try:
         resp = _http_session.get(url, headers=headers, timeout=timeout)
-    except requests.exceptions.ConnectionError:
+    except requests.exceptions.ConnectionError as exc:
+        frappe.logger().warning(
+            f"OpenWA status check failed (connection): {account_name} — {exc}"
+        )
         return {"status": "error", "error": "Could not reach OpenWA server."}
     except requests.exceptions.Timeout:
+        frappe.logger().warning(
+            f"OpenWA status check failed (timeout): {account_name}"
+        )
         return {"status": "error", "error": "OpenWA server timed out."}
     except Exception as exc:
+        frappe.logger().warning(
+            f"OpenWA status check failed: {account_name} — {exc}"
+        )
         return {"status": "error", "error": str(exc)}
 
     if resp.status_code == 200:
@@ -375,8 +384,14 @@ def get_openwa_session_status(account_name: str) -> dict:
         return {"status": "not_found"}
 
     if resp.status_code in (401, 403):
+        frappe.logger().warning(
+            f"OpenWA status check auth error ({resp.status_code}): {account_name}"
+        )
         return {"status": "auth_error"}
 
+    frappe.logger().warning(
+        f"OpenWA status check HTTP {resp.status_code}: {account_name}"
+    )
     return {"status": "error", "error": f"OpenWA returned {resp.status_code}."}
 
 
