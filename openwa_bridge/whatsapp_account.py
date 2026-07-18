@@ -86,6 +86,26 @@ def _safe_get_session(account: dict) -> dict | None:
         return None
 
 
+def _recover_deleted_session(account: dict, account_name: str) -> str | None:
+    """When the stored session ID returns 404, search OpenWA for an existing
+    session with the same name and return its ID (or ``None``)."""
+    try:
+        sessions = _raw_openwa_call(account, "GET", "/api/sessions")
+    except Exception:
+        return None
+    session_name = _sanitize_session_name(account_name)
+    for s in sessions:
+        if s.get("name") == session_name:
+            new_id = s.get("id")
+            if new_id:
+                frappe.logger().info(
+                    f"OpenWA: recovered deleted session for '{account_name}' — "
+                    f"found existing session '{session_name}' (id={new_id})"
+                )
+                return new_id
+    return None
+
+
 def _start_session(account: dict) -> None:
     """Start an OpenWA session, ignoring 'already started' errors."""
     timeout = get_account_setting(account, "openwa_session_start_timeout", 60)
@@ -381,6 +401,28 @@ def get_openwa_session_status(account_name: str) -> dict:
         }
 
     if resp.status_code == 404:
+        # Session was deleted from OpenWA — try to find existing session
+        # by name and auto-recover the stale ID.
+        recovered_id = _recover_deleted_session(account, account_name)
+        if recovered_id:
+            frappe.db.set_value("WhatsApp Account", account_name,
+                                "openwa_session_id", recovered_id)
+            frappe.db.commit()
+            # Re-check status with the new session ID
+            url = f"{base_url}/api/sessions/{recovered_id}"
+            try:
+                resp2 = _http_session.get(url, headers=headers, timeout=timeout)
+                if resp2.status_code == 200:
+                    session = resp2.json()
+                    return {
+                        "status": session.get("status", "unknown"),
+                        "phone": session.get("phone"),
+                        "push_name": session.get("pushName"),
+                        "connected_at": session.get("connectedAt"),
+                        "last_active": session.get("lastActive"),
+                    }
+            except Exception:
+                pass
         return {"status": "not_found"}
 
     if resp.status_code in (401, 403):
@@ -414,7 +456,18 @@ def get_openwa_qr(account_name: str) -> dict:
     # --- 1. Check current session status -----------------------------------
     session = _safe_get_session(account)
     if session is None:
-        return {"status": "error", "error": "Could not reach OpenWA server."}
+        # Old session ID may be stale — try to find an existing session
+        # by name (e.g. user deleted from OpenWA dashboard, then clicked
+        # Reconnect in Frappe).
+        session_id = _recover_deleted_session(account, account_name)
+        if session_id:
+            frappe.db.set_value("WhatsApp Account", account_name,
+                                "openwa_session_id", session_id)
+            frappe.db.commit()
+            account = _get_account(account_name, require_session=True)
+            session = _safe_get_session(account)
+        if session is None:
+            return {"status": "error", "error": "Could not reach OpenWA server."}
 
     status = session.get("status", "unknown")
 
