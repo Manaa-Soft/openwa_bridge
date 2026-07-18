@@ -467,7 +467,15 @@ def get_openwa_qr(account_name: str) -> dict:
             account = _get_account(account_name, require_session=True)
             session = _safe_get_session(account)
         if session is None:
-            return {"status": "error", "error": "Could not reach OpenWA server."}
+            # No session found by ID or by name — create a fresh one.
+            frappe.logger().info(
+                f"OpenWA QR: no session found for '{account_name}' "
+                f"— creating a new one"
+            )
+            try:
+                return setup_openwa_session(account_name)
+            except Exception as exc:
+                return {"status": "error", "error": str(exc)}
 
     status = session.get("status", "unknown")
 
