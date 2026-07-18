@@ -40,8 +40,9 @@ frappe.ui.form.on("WhatsApp Account", {
                     frm.page.set_indicator(__("Auth Error — Check API Key"), "red");
                     _add_reconnect_button(frm);
                 } else if (s === "error") {
-                    // OpenWA server unreachable
-                    frm.page.set_indicator(__("OpenWA Unreachable"), "red");
+                    // Server error — show the actual error message
+                    const errMsg = r.message.error || __("OpenWA Error");
+                    frm.page.set_indicator(errMsg, "red");
                     _add_reconnect_button(frm);
                 } else if (s === "failed") {
                     // Session is corrupted/failed — reconnect will delete + recreate
