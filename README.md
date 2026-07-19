@@ -260,11 +260,27 @@ Create a webhook in OpenWA to forward inbound messages to Frappe:
 
 ### OpenWA SSRF Configuration
 
-If OpenWA and Frappe are on the same server, allow the Frappe IP in OpenWA's `.env`:
+OpenWA blocks webhook delivery to private/internal addresses by default (SSRF protection). When OpenWA and Frappe are on the same server, you need to whitelist the Frappe site so webhooks can be delivered.
+
+**Recommended (secure)** — keep global protection ON, whitelist your Frappe site:
 
 ```bash
 # In ~/OpenWA/.env
-SSRF_ALLOWED_HOSTS=192.168.1.15,localhost
+SSRF_ALLOWED_HOSTS=manaa-soft,192.168.1.15,localhost,127.0.0.1
+```
+
+> **Why include the site name?** OpenWA resolves webhook target hosts. When Frappe's webhook URL uses a site name like `manaa-soft` or `erp.manaasoft.com`, that hostname must appear in the allow list — otherwise OpenWA treats it as an internal host and blocks delivery.
+
+**Alternative (closed networks only)** — disable protection entirely:
+
+```bash
+WEBHOOK_SSRF_PROTECT=false
+```
+
+After updating `.env`, restart:
+
+```bash
+sudo systemctl restart openwa
 ```
 
 ### Site Config (Alternative)
@@ -581,7 +597,7 @@ This error occurs when `frappe_whatsapp`'s wildcard doc_events hook fires `send_
 
 1. Test the HMAC signature: the `X-Openwa-Signature` header must match `sha256=<hex>`
 2. Check the webhook URL is accessible from OpenWA
-3. Verify `SSRF_ALLOWED_HOSTS` includes your Frappe server IP
+3. Verify `SSRF_ALLOWED_HOSTS` includes your Frappe site name AND server IP (e.g., `SSRF_ALLOWED_HOSTS=manaa-soft,192.168.1.15,localhost,127.0.0.1`)
 4. Review OpenWA webhook logs for delivery status
 
 ### Sessions don't reconnect after VM restart

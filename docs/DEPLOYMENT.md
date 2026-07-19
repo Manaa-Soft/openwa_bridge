@@ -68,18 +68,77 @@ npm run build
 
 ### 2. Configure OpenWA Environment
 
-OpenWA uses `.env` files for configuration. The key settings:
+OpenWA uses `.env` files for configuration. Create or edit `~/OpenWA/.env`:
 
-```bash
-# ~/OpenWA/.env (create or edit)
-AUTO_START_SESSIONS=true
+```env
+# =============================================================================
+# CORE
+# =============================================================================
+NODE_ENV=production
 PORT=2785
-SSRF_ALLOWED_HOSTS=192.168.1.15,localhost
+API_PORT=2785
+LOG_LEVEL=info
+DOMAIN=localhost
+CORS_ORIGINS=http://192.168.1.15
+CSP_UPGRADE_INSECURE_REQUESTS=false
+AUTO_START_SESSIONS=true
+
+# =============================================================================
+# ENGINE
+# =============================================================================
+ENGINE_TYPE=whatsapp-web.js
+SESSION_DATA_PATH=./data/sessions
+PUPPETEER_HEADLESS=true
+PUPPETEER_ARGS=--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu
+# PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium  # uncomment if Chrome not found
+
+# =============================================================================
+# DATABASE
+# =============================================================================
+DATABASE_TYPE=sqlite
+DATABASE_SYNCHRONIZE=false
+
+# =============================================================================
+# SECURITY
+# =============================================================================
+API_MASTER_KEY=your-strong-secret-key-here
+
+# =============================================================================
+# WEBHOOK (SSRF — allow Frappe to reach OpenWA)
+# =============================================================================
+WEBHOOK_TIMEOUT=10000
+WEBHOOK_MAX_RETRIES=3
+WEBHOOK_RETRY_DELAY=5000
+
+# Keep global SSRF protection ON; whitelist only your Frappe site:
+SSRF_ALLOWED_HOSTS=manaa-soft,192.168.1.15,localhost,127.0.0.1
+
+# =============================================================================
+# REDIS (use port 6385 if ERPNext shares this server)
+# =============================================================================
+REDIS_ENABLED=true
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6385
+REDIS_PASSWORD=your-redis-password-here
+REDIS_CONNECT_TIMEOUT_MS=5000
+QUEUE_ENABLED=true
+# CACHE_ENABLED=true
+
+# =============================================================================
+# MEDIA (disable to prevent memory floods on reconnect)
+# =============================================================================
 MEDIA_DOWNLOAD_ENABLED=false
 STORE_EPHEMERAL_MESSAGES=false
 ```
 
-**Important**: If `~/OpenWA/data/.env.generated` exists, delete it -- it overrides your `.env` and may force `AUTO_START_SESSIONS=false`:
+> **Key settings explained:**
+> - `CORS_ORIGINS` — set to your Frappe server URL so the OpenWA dashboard loads in-browser
+> - `CSP_UPGRADE_INSECURE_REQUESTS=false` — required when accessing dashboard over plain HTTP (no TLS proxy)
+> - `SSRF_ALLOWED_HOSTS` — must include your Frappe **site name** (`manaa-soft`) and **server IP** (`192.168.1.15`). This keeps global SSRF protection ON while allowing local Frappe ↔ OpenWA communication
+> - `REDIS_PORT=6385` — use 6385 when ERPNext shares the server (see [Redis Isolation](#redis-isolation-erpnext--openwa-on-same-server)); use 6379 if OpenWA is alone
+> - `AUTO_START_SESSIONS=true` — auto-reconnects WhatsApp on OpenWA restart
+
+**Important**: If `~/OpenWA/data/.env.generated` exists, delete it -- it overrides your `.env`:
 
 ```bash
 rm ~/OpenWA/data/.env.generated
@@ -260,7 +319,7 @@ REDIS_URL=redis://:your-redis-password-here@127.0.0.1:6385
 |---|---|---|
 | Sessions don't auto-start on boot | `AUTO_START_SESSIONS=false` in `.env.generated` | Delete `.env.generated`, set `AUTO_START_SESSIONS=true` in `.env` |
 | OpenWA dies after server reboot | No systemd setup | `systemctl enable openwa` |
-| Frappe can't reach OpenWA | SSRF blocks private IPs | `SSRF_ALLOWED_HOSTS=192.168.1.15,localhost` |
+| Frappe can't reach OpenWA | SSRF blocks private IPs | `SSRF_ALLOWED_HOSTS=manaa-soft,192.168.1.15,localhost,127.0.0.1` |
 | "Could not find Chrome" | Wrong user or missing Chrome | See Chrome/Puppeteer section below |
 | `send-image` returns 500 | WhatsApp Web.js returns `undefined` for media | Apply OpenWA media send patch (see below) |
 | `send-template` returns 404 | Template deleted when session recreated | Bridge auto-recovers: looks up by name, re-creates if missing |
