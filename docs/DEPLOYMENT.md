@@ -111,7 +111,7 @@ WEBHOOK_MAX_RETRIES=3
 WEBHOOK_RETRY_DELAY=5000
 
 # Keep global SSRF protection ON; whitelist only your Frappe site:
-SSRF_ALLOWED_HOSTS=manaa-soft,192.168.1.15,localhost,127.0.0.1
+SSRF_ALLOWED_HOSTS=your-site-name,your-server-ip,localhost,127.0.0.1
 
 # =============================================================================
 # REDIS (use port 6385 if ERPNext shares this server)
@@ -134,7 +134,7 @@ STORE_EPHEMERAL_MESSAGES=false
 > **Key settings explained:**
 > - `CORS_ORIGINS` — set to your Frappe server URL so the OpenWA dashboard loads in-browser
 > - `CSP_UPGRADE_INSECURE_REQUESTS=false` — required when accessing dashboard over plain HTTP (no TLS proxy)
-> - `SSRF_ALLOWED_HOSTS` — must include your Frappe **site name** (`manaa-soft`) and **server IP** (`192.168.1.15`). This keeps global SSRF protection ON while allowing local Frappe ↔ OpenWA communication
+> - `SSRF_ALLOWED_HOSTS` — must include your Frappe **site name** and **server IP** (e.g., `SSRF_ALLOWED_HOSTS=your-site-name,your-server-ip,localhost,127.0.0.1`). This keeps global SSRF protection ON while allowing local Frappe ↔ OpenWA communication
 > - `REDIS_PORT=6385` — use 6385 when ERPNext shares the server (see [Redis Isolation](#redis-isolation-erpnext--openwa-on-same-server)); use 6379 if OpenWA is alone
 > - `AUTO_START_SESSIONS=true` — auto-reconnects WhatsApp on OpenWA restart
 
@@ -319,7 +319,7 @@ REDIS_URL=redis://:your-redis-password-here@127.0.0.1:6385
 |---|---|---|
 | Sessions don't auto-start on boot | `AUTO_START_SESSIONS=false` in `.env.generated` | Delete `.env.generated`, set `AUTO_START_SESSIONS=true` in `.env` |
 | OpenWA dies after server reboot | No systemd setup | `systemctl enable openwa` |
-| Frappe can't reach OpenWA | SSRF blocks private IPs | `SSRF_ALLOWED_HOSTS=manaa-soft,192.168.1.15,localhost,127.0.0.1` |
+| Frappe can't reach OpenWA | SSRF blocks private IPs | `SSRF_ALLOWED_HOSTS=your-site-name,your-server-ip,localhost,127.0.0.1` |
 | "Could not find Chrome" | Wrong user or missing Chrome | See Chrome/Puppeteer section below |
 | `send-image` returns 500 | WhatsApp Web.js returns `undefined` for media | Apply OpenWA media send patch (see below) |
 | `send-template` returns 404 | Template deleted when session recreated | Bridge auto-recovers: looks up by name, re-creates if missing |
