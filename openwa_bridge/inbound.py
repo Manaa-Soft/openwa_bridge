@@ -412,6 +412,10 @@ def _handle_message_sent(event_data: dict) -> None:
 def _handle_status_update(event_data: dict) -> None:
     """Map OpenWA ``message.ack`` / ``message.failed`` to
     WhatsApp Message status and reconcile the linked OpenWA Outbox entry.
+
+    Status can only ADVANCE (never downgrade) — matching OpenWA's own
+    ``ackStatusTransitionFrom`` guard.  Priority:
+        pending < Sent < Delivered < Read
     """
     message_id: str = event_data.get("messageId") or event_data.get("id", "")
     status: str = event_data.get("status", "")
@@ -424,12 +428,43 @@ def _handle_status_update(event_data: dict) -> None:
     if not name:
         return
 
-    frappe.db.set_value("WhatsApp Message", name, "status", status.capitalize())
+    new_status = status.capitalize()
+    # OpenWA maps ack 5 (PLAYED) to "read" — normalize
+    if new_status in ("Played",):
+        new_status = "Read"
+
+    _STATUS_PRIORITY = {
+        "Queued": 0,
+        "Pending": 0,
+        "Sent": 1,
+        "Delivered": 2,
+        "Read": 3,
+        "Failed": -1,
+        "Revoked": -1,
+    }
+
+    current_status = frappe.db.get_value("WhatsApp Message", name, "status") or ""
+    current_priority = _STATUS_PRIORITY.get(current_status, 0)
+    new_priority = _STATUS_PRIORITY.get(new_status, 0)
+
+    if new_priority <= current_priority and new_status != current_status:
+        frappe.logger().debug(
+            f"OpenWA ack: skipping downgrade {current_status} → {new_status} "
+            f"for message {name} ({message_id})"
+        )
+        return
+
+    if new_status != current_status:
+        frappe.db.set_value("WhatsApp Message", name, "status", new_status)
+        frappe.logger().info(
+            f"OpenWA ack: {name} status {current_status} → {new_status} "
+            f"(message_id={message_id})"
+        )
 
     # Reconcile the OpenWA Outbox: if the message was delivered/read,
     # any linked outbox entry stuck in Pending or Sending should be
     # marked Sent to prevent duplicate resends by the scheduler.
-    if status.lower() in ("sent", "delivered", "read"):
+    if new_status in ("Sent", "Delivered", "Read"):
         _reconcile_outbox_on_ack(name, message_id)
 
 

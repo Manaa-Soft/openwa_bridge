@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import frappe
 import requests
 
-from openwa_bridge.utils import get_cached_account, get_account_setting, _http_session
+from openwa_bridge.utils import get_cached_account, get_account_setting, get_api_key, _http_session
 
 
 def _get_openwa_accounts() -> list[dict]:
@@ -393,6 +393,44 @@ def _process_outbox_entry_inner(outbox_name: str) -> None:  # noqa: C901
             f"message {msg.name} already has message_id '{msg.message_id}'"
         )
         return
+
+    # Pre-send session check: verify the session is TRULY connected to
+    # WhatsApp (status=ready AND phone set) BEFORE attempting to send.
+    # Without this, _ensure_session_ready would restart a disconnected
+    # session, the engine accepts the message (201+messageId), but it
+    # can never be delivered because WhatsApp is not linked.
+    base_url = account.get("openwa_base_url", "").strip("/")
+    session_id = account.get("openwa_session_id")
+    api_key = get_api_key(account)
+    try:
+        from openwa_bridge.utils import _http_session
+        check_resp = _http_session.get(
+            f"{base_url}/api/sessions/{session_id}",
+            headers={"X-API-Key": api_key},
+            timeout=10,
+        )
+        if check_resp.status_code == 200:
+            sess = check_resp.json()
+            if sess.get("status") != "ready" or not sess.get("phone"):
+                _fail_outbox(
+                    outbox_name,
+                    f"Session not connected to WhatsApp "
+                    f"(status={sess.get('status')}, phone={sess.get('phone')}). "
+                    f"Will retry when session reconnects.",
+                    account=account,
+                )
+                return
+        elif check_resp.status_code == 404:
+            _fail_outbox(
+                outbox_name,
+                "Session no longer exists on OpenWA. Re-setup required.",
+                account=account,
+            )
+            return
+        # On 429 or other errors, proceed — _ensure_session_ready will handle
+    except Exception:
+        # Can't reach OpenWA — _ensure_session_ready will handle the error
+        pass
 
     # Check circuit breaker
     from openwa_bridge.utils import OpenWACircuitBreaker

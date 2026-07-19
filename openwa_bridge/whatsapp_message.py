@@ -422,34 +422,20 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 err_body = resp.text
             except Exception:
                 err_body = "(no body)"
+
+            # OpenWA guarantee: persistSentState always returns 201+messageId
+            # on success (swallows DB errors). failSend throws → 500 with NO
+            # messageId. So ANY 4xx/5xx means the message was NOT delivered.
+            # Log for diagnostics and let the caller (_fail_outbox via outbox
+            # processor) handle retry with backoff.
             frappe.log_error(
-                title="OpenWA API Error (assuming delivered)",
+                title=f"OpenWA API Error ({resp.status_code})",
                 message=(
                     f"POST {resp.url} returned {resp.status_code}\n"
                     f"Request body: {json.dumps(resp.request.body.decode() if resp.request.body else '', default=str)}\n"
-                    f"Response: {err_body}\n"
-                    f"Not raising — engine likely delivered before 500."
+                    f"Response: {err_body}"
                 ),
             )
-
-            # OpenWA engines (whatsapp-web.js/Baileys) deliver the message
-            # BEFORE the REST response is built (the engine calls the
-            # underlying WhatsApp library synchronously, then error handling
-            # in persistSentState/failSend causes the 500 afterwards).
-            # Raising here would cause the outbox to stay Pending and retry.
-            # Instead, assume delivery, mark as Sent, and let the ack webhook
-            # (_handle_message_sent / _handle_status_update in inbound.py)
-            # reconcile the real message_id when it arrives.
-            #
-            # Only re-raise for HTTP 4xx (client errors), not 5xx.
-            if resp.status_code >= 500:
-                frappe.db.set_value(
-                    "WhatsApp Message",
-                    self.name,
-                    {"status": "Sent"},
-                )
-                return
-
             resp.raise_for_status()
 
         res_data = resp.json()
