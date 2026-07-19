@@ -2,7 +2,7 @@
 
 **Seamlessly bridge frappe\_whatsapp with OpenWA for self-hosted WhatsApp messaging.**
 
-OpenWA Bridge connects the [frappe\_whatsapp](https://github.com/Shridar2101/frappe_whatsapp) module with the [OpenWA](https://github.com/Open-WA/) WhatsApp Web API Gateway, allowing your Frappe/ERPNext instance to send and receive WhatsApp messages through your own WhatsApp Web session instead of the Meta Cloud API.
+OpenWA Bridge connects the [frappe\_whatsapp](https://github.com/Shridar2101/frappe_whatsapp) module with the [OpenWA](https://github.com/rmyndharis/OpenWA) WhatsApp Web API Gateway, allowing your Frappe/ERPNext instance to send and receive WhatsApp messages through your own WhatsApp Web session instead of the Meta Cloud API.
 
 ---
 
