@@ -295,6 +295,7 @@ def _run_health_check() -> None:
 # ---------------------------------------------------------------------------
 
 
+@frappe.whitelist()
 def process_outbox_entry(outbox_name: str) -> None:  # noqa: C901
     """Process a single OpenWA Outbox entry.
 
