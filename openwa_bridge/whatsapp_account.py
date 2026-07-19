@@ -581,6 +581,41 @@ def reset_openwa_session(account_name: str) -> dict:
     return {"status": "reset"}
 
 
+@frappe.whitelist()
+def delete_openwa_session(account_name: str) -> dict:
+    """Permanently delete the OpenWA session and clear the Frappe doc.
+
+    Calls ``DELETE /api/sessions/:id`` which also destroys the engine
+    process, all stored messages, webhooks, and auth data on disk.
+    """
+    if not frappe.has_permission("WhatsApp Account", "write", account_name):
+        frappe.throw("Insufficient permissions to manage WhatsApp Account.", frappe.PermissionError)
+    account = _get_account(account_name)
+    session_id = account.get("openwa_session_id")
+    if not session_id:
+        frappe.throw("No session ID set for this account.")
+
+    # Delete from OpenWA (ignore 404 — already gone)
+    try:
+        _raw_openwa_call(account, "DELETE", f"/api/sessions/{session_id}")
+    except requests.exceptions.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code != 404:
+            return {"status": "error", "error": _extract_error(exc)}
+    except Exception:
+        pass  # OpenWA may be down — clear the stale ID anyway
+
+    # Clear from Frappe
+    frappe.db.set_value("WhatsApp Account", account_name, "openwa_session_id", "")
+    frappe.db.set_value("WhatsApp Account", account_name, "status", "Inactive")
+    frappe.db.commit()
+    frappe.cache().delete_value(f"openwa_account:{account_name}")
+
+    frappe.logger().info(
+        f"OpenWA: deleted session '{session_id}' for '{account_name}'"
+    )
+    return {"status": "deleted"}
+
+
 # ---------------------------------------------------------------------------
 # Doc event hook — called by Frappe when a WhatsApp Account is validated
 # ---------------------------------------------------------------------------
