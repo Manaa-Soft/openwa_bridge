@@ -50,6 +50,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **Uninstall cleanup** — `before_uninstall()` deletes OpenWA sessions and webhooks
 
 ### Fixed
+- **Messages marked Sent when session disconnected** — Added pre-send session check in outbox processor that verifies `status=ready` AND `phone` field is set before attempting to send. Prevents sending to a disconnected engine that accepts messages (201+messageId) but can never deliver them.
+- **500 HTTP false-positive marked messages as Sent** — Removed incorrect assumption that HTTP 500 from OpenWA means "engine delivered before error". OpenWA's `persistSentState` always returns 201+messageId on success (swallows DB errors); `failSend` always throws 500 with NO messageId. ANY 500 now triggers retry with backoff.
+- **Ack status downgrade** — `message.ack` handler now only allows forward transitions (pending → Sent → Delivered → Read), never downgrades. Late "sent" acks after "delivered" are silently skipped. Matches OpenWA's own `ackStatusTransitionFrom` guard.
+- **PLAYED ack not normalized** — Baileys ack 5 (PLAYED, e.g. voice note auto-read) now maps to `Read` instead of creating an invalid `Played` status.
 - **Duplicate message bug** — notification flow with dynamic header sent duplicate messages (user confirmed resolved)
 - **Atomic image+caption** — dynamic header image failures now raise exception for outbox retry instead of falling through to text send (which created duplicates)
 - **Templates with no variables always threw** — templates without `{{...}}` placeholders now send without requiring variables

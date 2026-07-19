@@ -2,15 +2,7 @@
 
 ## Current Active Issues
 
-### 1. Session Disconnected
-
-**Status**: User action required
-**Symptom**: OpenWA session `0ccd954f` returns 409/400 errors ("Session is not connected" / "Session is not active")
-**Fix**: Restart the session at `http://192.168.1.15:2886` (OpenWA dashboard)
-
----
-
-### 2. send-template 400 Bad Request (under investigation)
+### 1. send-template 400 Bad Request (under investigation)
 
 **Status**: Under investigation
 **Error**: `400 Client Error: Bad Request for url: .../messages/send-template`
@@ -21,6 +13,15 @@
 ---
 
 ## Resolved Issues
+
+### 2. Messages marked Sent when session disconnected
+**Symptom**: Outbox entries marked as "Sent" even when the WhatsApp session was manually disconnected or unreachable.
+**Root cause**: OpenWA engine accepts messages even when disconnected — `ready` status means engine alive, NOT WhatsApp linked. The 500 false-positive code also assumed delivery on any HTTP 500.
+**Fix applied**:
+1. Pre-send session check in outbox processor verifies `status=ready` AND `phone` field before sending (`tasks.py`)
+2. Removed false-positive 500→Sent assumption — ANY HTTP error now retries with backoff (`whatsapp_message.py`)
+3. Ack status downgrade protection — statuses only advance, never downgrade (`inbound.py`)
+**Commit**: `c36deb3`
 
 ### 3. "Password not found for WhatsApp Account X token"
 **Fix**: `send_template_message()` now resolves account from `self.whatsapp_account` or default outgoing BEFORE checking `_is_openwa_account()`. When OpenWA account detected, `super()` (which reads Meta token) is never called.

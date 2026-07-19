@@ -389,6 +389,18 @@ Both set `template` field (needed for dynamic header lookup in `_send_dynamic_he
 **Root cause**: OpenWA's built-in SSRF protection (`WEBHOOK_SSRF_PROTECT=true` by default) blocks HTTP requests to private/internal IPs. Since the Frappe server is at `192.168.1.15` (a private IP), all webhook deliveries were rejected.
 **Fix**: Set `WEBHOOK_SSRF_PROTECT=false` in `~/OpenWA/.env` and added `SSRF_ALLOWED_HOSTS=localhost,minio,192.168.1.15`. This is safe because OpenWA runs on the same local network and the webhook URL is configured per-account.
 
+### 11. Messages marked Sent when session disconnected
+**Commit**: `c36deb3`
+**Symptom**: Outbox entries marked as "Sent" even when the WhatsApp session was manually disconnected or WhatsApp servers were unreachable.
+**Root cause**: Three separate issues:
+1. The outbox processor had NO session check before sending — `_ensure_session_ready` would restart a disconnected engine, the engine accepts the message (201+messageId), but it can never be delivered because WhatsApp is not linked.
+2. The500 false-positive code at `whatsapp_message.py:445` assumed HTTP 500 meant "engine delivered before error". But OpenWA's `persistSentState` always returns 201+messageId on success; `failSend` always throws 500 with NO messageId. So500 means message NOT delivered.
+3. The `message.ack` handler had no downgrade protection — a late "sent" ack after "delivered" would downgrade the status.
+**Fix**:
+1. Added pre-send session check in outbox processor (`tasks.py:397-433`) that verifies `status=ready` AND `phone` field before sending. If not connected, fails outbox entry for retry.
+2. Removed false-positive 500→Sent assumption (`whatsapp_message.py:420-439`). ANY HTTP error now raises → `_fail_outbox` → retry with backoff.
+3. Added status priority map in `_handle_status_update` (`inbound.py:412-462`): pending(0) < Sent(1) < Delivered(2) < Read(3). Statuses can only advance, never downgrade. Also normalizes Baileys ack 5 (PLAYED) to Read.
+
 ---
 
 ## Code Review Findings (Post-Phase 6)
