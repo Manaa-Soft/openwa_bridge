@@ -157,9 +157,10 @@ def _run_health_check() -> None:
             continue
 
         status = session.get("status", "unknown")
+        phone = session.get("phone")
 
-        # 2. If ready, sync status, ensure webhook exists, and move on
-        if status == "ready":
+        # 2. If ready AND connected to WhatsApp (phone set), sync status
+        if status == "ready" and phone:
             _set_account_status(account_name, "ready")
             # Auto-sync webhook on health check — ensures the webhook exists
             # after session reconnect or OpenWA restart.
@@ -170,15 +171,14 @@ def _run_health_check() -> None:
                 pass
             continue
 
-        # 3. If disconnected/created, attempt restart
-        if status in ("disconnected", "created"):
+        # 3. If ready but no phone — engine alive but not connected to WhatsApp
+        if status == "ready" and not phone:
             frappe.logger().info(
                 f"OpenWA health check: session '{session_id}' on "
-                f"'{account_name}' is {status} — attempting restart"
+                f"'{account_name}' is ready but not linked to WhatsApp — restarting"
             )
             started = _start_session(base_url, session_id, api_key)
             if started:
-                # Poll for readiness (up to 15s, 1s intervals)
                 for _ in range(15):
                     time.sleep(1)
                     session = _check_session_status(base_url, session_id, api_key)
@@ -192,7 +192,28 @@ def _run_health_check() -> None:
                     f"'{session_id}' on '{account_name}'"
                 )
 
-        # 4. Failed session — force-kill, then delete+recreate as last resort
+        # 4. If disconnected/created, attempt restart
+        elif status in ("disconnected", "created"):
+            frappe.logger().info(
+                f"OpenWA health check: session '{session_id}' on "
+                f"'{account_name}' is {status} — attempting restart"
+            )
+            started = _start_session(base_url, session_id, api_key)
+            if started:
+                for _ in range(15):
+                    time.sleep(1)
+                    session = _check_session_status(base_url, session_id, api_key)
+                    if session and not session.get("_deleted"):
+                        status = session.get("status", status)
+                        if status == "ready":
+                            break
+            else:
+                frappe.logger().warning(
+                    f"OpenWA health check: failed to restart session "
+                    f"'{session_id}' on '{account_name}'"
+                )
+
+        # 5. Failed session — force-kill, then delete+recreate as last resort
         elif status == "failed":
             frappe.logger().info(
                 f"OpenWA health check: session '{session_id}' on "
@@ -221,7 +242,6 @@ def _run_health_check() -> None:
                     f"'{session_id}' on '{account_name}' — recreating session"
                 )
                 try:
-                    # Delete old session
                     _http_session.delete(
                         f"{base_url.rstrip('/')}/api/sessions/{session_id}",
                         headers={"X-API-Key": api_key},

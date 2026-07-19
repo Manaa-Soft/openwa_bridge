@@ -79,7 +79,11 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
     # ------------------------------------------------------------------
 
     def _ensure_session_ready(self, account: "WhatsAppAccount") -> None:  # noqa: F821
-        """Verify the OpenWA session is ready; attempt restart if not.
+        """Verify the OpenWA session is truly connected to WhatsApp.
+
+        A session can be ``ready`` (engine alive) without being connected
+        to WhatsApp (no phone number).  This method verifies the phone
+        field is set — only then is the session actually usable.
 
         Raises ``frappe.ValidationError`` if the session cannot be recovered.
         """
@@ -90,6 +94,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
         headers = {"Content-Type": "application/json", "X-API-Key": api_key}
 
         # Check current status
+        session_data = None
         try:
             resp = _http_session.get(
                 f"{base_url}/api/sessions/{session_id}",
@@ -97,9 +102,12 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 timeout=10,
             )
             if resp.status_code == 200:
-                status = resp.json().get("status", "unknown")
-                if status == "ready":
-                    return  # all good
+                session_data = resp.json()
+                status = session_data.get("status", "unknown")
+                phone = session_data.get("phone")
+                if status == "ready" and phone:
+                    return  # truly connected — engine alive AND WhatsApp linked
+                # Engine alive but not connected to WhatsApp — need restart
             elif resp.status_code == 404:
                 frappe.throw(
                     f"OpenWA session '{session_id}' no longer exists on the server. "
@@ -120,8 +128,10 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
 
         # Not ready — attempt restart
         frappe.logger().info(
-            f"OpenWA pre-send: session '{session_id}' status is '{status}' — "
-            f"attempting restart before sending message {self.name}"
+            f"OpenWA pre-send: session '{session_id}' status is "
+            f"'{getattr(session_data, 'get', lambda k, d=None: d)('status', 'unknown')}' "
+            f"(phone={getattr(session_data, 'get', lambda k, d=None: d)('phone', None)}) "
+            f"— attempting restart before sending message {self.name}"
         )
         try:
             start_resp = _http_session.post(
@@ -138,9 +148,10 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 f"OpenWA session is {status} and restart failed: {exc}"
             )
 
-        # Poll for readiness (up to 3s, 1s intervals) — keep brief to avoid
-        # blocking the worker thread.  The outbox retry handles longer waits.
-        for _ in range(3):
+        # Poll for readiness (up to 15s, 1s intervals) — wait longer
+        # because the engine needs time to reconnect to WhatsApp after
+        # restart.  We require BOTH status=ready AND phone set.
+        for i in range(15):
             time.sleep(1)
             try:
                 verify = _http_session.get(
@@ -149,11 +160,13 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     timeout=5,
                 )
                 if verify.status_code == 200:
-                    new_status = verify.json().get("status", "unknown")
-                    if new_status == "ready":
+                    vdata = verify.json()
+                    new_status = vdata.get("status", "unknown")
+                    phone = vdata.get("phone")
+                    if new_status == "ready" and phone:
                         frappe.logger().info(
                             f"OpenWA pre-send: session '{session_id}' restarted "
-                            f"successfully — status is now 'ready'"
+                            f"— connected as {phone}"
                         )
                         return
                     if new_status == "qr_ready":
@@ -164,7 +177,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             except Exception:
                 pass
 
-        # Not ready after brief wait — let outbox retry handle it
+        # Not ready after wait — let outbox retry handle it
         frappe.throw(
             f"OpenWA session is {status} and could not be recovered automatically. "
             "The message will be retried. You can also click 'Reconnect' on the "
