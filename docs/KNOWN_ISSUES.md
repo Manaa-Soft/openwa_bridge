@@ -23,7 +23,13 @@
 3. Ack status downgrade protection — statuses only advance, never downgrade (`inbound.py`)
 **Commit**: `c36deb3`
 
-### 3. "Password not found for WhatsApp Account X token"
+### 3. Redis config breaks ERPNext when sharing same server
+**Symptom**: After configuring Redis for OpenWA, ERPNext background jobs stall, email sending fails, real-time updates break.
+**Root cause**: Adding `requirepass` or `allkeys-lru` to global `/etc/redis/redis.conf` conflicts with ERPNext's existing Redis instances (ports 6379/6380/6381).
+**Fix**: Create a dedicated Redis instance for OpenWA on a separate port (6385). See [Redis Isolation](DEPLOYMENT.md#redis-isolation-erpnext--openwa-on-same-server) for full guide.
+**Prevention**: Never modify the global Redis config when ERPNext is running on the same server.
+
+### 4. "Password not found for WhatsApp Account X token"
 **Fix**: `send_template_message()` now resolves account from `self.whatsapp_account` or default outgoing BEFORE checking `_is_openwa_account()`. When OpenWA account detected, `super()` (which reads Meta token) is never called.
 **File**: `whatsapp_notification.py` → `send_template_message()`
 

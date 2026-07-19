@@ -131,6 +131,7 @@ OpenWA Bridge connects the [frappe\_whatsapp](https://github.com/Shridar2101/fra
 - **OpenWA Gateway** running and connected
 - A WhatsApp account linked to OpenWA via QR code
 - **PyMuPDF** (for dynamic image headers): `bench pip install PyMuPDF`
+- **Dedicated Redis instance** for OpenWA (if running on the same server as ERPNext — see [Redis Isolation](docs/DEPLOYMENT.md#redis-isolation-erpnext--openwa-on-same-server))
 
 ---
 
@@ -620,6 +621,12 @@ Puppeteer looks for Chrome in the **running user's** cache (`/root/.cache/puppet
 ### Template translation errors
 
 The app includes fallback logic -- if `frappe.get_doc()` fails, it falls back to `frappe.db.get_value()` for template lookup. Check the error log if templates aren't rendering correctly.
+
+### ERPNext background jobs broken after OpenWA Redis config
+
+**Cause**: Adding `requirepass` or `allkeys-lru` to the global `/etc/redis/redis.conf` breaks ERPNext's existing Redis connections on ports 6379/6380/6381.
+
+**Fix**: Do NOT modify the global Redis config. Create a dedicated Redis instance for OpenWA on a separate port (e.g., 6385). See [Redis Isolation](docs/DEPLOYMENT.md#redis-isolation-erpnext--openwa-on-same-server) for the full guide.
 
 ---
 

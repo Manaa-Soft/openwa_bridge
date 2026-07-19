@@ -174,6 +174,86 @@ bench pip install PyMuPDF  # For dynamic image headers
 
 ---
 
+## Redis Isolation (ERPNext + OpenWA on Same Server)
+
+**DO NOT modify `/etc/redis/redis.conf`** if ERPNext is running on the same server. ERPNext already manages its own Redis instances on ports 6379 (Queue), 6380 (Cache), and 6381 (Socketio).
+
+### Why the global config breaks ERPNext
+
+| Problem | Cause |
+|---|---|
+| Background jobs stall/die | `requirepass` in global config blocks Frappe workers (they don't have the password) |
+| Jobs disappear randomly | `allkeys-lru` eviction kills active job keys when memory fills up |
+| Real-time updates break | Socketio loses its Redis connection |
+
+### Solution: Dedicated Redis instance for OpenWA
+
+Create a separate Redis instance on a different port (e.g., 6385):
+
+**Step 1: Create config file**
+
+```bash
+sudo nano /etc/redis/redis-openwa.conf
+```
+
+```plaintext
+# Configuration for OpenWA BullMQ
+include /etc/redis/redis.conf
+port 6385
+pidfile /run/redis/redis-server-openwa.pid
+logfile /var/log/redis/redis-server-openwa.log
+dbfilename dump-openwa.rdb
+
+# Isolation security and sizing
+requirepass your-redis-password-here
+maxmemory 256mb
+maxmemory-policy allkeys-lru
+```
+
+**Step 2: Create systemd service**
+
+```bash
+sudo cp /lib/systemd/system/redis-server.service /etc/systemd/system/redis-openwa.service
+sudo nano /etc/systemd/system/redis-openwa.service
+```
+
+Change the `ExecStart=` line:
+
+```plaintext
+ExecStart=/usr/bin/redis-server /etc/redis/redis-openwa.conf
+```
+
+**Step 3: Start and verify**
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable redis-openwa
+sudo systemctl start redis-openwa
+
+# Verify it works on port 6385
+redis-cli -p 6385 -a your-redis-password-here ping
+# PONG
+```
+
+**Step 4: Point OpenWA to the dedicated instance**
+
+In OpenWA's `.env` or BullMQ config:
+
+```bash
+REDIS_URL=redis://:your-redis-password-here@127.0.0.1:6385
+```
+
+### Port allocation summary
+
+| Port | Service | Purpose |
+|---|---|---|
+| 6379 | Frappe Redis Queue | Background workers (ERPNext) |
+| 6380 | Frappe Redis Cache | Doc cache (ERPNext) |
+| 6381 | Frappe Redis Socketio | Real-time events (ERPNext) |
+| **6385** | **OpenWA Redis** | **BullMQ job queue (OpenWA)** |
+
+---
+
 ## Why These Steps Matter
 
 | Problem | Cause | Fix |
