@@ -112,6 +112,9 @@ WEBHOOK_RETRY_DELAY=5000
 
 # Keep global SSRF protection ON; whitelist only your Frappe site:
 SSRF_ALLOWED_HOSTS=your-site-name,your-server-ip,localhost,127.0.0.1,minio
+# your-site-name = your Frappe/ERPNext site name (e.g., my-site)
+# your-server-ip = the IP used to connect from VM to host (e.g., 192.168.1.15)
+# minio = MinIO service hostname (if used for file storage)
 
 # =============================================================================
 # REDIS (use port 6385 if ERPNext shares this server)
@@ -134,7 +137,10 @@ STORE_EPHEMERAL_MESSAGES=false
 > **Key settings explained:**
 > - `CORS_ORIGINS` — set to your Frappe server URL so the OpenWA dashboard loads in-browser
 > - `CSP_UPGRADE_INSECURE_REQUESTS=false` — required when accessing dashboard over plain HTTP (no TLS proxy)
-> - `SSRF_ALLOWED_HOSTS` — must include your Frappe **site name**, **server IP**, and any internal services like MinIO (e.g., `SSRF_ALLOWED_HOSTS=your-site-name,your-server-ip,localhost,127.0.0.1,minio,minio`). This keeps global SSRF protection ON while allowing local Frappe ↔ OpenWA communication
+> - `SSRF_ALLOWED_HOSTS` — must include your Frappe **site name**, **server IP**, and any internal services like MinIO (e.g., `SSRF_ALLOWED_HOSTS=your-site-name,your-server-ip,localhost,127.0.0.1,minio`). This keeps global SSRF protection ON while allowing local Frappe ↔ OpenWA communication
+>   - `your-site-name` = your Frappe/ERPNext site name (e.g., `my-site`)
+>   - `your-server-ip` = the IP used to connect from VM to host (e.g., `192.168.1.15`)
+>   - `minio` = MinIO service hostname (if used for file storage)
 > - `REDIS_PORT=6385` — use 6385 when ERPNext shares the server (see [Redis Isolation](#redis-isolation-erpnext--openwa-on-same-server)); use 6379 if OpenWA is alone
 > - `AUTO_START_SESSIONS=true` — auto-reconnects WhatsApp on OpenWA restart
 
