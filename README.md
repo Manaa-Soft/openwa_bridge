@@ -166,6 +166,7 @@ ExecStart=/usr/bin/node dist/main
 Restart=always
 RestartSec=5
 Environment=NODE_ENV=production
+Environment=PUPPETEER_ARGS="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage"
 
 [Install]
 WantedBy=multi-user.target
@@ -175,6 +176,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable openwa
 sudo systemctl restart openwa
 ```
+
+> **Critical**: The `PUPPETEER_ARGS` line is **required**. Without it, Chrome's security sandbox is blocked by systemd and the WhatsApp engine silently freezes with `"Engine initialization timed out"`. See [Troubleshooting](#could-not-find-chrome-error) for details.
 
 See [OpenWA Production Setup](https://github.com/Manaa-Soft/openwa_bridge/wiki/OpenWA-Production-Setup) for PostgreSQL, Docker Compose, Nginx, and HTTPS configuration.
 
