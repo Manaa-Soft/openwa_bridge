@@ -266,10 +266,10 @@ OpenWA blocks webhook delivery to private/internal addresses by default (SSRF pr
 
 ```bash
 # In ~/OpenWA/.env
-SSRF_ALLOWED_HOSTS=your-site-name,your-server-ip,localhost,127.0.0.1
+SSRF_ALLOWED_HOSTS=your-site-name,your-server-ip,localhost,127.0.0.1,minio
 ```
 
-> **Why include the site name?** OpenWA resolves webhook target hosts. When Frappe's webhook URL uses a site name (e.g., `your-site-name` or `erp.example.com`), that hostname must appear in the allow list — otherwise OpenWA treats it as an internal host and blocks delivery.
+> **Why include the site name?** OpenWA resolves webhook target hosts. When Frappe's webhook URL uses a site name (e.g., `your-site-name` or `erp.example.com`), that hostname must appear in the allow list — otherwise OpenWA treats it as an internal host and blocks delivery. If you use MinIO for file storage, include `minio` as well.
 
 **Alternative (closed networks only)** — disable protection entirely:
 
@@ -597,7 +597,7 @@ This error occurs when `frappe_whatsapp`'s wildcard doc_events hook fires `send_
 
 1. Test the HMAC signature: the `X-Openwa-Signature` header must match `sha256=<hex>`
 2. Check the webhook URL is accessible from OpenWA
-3. Verify `SSRF_ALLOWED_HOSTS` includes your Frappe site name AND server IP (e.g., `SSRF_ALLOWED_HOSTS=your-site-name,your-server-ip,localhost,127.0.0.1`)
+3. Verify `SSRF_ALLOWED_HOSTS` includes your Frappe site name AND server IP (e.g., `SSRF_ALLOWED_HOSTS=your-site-name,your-server-ip,localhost,127.0.0.1,minio`)
 4. Review OpenWA webhook logs for delivery status
 
 ### Sessions don't reconnect after VM restart
