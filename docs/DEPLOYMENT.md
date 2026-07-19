@@ -60,7 +60,7 @@ bench --site erp.manaasoft.com scheduler enable
 
 ```bash
 cd ~
-git clone https://github.com/Open-WA/whatsapp-web.js.git OpenWA
+git clone https://github.com/rmyndharis/OpenWA.git OpenWA
 cd OpenWA
 npm install
 npm run build
