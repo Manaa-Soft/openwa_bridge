@@ -12,6 +12,20 @@ from frappe_whatsapp.utils import format_number
 from openwa_bridge.utils import openwa_api, frappe_to_openwa_vars, get_api_key, _http_session
 
 
+def _send_typing_indicator(base_url: str, session_id: str, api_key: str, chat_id: str, state: str = "typing") -> None:
+    """Send a typing/recording/paused indicator to a chat. Non-blocking — failures are logged and swallowed."""
+    try:
+        headers = {"Content-Type": "application/json", "X-API-Key": api_key}
+        _http_session.post(
+            f"{base_url}/api/sessions/{session_id}/chats/typing",
+            json={"chatId": chat_id, "state": state},
+            headers=headers,
+            timeout=5,
+        )
+    except Exception:
+        pass  # Typing indicators are cosmetic — never block the send flow
+
+
 class OverrideWhatsAppMessage(WhatsAppMessage):
     """Intercepts all outbound messages and routes OpenWA-enabled accounts through the gateway."""
 
@@ -211,6 +225,10 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             "X-API-Key": api_key,
         }
 
+        # Send typing indicator before non-bulk, non-template, non-reaction sends
+        if self.content_type in ("text", "image", "video", "audio", "document", "location", "contact", "sticker"):
+            _send_typing_indicator(base_url, session_id, api_key, chat_id, "typing")
+
         # --- template via OpenWA send-template endpoint ---
         if self.use_template and self.template:
             openwa_tid = frappe.db.get_value("WhatsApp Templates", self.template, "openwa_template_id")
@@ -407,6 +425,27 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     "name": poll_name,
                     "options": poll_options,
                     "allowMultipleAnswers": poll_data.get("allowMultipleAnswers", False),
+                },
+                headers=headers,
+                timeout=30,
+            )
+
+        elif self.content_type == "edit":
+            edit_data = json.loads(self.message) if self.message else {}
+            chat_id_to_edit = edit_data.get("chat_id", chat_id)
+            message_id_to_edit = edit_data.get("message_id", "")
+            new_body = edit_data.get("body", self.message)
+            if not message_id_to_edit:
+                frappe.throw(
+                    "Edit messages require JSON in the message field: "
+                    '{"chat_id": "12345@c.us", "message_id": "ABC123", "body": "new text"}'
+                )
+            resp = _http_session.post(
+                f"{base_url}/api/sessions/{session_id}/messages/edit",
+                json={
+                    "chatId": chat_id_to_edit,
+                    "messageId": message_id_to_edit,
+                    "body": new_body,
                 },
                 headers=headers,
                 timeout=30,

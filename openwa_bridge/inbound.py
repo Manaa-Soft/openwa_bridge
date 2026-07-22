@@ -126,12 +126,22 @@ def receive_openwa_message() -> dict[str, str]:
             _handle_message_revoked(event_data)
         elif event_type == "message.reaction":
             _handle_message_reaction(event_data)
+        elif event_type == "message.edited":
+            _handle_message_edited(event_data)
         elif event_type in ("session.status", "session.disconnected"):
             _handle_session_status(event_data, session_id)
         elif event_type in ("session.qr",):
             _handle_session_qr(event_data, session_id)
         elif event_type in ("session.authenticated",):
             _handle_session_authenticated(session_id)
+        elif event_type == "session.reconnect_loop":
+            _handle_session_reconnect_loop(event_data, session_id)
+        elif event_type in ("group.join", "group.leave"):
+            _handle_group_membership(event_data, session_id, event_type)
+        elif event_type == "group.update":
+            _handle_group_update(event_data, session_id)
+        elif event_type == "call.received":
+            _handle_call_received(event_data, session_id)
     except Exception as e:
         frappe.log_error(
             title="OpenWA Inbound Handler Error",
@@ -622,6 +632,90 @@ def _handle_message_reaction(event_data: dict) -> None:
 
     frappe.logger().info(
         f"OpenWA reaction on {name}: {emoji}"
+    )
+
+
+def _handle_message_edited(event_data: dict) -> None:
+    """Update WhatsApp Message body when a sent message is edited."""
+    message_id: str = event_data.get("messageId") or event_data.get("id", "")
+    new_body: str = event_data.get("body", "")
+    if not message_id or not new_body:
+        return
+
+    name = frappe.db.get_value(
+        "WhatsApp Message",
+        filters={"message_id": message_id},
+        pluck="name",
+    )
+    if not name:
+        return
+
+    # Store original message before overwriting
+    original = frappe.db.get_value("WhatsApp Message", name, "message") or ""
+    if original != new_body:
+        frappe.db.set_value("WhatsApp Message", name, "message", new_body)
+        frappe.logger().info(
+            f"OpenWA: message edited {name}: '{original[:50]}...' → '{new_body[:50]}...'"
+        )
+
+
+def _handle_session_reconnect_loop(event_data: dict, session_id: str) -> None:
+    """Alert when session is stuck in a reconnect loop."""
+    account_name = frappe.db.get_value(
+        "WhatsApp Account",
+        {"openwa_session_id": session_id},
+        "name",
+    )
+    if not account_name:
+        return
+
+    frappe.log_error(
+        title=f"OpenWA: Session Reconnect Loop on {account_name}",
+        message=(
+            f"Session {session_id} is stuck in a reconnect loop. "
+            f"Consider resetting the session or checking network connectivity."
+        ),
+    )
+
+
+def _handle_group_membership(event_data: dict, session_id: str, event_type: str) -> None:
+    """Log group join/leave events."""
+    group_id: str = event_data.get("groupId", "")
+    participants: list = event_data.get("participantIds", [])
+    actor: str = event_data.get("actorId", "")
+
+    if not group_id:
+        return
+
+    frappe.logger().info(
+        f"OpenWA {event_type}: group={group_id}, "
+        f"participants={participants}, actor={actor}"
+    )
+
+
+def _handle_group_update(event_data: dict, session_id: str) -> None:
+    """Log group metadata changes."""
+    group_id: str = event_data.get("groupId", "")
+    changes: dict = event_data.get("changes", {})
+
+    if not group_id:
+        return
+
+    frappe.logger().info(
+        f"OpenWA group.update: group={group_id}, changes={changes}"
+    )
+
+
+def _handle_call_received(event_data: dict, session_id: str) -> None:
+    """Log incoming call events."""
+    call_id: str = event_data.get("callId", "")
+    caller: str = event_data.get("from", "")
+    is_video: bool = event_data.get("isVideo", False)
+    is_group: bool = event_data.get("isGroup", False)
+
+    frappe.logger().info(
+        f"OpenWA call.received: call={call_id}, from={caller}, "
+        f"video={is_video}, group={is_group}"
     )
 
 
