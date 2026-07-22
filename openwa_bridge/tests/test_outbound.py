@@ -174,3 +174,111 @@ class TestDynamicHeaderOutbox(IntegrationTestCase):
 
         result = self.handler(msg, account)
         self.assertFalse(result)
+
+
+class TestTypingIndicator(IntegrationTestCase):
+    """Test _send_typing_indicator helper."""
+
+    @patch("openwa_bridge.whatsapp_message._http_session")
+    def test_sends_typing_request(self, mock_session):
+        """Should POST to typing endpoint with chatId and state."""
+        from openwa_bridge.whatsapp_message import _send_typing_indicator
+
+        mock_session.post.return_value = mock_openwa_api("POST", 200)
+
+        _send_typing_indicator(
+            "http://localhost:2785", "session-001", "api-key",
+            "1234567890@c.us", "typing",
+        )
+
+        mock_session.post.assert_called_once()
+        call_kwargs = mock_session.post.call_args
+        self.assertIn("/chats/typing", call_kwargs[0][0])
+        self.assertEqual(call_kwargs[1]["json"]["chatId"], "1234567890@c.us")
+        self.assertEqual(call_kwargs[1]["json"]["state"], "typing")
+
+    @patch("openwa_bridge.whatsapp_message._http_session")
+    def test_failure_does_not_raise(self, mock_session):
+        """Typing indicator failure should be swallowed silently."""
+        from openwa_bridge.whatsapp_message import _send_typing_indicator
+
+        mock_session.post.side_effect = Exception("Connection refused")
+
+        # Should NOT raise
+        _send_typing_indicator(
+            "http://localhost:2785", "session-001", "api-key",
+            "1234567890@c.us", "typing",
+        )
+
+    @patch("openwa_bridge.whatsapp_message._http_session")
+    def test_sends_recording_state(self, mock_session):
+        """Should support recording state."""
+        from openwa_bridge.whatsapp_message import _send_typing_indicator
+
+        mock_session.post.return_value = mock_openwa_api("POST", 200)
+
+        _send_typing_indicator(
+            "http://localhost:2785", "session-001", "api-key",
+            "1234567890@c.us", "recording",
+        )
+
+        call_kwargs = mock_session.post.call_args
+        self.assertEqual(call_kwargs[1]["json"]["state"], "recording")
+
+
+class TestTypingInSendFlow(IntegrationTestCase):
+    """Test that typing indicator is called during _send_via_openwa for text messages."""
+
+    @patch("openwa_bridge.whatsapp_message._send_typing_indicator")
+    @patch("openwa_bridge.whatsapp_message._http_session")
+    def test_typing_called_for_text(self, mock_session, mock_typing):
+        """Typing indicator should be sent before text message."""
+        mock_session.post.return_value = mock_openwa_api("POST", 200, {"key": {"id": "msg-123"}})
+
+        from openwa_bridge.whatsapp_message import OverrideWhatsAppMessage
+
+        mock_account = MagicMock()
+        mock_account.get.return_value = "http://localhost:2785"
+        mock_account.openwa_session_id = "session-001"
+        mock_account.get_password.return_value = "api-key-123"
+
+        instance = OverrideWhatsAppMessage.__new__(OverrideWhatsAppMessage)
+        instance.name = "MSG-001"
+        instance.to = "1234567890"
+        instance.template = None
+        instance.body_param = None
+        instance.template_parameters = None
+        instance.content_type = "text"
+
+        instance._send_via_openwa(mock_account, {})
+
+        mock_typing.assert_called_once()
+        self.assertIn("/chats/typing", mock_typing.call_args[0][1])
+
+    @patch("openwa_bridge.whatsapp_message._send_typing_indicator")
+    @patch("openwa_bridge.whatsapp_message._http_session")
+    def test_typing_not_called_for_template(self, mock_session, mock_typing):
+        """Typing indicator should NOT be sent for template messages."""
+        mock_session.post.return_value = mock_openwa_api("POST", 200, {"key": {"id": "msg-456"}})
+
+        from openwa_bridge.whatsapp_message import OverrideWhatsAppMessage
+
+        mock_account = MagicMock()
+        mock_account.get.return_value = "http://localhost:2785"
+        mock_account.openwa_session_id = "session-001"
+        mock_account.get_password.return_value = "api-key-123"
+
+        instance = OverrideWhatsAppMessage.__new__(OverrideWhatsAppMessage)
+        instance.name = "MSG-002"
+        instance.to = "1234567890"
+        instance.template = "welcome-template"
+        instance.body_param = json.dumps(["John"])
+        instance.template_parameters = None
+        instance.content_type = "template"
+        instance.use_template = True
+
+        with patch("openwa_bridge.whatsapp_message.frappe") as mock_frappe:
+            mock_frappe.db.get_value.return_value = "tmpl-uuid-123"
+            instance._send_via_openwa(mock_account, {})
+
+        mock_typing.assert_not_called()
