@@ -297,6 +297,19 @@ After updating `.env`, restart:
 sudo systemctl restart openwa
 ```
 
+### Dashboard Unreachable from Browser (ERR_CONNECTION_REFUSED)
+
+If you get `ERR_CONNECTION_REFUSED` when accessing `http://SERVER_IP:2785`, but it works from inside the server:
+
+**Root cause**: Without `HOST=0.0.0.0`, Node.js defaults to `127.0.0.1` — only accessible from inside the server. If you were using VS Code with Remote SSH, VS Code automatically created an SSH port tunnel that forwarded `127.0.0.1:2785` to your local browser. Closing VS Code collapsed that tunnel.
+
+**Fix**: Add `HOST=0.0.0.0` to your `.env` and restart:
+
+```bash
+echo 'HOST=0.0.0.0' >> ~/OpenWA/.env
+sudo systemctl restart openwa
+```
+
 ### Site Config (Alternative)
 
 You can also configure credentials in `site_config.json`:

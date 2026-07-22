@@ -75,7 +75,19 @@ OpenWA uses `.env` files for configuration. Create or edit `~/OpenWA/.env`:
 # CORE
 # =============================================================================
 NODE_ENV=production
+# Port the app binds to when run directly (bare metal / npm run start:prod).
+# In bundled Docker Compose the container always listens on 2785;
+# the API_PORT below is only the HOST-published port.
 PORT=2785
+
+# Host network interface for bare-metal / systemd. 0.0.0.0 binds to all
+# network interfaces, allowing external browser access without relying on
+# VS Code SSH port forwarding tunnels. Without this, Node.js defaults to
+# 127.0.0.1 — only accessible from inside the server.
+HOST=0.0.0.0
+
+# Docker Compose only: host-side port mapped to the container's 2785
+# (no effect on bare-metal run).
 API_PORT=2785
 LOG_LEVEL=info
 DOMAIN=localhost
@@ -325,6 +337,7 @@ REDIS_URL=redis://:your-redis-password-here@127.0.0.1:6385
 |---|---|---|
 | Sessions don't auto-start on boot | `AUTO_START_SESSIONS=false` in `.env.generated` | Delete `.env.generated`, set `AUTO_START_SESSIONS=true` in `.env` |
 | OpenWA dies after server reboot | No systemd setup | `systemctl enable openwa` |
+| Dashboard unreachable from browser (`ERR_CONNECTION_REFUSED`) | `HOST` not set — Node.js binds to `127.0.0.1` only | Add `HOST=0.0.0.0` to `.env` and restart. VS Code SSH tunnels mask this issue. |
 | Frappe can't reach OpenWA | SSRF blocks private IPs | `SSRF_ALLOWED_HOSTS=your-site-name,your-server-ip,localhost,127.0.0.1,minio` |
 | "Could not find Chrome" | Wrong user or missing Chrome | See Chrome/Puppeteer section below |
 | `send-image` returns 500 | WhatsApp Web.js returns `undefined` for media | Apply OpenWA media send patch (see below) |
