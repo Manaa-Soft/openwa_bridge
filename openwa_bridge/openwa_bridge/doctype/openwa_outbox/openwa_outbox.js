@@ -3,7 +3,7 @@
 
 frappe.ui.form.on("OpenWA Outbox", {
 	refresh(frm) {
-		if (frm.doc.status === "Failed") {
+		if (frm.doc.status === "Failed" && frappe.user_roles.includes("System Manager")) {
 			frm.add_custom_button(__("Retry Now"), () => {
 				frappe.call({
 					method: "openwa_bridge.tasks.process_outbox_entry",
@@ -16,7 +16,7 @@ frappe.ui.form.on("OpenWA Outbox", {
 			}, __("Actions"));
 		}
 
-		if (frm.doc.status === "Pending") {
+		if (frm.doc.status === "Pending" && frappe.user_roles.includes("System Manager")) {
 			frm.add_custom_button(__("Cancel"), () => {
 				frappe.confirm(
 					__("Cancel this queued message?"),

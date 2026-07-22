@@ -3,19 +3,17 @@
 
 frappe.ui.form.on("WhatsApp Account", {
     refresh(frm) {
-        // Clear any lingering QR refresh timer when the form reloads.
         _clear_qr_timer(frm);
 
         if (frm.is_new() || !frm.doc.openwa_enabled) return;
 
         if (!frm.doc.openwa_session_id) {
-            // No session yet — show the one-click setup button.
             frm.page.set_indicator(__("Not Setup"), "red");
             _add_setup_button(frm);
             return;
         }
 
-        // Session exists — check its live status and show appropriate UI.
+        // Session exists — check its live status from OpenWA.
         frappe.call({
             method: "openwa_bridge.whatsapp_account.get_openwa_session_status",
             args: { account_name: frm.doc.name },
@@ -24,29 +22,38 @@ frappe.ui.form.on("WhatsApp Account", {
                 const s = r.message.status;
 
                 if (s === "ready") {
-                    frm.page.set_indicator(__("Connected"), "green");
+                    const phone = r.message.phone || "";
+                    const pushName = r.message.push_name || "";
+                    const label = [pushName, phone].filter(Boolean).join(" · ") || __("Connected");
+                    frm.page.set_indicator(label, "green");
                     _add_disconnect_button(frm);
                     _add_manage_events_button(frm);
+                    _add_delete_session_button(frm);
                 } else if (s === "qr_ready" || s === "initializing") {
                     frm.page.set_indicator(__("Scan QR Code"), "orange");
                     _show_qr_code(frm);
+                    _add_delete_session_button(frm);
                 } else if (s === "not_found") {
-                    // Session was deleted from OpenWA — stale ID in Frappe
-                    frm.page.set_indicator(__("Session Deleted — Re-setup Required"), "red");
-                    _add_reset_and_setup_button(frm);
+                    frm.page.set_indicator(__("Session Deleted"), "red");
+                    _add_reconnect_button(frm);
+                } else if (s === "auth_error") {
+                    frm.page.set_indicator(__("Auth Error — Check API Key"), "red");
+                    _add_reconnect_button(frm);
+                    _add_delete_session_button(frm);
                 } else if (s === "error") {
-                    // OpenWA server unreachable
-                    frm.page.set_indicator(__("OpenWA Unreachable"), "red");
+                    const errMsg = r.message.error || __("OpenWA Error");
+                    frm.page.set_indicator(errMsg, "red");
                     _add_reconnect_button(frm);
                 } else if (s === "failed") {
-                    // Session is corrupted/failed — reconnect will delete + recreate
                     frm.page.set_indicator(__("Session Failed — Reconnect to Fix"), "red");
                     _add_reconnect_button(frm);
+                    _add_delete_session_button(frm);
                 } else {
                     // disconnected / created / unknown
                     frm.page.set_indicator(__("Disconnected"), "red");
                     _add_reconnect_button(frm);
                     _add_manage_events_button(frm);
+                    _add_delete_session_button(frm);
                 }
             },
         });
@@ -64,9 +71,7 @@ frappe.ui.form.on("WhatsApp Account", {
 function _add_setup_button(frm) {
     frm.add_custom_button(
         __("Setup OpenWA"),
-        () => {
-            _run_setup(frm);
-        },
+        () => { _run_setup(frm); },
         __("OpenWA")
     );
 }
@@ -103,7 +108,7 @@ function _add_reconnect_button(frm) {
         __("Reconnect"),
         () => {
             frappe.confirm(
-                __("Reconnect the WhatsApp session? If the session is stuck, the app will force-kill the crashed process and restart it (no QR re-scan needed). If that fails, the session will be recreated."),
+                __("Reconnect the WhatsApp session? If the session is stuck, the app will force-kill and restart. If the session was deleted, a new one will be created."),
                 () => { _show_qr_code(frm); }
             );
         },
@@ -111,31 +116,39 @@ function _add_reconnect_button(frm) {
     );
 }
 
-function _add_reset_and_setup_button(frm) {
+function _add_delete_session_button(frm) {
     frm.add_custom_button(
-        __("Setup OpenWA (New Session)"),
+        __("Delete Session"),
         () => {
             frappe.confirm(
-                __("The old session was deleted from OpenWA. Clear the stale session ID and create a new one?"),
+                __("Permanently delete this session from OpenWA? This removes the engine, all stored messages, and webhooks. You will need to set up a new session."),
                 () => {
                     frappe.call({
-                        method: "openwa_bridge.whatsapp_account.reset_openwa_session",
+                        method: "openwa_bridge.whatsapp_account.delete_openwa_session",
                         args: { account_name: frm.doc.name },
                         freeze: true,
-                        freeze_message: __("Resetting session..."),
-                        callback() {
+                        freeze_message: __("Deleting session..."),
+                        callback(r) {
+                            if (r.message && r.message.status === "error") {
+                                frappe.msgprint({
+                                    title: __("Delete Failed"),
+                                    indicator: "red",
+                                    message: r.message.error,
+                                });
+                                return;
+                            }
                             frappe.show_alert({
-                                message: __("Session ID cleared. Starting new setup..."),
+                                message: __("Session deleted from OpenWA"),
                                 indicator: "green",
                             });
-                            // Reload to clear stale ID, then run setup
                             frm.reload_doc();
                         },
                     });
                 }
             );
         },
-        __("OpenWA")
+        __("OpenWA"),
+        true  // right-aligned
     );
 }
 
@@ -198,34 +211,41 @@ function _show_qr_code(frm) {
                 _clear_qr_timer(frm);
                 frm.reload_doc();
             } else {
-                frm.fields_dict.openwa_qr_html.$wrapper.html(
-                    '<p style="color:#ef4444; padding:10px;">' +
-                        (msg.error || __("Failed to get QR code")) +
-                    "</p>"
-                );
                 _clear_qr_timer(frm);
+                frappe.msgprint({
+                    title: __("QR Code Error"),
+                    indicator: "red",
+                    message: msg.error || __("Failed to get QR code"),
+                });
             }
         },
     });
 }
 
 function _render_qr(frm, qr_data_url) {
-    frm.fields_dict.openwa_qr_html.$wrapper.html(
+    _clear_qr_timer(frm);
+
+    const d = new frappe.ui.Dialog({
+        title: __("Scan QR Code with WhatsApp"),
+        size: "small",
+        onhide() { _clear_qr_timer(frm); },
+    });
+
+    d.$body.html(
         '<div style="text-align:center; padding:20px;">' +
-            '<img src="' +
-            qr_data_url +
-            '" ' +
-            'style="max-width:300px; border:2px solid #d1d5db; border-radius:8px;" />' +
-            '<p style="margin-top:12px; color:#6b7280; font-size:13px;">' +
-            __("Scan with WhatsApp to connect") +
+            '<img src="' + qr_data_url + '" ' +
+            'style="width:280px; height:280px; border:3px solid #d1d5db; border-radius:12px; image-rendering: pixelated;" />' +
+            '<p style="margin-top:16px; color:#374151; font-size:14px; font-weight:500;">' +
+                __("Scan with WhatsApp to connect") +
             "</p>" +
-            '<p style="color:#9ca3af; font-size:11px;">' +
-            __("QR expires in 60 seconds — auto-refreshes every 55 s") +
+            '<p style="color:#6b7280; font-size:12px;">' +
+                __("QR expires in 60 seconds — auto-refreshes every 55 s") +
             "</p>" +
         "</div>"
     );
+    d.show();
 
-    _clear_qr_timer(frm);
+    frm._qr_dialog = d;
     frm._qr_refresh_timer = setInterval(() => {
         _show_qr_code(frm);
     }, 55000);
@@ -235,6 +255,10 @@ function _clear_qr_timer(frm) {
     if (frm._qr_refresh_timer) {
         clearInterval(frm._qr_refresh_timer);
         frm._qr_refresh_timer = null;
+    }
+    if (frm._qr_dialog) {
+        frm._qr_dialog.hide();
+        frm._qr_dialog = null;
     }
 }
 

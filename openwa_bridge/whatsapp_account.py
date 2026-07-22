@@ -86,6 +86,26 @@ def _safe_get_session(account: dict) -> dict | None:
         return None
 
 
+def _recover_deleted_session(account: dict, account_name: str) -> str | None:
+    """When the stored session ID returns 404, search OpenWA for an existing
+    session with the same name and return its ID (or ``None``)."""
+    try:
+        sessions = _raw_openwa_call(account, "GET", "/api/sessions")
+    except Exception:
+        return None
+    session_name = _sanitize_session_name(account_name)
+    for s in sessions:
+        if s.get("name") == session_name:
+            new_id = s.get("id")
+            if new_id:
+                frappe.logger().info(
+                    f"OpenWA: recovered deleted session for '{account_name}' — "
+                    f"found existing session '{session_name}' (id={new_id})"
+                )
+                return new_id
+    return None
+
+
 def _start_session(account: dict) -> None:
     """Start an OpenWA session, ignoring 'already started' errors."""
     timeout = get_account_setting(account, "openwa_session_start_timeout", 60)
@@ -305,6 +325,8 @@ def setup_openwa_session(account_name: str) -> dict:
         pass
 
     if status == "ready":
+        # Auto-sync webhook even when session is already connected
+        sync_webhook(account)
         return {
             "status": "ready",
             "session_id": session_id,
@@ -321,6 +343,8 @@ def setup_openwa_session(account_name: str) -> dict:
     try:
         qr = _fetch_qr(account)
         qr["session_id"] = session_id
+        # Auto-sync webhook now that the session exists
+        sync_webhook(account)
         return qr
     except Exception as exc:
         return {"status": "error", "error": str(exc), "session_id": session_id}
@@ -332,29 +356,95 @@ def get_openwa_session_status(account_name: str) -> dict:
 
     Returns:
         dict: { status, phone, push_name, connected_at, last_active } or
-              { status: "not_found" } if session was deleted from OpenWA or
-              { status: "error", error: "..." } if OpenWA is unreachable
+              { status: "not_found" }  — session deleted from OpenWA
+              { status: "auth_error" } — API key invalid or missing access
+              { status: "error" }      — OpenWA server unreachable
     """
     if not frappe.has_permission("WhatsApp Account", "read", account_name):
         frappe.throw("Insufficient permissions to read WhatsApp Account.", frappe.PermissionError)
     account = _get_account(account_name)
-    session = _safe_get_session(account)
-    if session is None:
-        # Distinguish between "session deleted" (404) and "server unreachable"
-        try:
-            # If we can reach the server but session is gone, it's deleted
-            _raw_openwa_call(account, "GET", "/api/sessions")
-            return {"status": "not_found"}
-        except Exception:
-            return {"status": "error", "error": "Could not reach OpenWA server."}
 
-    return {
-        "status": session.get("status", "unknown"),
-        "phone": session.get("phone"),
-        "push_name": session.get("pushName"),
-        "connected_at": session.get("connectedAt"),
-        "last_active": session.get("lastActive"),
-    }
+    base_url = account.get("openwa_base_url", "").strip("/")
+    session_id = account.get("openwa_session_id")
+    api_key = get_api_key(account)
+    timeout = get_account_setting(account, "openwa_api_timeout", 30)
+
+    headers = {"Content-Type": "application/json", "X-API-Key": api_key}
+    url = f"{base_url}/api/sessions/{session_id}"
+
+    try:
+        resp = _http_session.get(url, headers=headers, timeout=timeout)
+    except requests.exceptions.ConnectionError as exc:
+        frappe.logger().warning(
+            f"OpenWA status check failed (connection): {account_name} — {exc}"
+        )
+        return {"status": "error", "error": "Could not reach OpenWA server."}
+    except requests.exceptions.Timeout:
+        frappe.logger().warning(
+            f"OpenWA status check failed (timeout): {account_name}"
+        )
+        return {"status": "error", "error": "OpenWA server timed out."}
+    except Exception as exc:
+        frappe.logger().warning(
+            f"OpenWA status check failed: {account_name} — {exc}"
+        )
+        return {"status": "error", "error": str(exc)}
+
+    if resp.status_code == 200:
+        session = resp.json()
+        return {
+            "status": session.get("status", "unknown"),
+            "phone": session.get("phone"),
+            "push_name": session.get("pushName"),
+            "connected_at": session.get("connectedAt"),
+            "last_active": session.get("lastActive"),
+        }
+
+    if resp.status_code == 404:
+        # Session was deleted from OpenWA — try to find existing session
+        # by name and auto-recover the stale ID.
+        recovered_id = _recover_deleted_session(account, account_name)
+        if recovered_id:
+            frappe.db.set_value("WhatsApp Account", account_name,
+                                "openwa_session_id", recovered_id)
+            frappe.db.commit()
+            # Re-check status with the new session ID
+            url = f"{base_url}/api/sessions/{recovered_id}"
+            try:
+                resp2 = _http_session.get(url, headers=headers, timeout=timeout)
+                if resp2.status_code == 200:
+                    session = resp2.json()
+                    return {
+                        "status": session.get("status", "unknown"),
+                        "phone": session.get("phone"),
+                        "push_name": session.get("pushName"),
+                        "connected_at": session.get("connectedAt"),
+                        "last_active": session.get("lastActive"),
+                    }
+            except Exception:
+                pass
+        return {"status": "not_found"}
+
+    if resp.status_code in (401, 403):
+        frappe.logger().warning(
+            f"OpenWA status check auth error ({resp.status_code}): {account_name}"
+        )
+        return {"status": "auth_error"}
+
+    if resp.status_code == 429:
+        # Rate-limited — don't treat as error.  Fall back to the Frappe
+        # doc status so the UI stays accurate during rate-limit bursts.
+        frappe_status = frappe.db.get_value(
+            "WhatsApp Account", account_name, "status", cache=True
+        )
+        if frappe_status == "Active":
+            return {"status": "ready"}
+        return {"status": "error", "error": "OpenWA rate limit — try again shortly."}
+
+    frappe.logger().warning(
+        f"OpenWA status check HTTP {resp.status_code}: {account_name}"
+    )
+    return {"status": "error", "error": f"OpenWA returned {resp.status_code}."}
 
 
 @frappe.whitelist()
@@ -376,12 +466,32 @@ def get_openwa_qr(account_name: str) -> dict:
     # --- 1. Check current session status -----------------------------------
     session = _safe_get_session(account)
     if session is None:
-        return {"status": "error", "error": "Could not reach OpenWA server."}
+        # Old session ID may be stale — try to find an existing session
+        # by name (e.g. user deleted from OpenWA dashboard, then clicked
+        # Reconnect in Frappe).
+        session_id = _recover_deleted_session(account, account_name)
+        if session_id:
+            frappe.db.set_value("WhatsApp Account", account_name,
+                                "openwa_session_id", session_id)
+            frappe.db.commit()
+            account = _get_account(account_name, require_session=True)
+            session = _safe_get_session(account)
+        if session is None:
+            # No session found by ID or by name — create a fresh one.
+            frappe.logger().info(
+                f"OpenWA QR: no session found for '{account_name}' "
+                f"— creating a new one"
+            )
+            try:
+                return setup_openwa_session(account_name)
+            except Exception as exc:
+                return {"status": "error", "error": str(exc)}
 
     status = session.get("status", "unknown")
 
-    # Already connected — nothing to show.
+    # Already connected — nothing to show, but ensure webhook is synced.
     if status == "ready":
+        sync_webhook(account)
         return {
             "status": "ready",
             "phone": session.get("phone"),
@@ -402,7 +512,8 @@ def get_openwa_qr(account_name: str) -> dict:
             try:
                 session = _safe_get_session(account)
                 if session and session.get("status") != "failed":
-                    # Force-kill worked — save and return QR
+                    # Force-kill worked — sync webhook and return QR
+                    sync_webhook(account)
                     try:
                         return _fetch_qr(account)
                     except Exception:
@@ -418,6 +529,7 @@ def get_openwa_qr(account_name: str) -> dict:
                 frappe.db.commit()
                 account = _get_account(account_name, require_session=True)
                 _start_session(account)
+                sync_webhook(account)
         except Exception as exc:
             return {"status": "error", "error": f"Failed to recover session: {exc}"}
 
@@ -425,6 +537,7 @@ def get_openwa_qr(account_name: str) -> dict:
     elif status in ("disconnected", "created"):
         try:
             _start_session(account)
+            sync_webhook(account)
         except Exception as exc:
             return {"status": "error", "error": str(exc)}
 
@@ -468,6 +581,41 @@ def reset_openwa_session(account_name: str) -> dict:
     return {"status": "reset"}
 
 
+@frappe.whitelist()
+def delete_openwa_session(account_name: str) -> dict:
+    """Permanently delete the OpenWA session and clear the Frappe doc.
+
+    Calls ``DELETE /api/sessions/:id`` which also destroys the engine
+    process, all stored messages, webhooks, and auth data on disk.
+    """
+    if not frappe.has_permission("WhatsApp Account", "write", account_name):
+        frappe.throw("Insufficient permissions to manage WhatsApp Account.", frappe.PermissionError)
+    account = _get_account(account_name)
+    session_id = account.get("openwa_session_id")
+    if not session_id:
+        frappe.throw("No session ID set for this account.")
+
+    # Delete from OpenWA (ignore 404 — already gone)
+    try:
+        _raw_openwa_call(account, "DELETE", f"/api/sessions/{session_id}")
+    except requests.exceptions.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code != 404:
+            return {"status": "error", "error": _extract_error(exc)}
+    except Exception:
+        pass  # OpenWA may be down — clear the stale ID anyway
+
+    # Clear from Frappe
+    frappe.db.set_value("WhatsApp Account", account_name, "openwa_session_id", "")
+    frappe.db.set_value("WhatsApp Account", account_name, "status", "Inactive")
+    frappe.db.commit()
+    frappe.cache().delete_value(f"openwa_account:{account_name}")
+
+    frappe.logger().info(
+        f"OpenWA: deleted session '{session_id}' for '{account_name}'"
+    )
+    return {"status": "deleted"}
+
+
 # ---------------------------------------------------------------------------
 # Doc event hook — called by Frappe when a WhatsApp Account is validated
 # ---------------------------------------------------------------------------
@@ -506,24 +654,30 @@ def _get_webhook_events(doc):  # noqa: ANN001
     return _DEFAULT_WEBHOOK_EVENTS
 
 
-def on_account_update(doc, method):  # noqa: ANN001
-    """Sync the OpenWA webhook secret to the gateway when the account is saved.
+def sync_webhook(account) -> bool:  # noqa: ANN001
+    """Ensure the OpenWA gateway has a webhook pointing to Frappe.
 
-    If a webhook for our Frappe URL already exists on the session the secret
-    is updated.  Otherwise a new webhook is created with the configured events.
+    - On **first setup** (no existing webhook): creates one with the
+      configured events from ``_DEFAULT_WEBHOOK_EVENTS`` or the
+      ``openwa_webhook_events`` field.
+    - On **subsequent calls** (webhook already exists): updates only the
+      ``url`` and ``secret``.  The existing ``events`` list on OpenWA is
+      **preserved** so manual event selections survive account saves and
+      reconnects.
+
+    Returns ``True`` on success, ``False`` on failure (errors are logged).
     """
-    if not getattr(doc, "openwa_enabled", 0):
-        return
-    session_id = getattr(doc, "openwa_session_id", None)
+    if not getattr(account, "openwa_enabled", 0):
+        return False
+    session_id = getattr(account, "openwa_session_id", None)
     if not session_id:
-        return
+        return False
 
-    secret = doc.get_password("openwa_webhook_secret") if doc.get("openwa_webhook_secret") else None
+    secret = account.get_password("openwa_webhook_secret") if account.get("openwa_webhook_secret") else None
     frappe_url = frappe.utils.get_url(_WEBHOOK_PATH)
-    events = _get_webhook_events(doc)
 
     try:
-        webhooks = openwa_api(doc, "GET", "/webhooks")
+        webhooks = openwa_api(account, "GET", "/webhooks")
 
         existing = None
         if isinstance(webhooks, list):
@@ -533,14 +687,29 @@ def on_account_update(doc, method):  # noqa: ANN001
                     break
 
         if existing:
+            # UPDATE: only refresh url + secret; keep the events the operator
+            # configured on OpenWA (manual event selection is preserved).
+            update_payload: dict = {"secret": secret or ""}
+            # Only push events if the doc has an explicit override —
+            # this means the operator changed events in the Frappe form.
+            explicit_events = getattr(account, "openwa_webhook_events", None)
+            if explicit_events:
+                update_payload["events"] = _get_webhook_events(account)
+
             openwa_api(
-                doc, "PUT",
+                account, "PUT",
                 f"/webhooks/{existing['id']}",
-                json_data={"secret": secret or "", "events": events},
+                json_data=update_payload,
+            )
+            frappe.logger().info(
+                f"OpenWA: webhook {existing['id']} updated for session "
+                f"{session_id} (url + secret synced, events preserved)"
             )
         else:
+            # CREATE: first-time setup — use configured events
+            events = _get_webhook_events(account)
             openwa_api(
-                doc, "POST",
+                account, "POST",
                 "/webhooks",
                 json_data={
                     "url": frappe_url,
@@ -548,11 +717,22 @@ def on_account_update(doc, method):  # noqa: ANN001
                     "secret": secret or "",
                 },
             )
+            frappe.logger().info(
+                f"OpenWA: webhook created for session {session_id} "
+                f"with {len(events)} events"
+            )
+        return True
     except Exception as exc:
         frappe.log_error(
-            title="OpenWA: Failed to sync webhook secret",
-            message=f"Account: {doc.name}, Session: {session_id}: {exc}",
+            title="OpenWA: Failed to sync webhook",
+            message=f"Account: {account.name}, Session: {session_id}: {exc}",
         )
+        return False
+
+
+def on_account_update(doc, method):  # noqa: ANN001
+    """Sync the OpenWA webhook when the account is saved."""
+    sync_webhook(doc)
 
 
 # ---------------------------------------------------------------------------

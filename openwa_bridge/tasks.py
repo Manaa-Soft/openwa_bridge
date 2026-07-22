@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import frappe
 import requests
 
-from openwa_bridge.utils import get_cached_account, get_account_setting, _http_session
+from openwa_bridge.utils import get_cached_account, get_account_setting, get_api_key, _http_session
 
 
 def _get_openwa_accounts() -> list[dict]:
@@ -21,7 +21,16 @@ def _get_openwa_accounts() -> list[dict]:
 
 
 def _check_session_status(base_url: str, session_id: str, api_key: str) -> dict | None:
-    """GET /api/sessions/:id and return the session data, or None."""
+    """GET /api/sessions/:id.
+
+    Returns:
+        dict with session data if found (HTTP 200).
+        dict with ``{"_deleted": True}`` if the session was removed from
+        OpenWA (HTTP 404) — callers must check for this.
+        dict with ``{"_rate_limited": True}`` on HTTP 429 — callers should
+        skip this check and keep the current status.
+        None if the server is unreachable or returned an unexpected status.
+    """
     try:
         resp = _http_session.get(
             f"{base_url.rstrip('/')}/api/sessions/{session_id}",
@@ -30,6 +39,10 @@ def _check_session_status(base_url: str, session_id: str, api_key: str) -> dict 
         )
         if resp.status_code == 200:
             return resp.json()
+        if resp.status_code == 404:
+            return {"_deleted": True}
+        if resp.status_code == 429:
+            return {"_rate_limited": True}
     except Exception:
         pass
     return None
@@ -84,6 +97,7 @@ def daily() -> None:
 def hourly() -> None:
     """Run session health check every hour for faster recovery."""
     _run_health_check()
+    reconcile_stale_outbox()
 
 
 def _run_health_check() -> None:
@@ -117,26 +131,58 @@ def _run_health_check() -> None:
             _set_account_status(account_name, "disconnected")
             continue
 
-        status = session.get("status", "unknown")
-
-        # 2. If ready, sync status and move on
-        if status == "ready":
-            _set_account_status(account_name, "ready")
-            continue
-
-        # 3. If disconnected/created, attempt restart
-        if status in ("disconnected", "created"):
+        if session.get("_deleted"):
+            # Session was deleted from OpenWA (manually or by server).
+            # Clear the stale session ID so the user can re-setup.
             frappe.logger().info(
                 f"OpenWA health check: session '{session_id}' on "
-                f"'{account_name}' is {status} — attempting restart"
+                f"'{account_name}' no longer exists — clearing stale ID"
+            )
+            frappe.db.set_value(
+                "WhatsApp Account", account_name,
+                "openwa_session_id", None,
+            )
+            frappe.db.set_value(
+                "WhatsApp Account", account_name,
+                "openwa_status", "Inactive",
+            )
+            continue
+
+        if session.get("_rate_limited"):
+            # Rate-limited — don't change anything, just move on.
+            frappe.logger().info(
+                f"OpenWA health check: session '{session_id}' on "
+                f"'{account_name}' rate-limited — skipping"
+            )
+            continue
+
+        status = session.get("status", "unknown")
+        phone = session.get("phone")
+
+        # 2. If ready AND connected to WhatsApp (phone set), sync status
+        if status == "ready" and phone:
+            _set_account_status(account_name, "ready")
+            # Auto-sync webhook on health check — ensures the webhook exists
+            # after session reconnect or OpenWA restart.
+            try:
+                from openwa_bridge.whatsapp_account import sync_webhook
+                sync_webhook(doc)
+            except Exception:
+                pass
+            continue
+
+        # 3. If ready but no phone — engine alive but not connected to WhatsApp
+        if status == "ready" and not phone:
+            frappe.logger().info(
+                f"OpenWA health check: session '{session_id}' on "
+                f"'{account_name}' is ready but not linked to WhatsApp — restarting"
             )
             started = _start_session(base_url, session_id, api_key)
             if started:
-                # Poll for readiness (up to 15s, 1s intervals)
                 for _ in range(15):
                     time.sleep(1)
                     session = _check_session_status(base_url, session_id, api_key)
-                    if session:
+                    if session and not session.get("_deleted"):
                         status = session.get("status", status)
                         if status == "ready":
                             break
@@ -146,7 +192,28 @@ def _run_health_check() -> None:
                     f"'{session_id}' on '{account_name}'"
                 )
 
-        # 4. Failed session — force-kill, then delete+recreate as last resort
+        # 4. If disconnected/created, attempt restart
+        elif status in ("disconnected", "created"):
+            frappe.logger().info(
+                f"OpenWA health check: session '{session_id}' on "
+                f"'{account_name}' is {status} — attempting restart"
+            )
+            started = _start_session(base_url, session_id, api_key)
+            if started:
+                for _ in range(15):
+                    time.sleep(1)
+                    session = _check_session_status(base_url, session_id, api_key)
+                    if session and not session.get("_deleted"):
+                        status = session.get("status", status)
+                        if status == "ready":
+                            break
+            else:
+                frappe.logger().warning(
+                    f"OpenWA health check: failed to restart session "
+                    f"'{session_id}' on '{account_name}'"
+                )
+
+        # 5. Failed session — force-kill, then delete+recreate as last resort
         elif status == "failed":
             frappe.logger().info(
                 f"OpenWA health check: session '{session_id}' on "
@@ -163,7 +230,7 @@ def _run_health_check() -> None:
                 _start_session(base_url, session_id, api_key)
                 time.sleep(3)
                 session = _check_session_status(base_url, session_id, api_key)
-                if session:
+                if session and not session.get("_deleted"):
                     status = session.get("status", status)
             except Exception:
                 pass
@@ -175,7 +242,6 @@ def _run_health_check() -> None:
                     f"'{session_id}' on '{account_name}' — recreating session"
                 )
                 try:
-                    # Delete old session
                     _http_session.delete(
                         f"{base_url.rstrip('/')}/api/sessions/{session_id}",
                         headers={"X-API-Key": api_key},
@@ -211,7 +277,7 @@ def _run_health_check() -> None:
                             _start_session(base_url, session_id, api_key)
                             time.sleep(3)
                             session = _check_session_status(base_url, session_id, api_key)
-                            if session:
+                            if session and not session.get("_deleted"):
                                 status = session.get("status", status)
                 except Exception as exc:
                     frappe.logger().warning(
@@ -229,6 +295,7 @@ def _run_health_check() -> None:
 # ---------------------------------------------------------------------------
 
 
+@frappe.whitelist()
 def process_outbox_entry(outbox_name: str) -> None:  # noqa: C901
     """Process a single OpenWA Outbox entry.
 
@@ -237,11 +304,14 @@ def process_outbox_entry(outbox_name: str) -> None:  # noqa: C901
     """
     # Distributed lock — prevent duplicate processing when scheduler safety-net
     # and frappe.enqueue overlap on the same entry.
+    # Use a longer TTL (5 minutes) to cover the full processing window including
+    # session restart attempts. The lock is extended during processing.
     lock_key = f"openwa_outbox_lock::{outbox_name}"
+    lock_ttl = 300  # 5 minutes
     existing = frappe.cache().get_value(lock_key)
     if existing is not None:
         return  # another worker is already processing this entry
-    frappe.cache().set_value(lock_key, 1, expires_in_sec=30)
+    frappe.cache().set_value(lock_key, 1, expires_in_sec=lock_ttl)
 
     try:
         _process_outbox_entry_inner(outbox_name)
@@ -309,6 +379,60 @@ def _process_outbox_entry_inner(outbox_name: str) -> None:  # noqa: C901
     )
     frappe.db.commit()
 
+    # Idempotency: if the WhatsApp Message already has a message_id, it was
+    # sent successfully on a prior attempt (or by a webhook callback).
+    # Mark the outbox as Sent and bail out — do NOT resend.
+    if msg.message_id:
+        frappe.db.set_value(
+            "OpenWA Outbox",
+            outbox_name,
+            {"status": "Sent"},
+        )
+        frappe.db.commit()
+        frappe.logger().info(
+            f"OpenWA outbox {outbox_name}: skipping send — "
+            f"message {msg.name} already has message_id '{msg.message_id}'"
+        )
+        return
+
+    # Pre-send session check: verify the session is TRULY connected to
+    # WhatsApp (status=ready AND phone set) BEFORE attempting to send.
+    # Without this, _ensure_session_ready would restart a disconnected
+    # session, the engine accepts the message (201+messageId), but it
+    # can never be delivered because WhatsApp is not linked.
+    base_url = account.get("openwa_base_url", "").strip("/")
+    session_id = account.get("openwa_session_id")
+    api_key = get_api_key(account)
+    try:
+        from openwa_bridge.utils import _http_session
+        check_resp = _http_session.get(
+            f"{base_url}/api/sessions/{session_id}",
+            headers={"X-API-Key": api_key},
+            timeout=10,
+        )
+        if check_resp.status_code == 200:
+            sess = check_resp.json()
+            if sess.get("status") != "ready" or not sess.get("phone"):
+                _fail_outbox(
+                    outbox_name,
+                    f"Session not connected to WhatsApp "
+                    f"(status={sess.get('status')}, phone={sess.get('phone')}). "
+                    f"Will retry when session reconnects.",
+                    account=account,
+                )
+                return
+        elif check_resp.status_code == 404:
+            _fail_outbox(
+                outbox_name,
+                "Session no longer exists on OpenWA. Re-setup required.",
+                account=account,
+            )
+            return
+        # On 429 or other errors, proceed — _ensure_session_ready will handle
+    except Exception:
+        # Can't reach OpenWA — _ensure_session_ready will handle the error
+        pass
+
     # Check circuit breaker
     from openwa_bridge.utils import OpenWACircuitBreaker
 
@@ -326,17 +450,28 @@ def _process_outbox_entry_inner(outbox_name: str) -> None:  # noqa: C901
     # Build and send payload
     try:
         _send_outbox_message(msg, account, outbox)
-        breaker.record_success()
-        # Success
-        frappe.db.set_value(
-            "OpenWA Outbox",
-            outbox_name,
-            {"status": "Sent"},
-        )
-        frappe.db.commit()
     except Exception as exc:
         breaker.record_failure()
         _fail_outbox(outbox_name, str(exc), account=account)
+        return
+
+    # Message was sent successfully.  Mark outbox as Sent even if
+    # circuit-breaker or DB commit fails — we must NOT set it back
+    # to Pending which would cause a duplicate resend.
+    try:
+        breaker.record_success()
+    except Exception:
+        pass
+
+    frappe.db.set_value(
+        "OpenWA Outbox",
+        outbox_name,
+        {"status": "Sent"},
+    )
+    try:
+        frappe.db.commit()
+    except Exception:
+        pass
 
 
 def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
@@ -346,7 +481,8 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
     and ``openwa_print_format``.  Renders the reference doc as an image
     and sends it via OpenWA send-image endpoint with the text as caption.
 
-    Returns True if image was sent successfully, False otherwise.
+    Returns True if image was sent successfully (or delivered despite a
+    non-2xx response — verified via message_id), False otherwise.
     """
     if not msg.template:
         return False
@@ -401,32 +537,87 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
     if caption:
         payload["caption"] = caption
 
+    img_timeout = get_account_setting(account, "openwa_image_timeout", 90)
     try:
         img_resp = _http_session.post(
             url,
             json=payload,
             headers={"X-API-Key": api_key},
-            timeout=30,
+            timeout=img_timeout,
         )
-        if img_resp.status_code >= 400:
+    except Exception as e:
+        err_str = str(e)
+        is_timeout = "timed out" in err_str.lower() or "timeout" in err_str.lower()
+        if is_timeout:
+            # OpenWA engines deliver messages BEFORE the REST response is built.
+            # A timeout means OpenWA likely received the request and may have
+            # already queued/sent the image.  Falling back to text would cause
+            # a duplicate.  Raise so the outbox retry handles it — the
+            # idempotency check (message_id) will detect if it was sent.
             frappe.log_error(
-                title="OpenWA: Dynamic header image failed",
+                title="OpenWA: Dynamic header image timed out (will retry)",
                 message=(
-                    f"Template {tmpl.name}, Doc {ref_doctype} {ref_name}\n"
-                    f"POST {url}\n"
-                    f"Status: {img_resp.status_code}\n"
-                    f"Image size: {len(image_bytes)} bytes ({mimetype})\n"
-                    f"Response: {img_resp.text[:2000]}"
+                    f"Template {tmpl.name}, Doc {ref_doctype} {ref_name}: {e}\n"
+                    "Not falling back to text — message may be queued in OpenWA. "
+                    "Outbox will retry with backoff; idempotency check will reconcile."
                 ),
             )
-            return False
-        return True
-    except Exception as e:
+            raise
         frappe.log_error(
             title="OpenWA: Dynamic header image failed",
             message=f"Template {tmpl.name}, Doc {ref_doctype} {ref_name}: {e}",
         )
         return False
+
+    # --- Extract and store message_id from response ---
+    resp_data = {}
+    try:
+        resp_data = img_resp.json()
+    except Exception:
+        pass
+
+    msg_id = resp_data.get("messageId") or (
+        resp_data.get("key", {}).get("id") if isinstance(resp_data.get("key"), dict) else None
+    )
+
+    if msg_id:
+        frappe.db.set_value("WhatsApp Message", msg.name, "message_id", msg_id)
+
+    # --- 2xx = success ---
+    if img_resp.status_code < 400:
+        if msg_id:
+            frappe.db.set_value("WhatsApp Message", msg.name, "status", "Sent")
+        return True
+
+    # --- Non-2xx but message may have been delivered anyway ---
+    # OpenWA engines (whatsapp-web.js/Baileys) deliver the message
+    # BEFORE the REST response is built.  A 500 after delivery is
+    # extremely common when the engine succeeds but post-send
+    # persistence (saveOutgoingMessage / persistSentState) fails
+    # on the OpenWA server side.
+    #
+    # We do NOT wait for the ack webhook here — it can take 10+
+    # seconds to arrive, which would cause a text fallback and
+    # duplicate delivery.  Instead, assume the image was delivered
+    # on any 500 and return True to prevent the text fallback.
+    # The ack webhook handler (_handle_status_update / _handle_message_sent)
+    # will reconcile the message_id when it arrives.
+    frappe.log_error(
+        title="OpenWA: Dynamic header image returned error (assuming delivered)",
+        message=(
+            f"Template {tmpl.name}, Doc {ref_doctype} {ref_name}\n"
+            f"POST {url}\n"
+            f"Status: {img_resp.status_code}\n"
+            f"Image size: {len(image_bytes)} bytes ({mimetype})\n"
+            f"Response: {img_resp.text[:2000]}\n"
+            f"Returning True to prevent text fallback duplicate."
+        ),
+    )
+
+    if msg_id:
+        frappe.db.set_value("WhatsApp Message", msg.name, "status", "Sent")
+
+    return True
 
 
 def _send_outbox_message(msg, account, outbox) -> None:  # noqa: C901
@@ -444,17 +635,33 @@ def _send_outbox_message(msg, account, outbox) -> None:  # noqa: C901
             pass
 
     if has_dynamic_header:
-        # Image+caption is ATOMIC. If the image fails, raise to trigger
-        # outbox retry — never fall through to send-text, which creates
-        # a duplicate (the caption already contains the full message).
+        # Try sending image+caption.  If the image fails (e.g. OpenWA 500),
+        # check whether the ack webhook already confirmed delivery before
+        # falling back to text — otherwise we'd send a duplicate.
         image_sent = _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
-        if not image_sent:
-            raise Exception(
-                "Dynamic header image failed to send. "
-                "The outbox entry will be retried. "
-                "Check OpenWA session status and error logs."
+        if image_sent:
+            return
+
+        # The image returned an error, but OpenWA engines often deliver
+        # the message before the REST response is built.  The ack webhook
+        # may have already stored the message_id.  Reload and check.
+        frappe.db.commit()
+        msg.reload()
+        if msg.message_id:
+            frappe.logger().info(
+                f"OpenWA: Dynamic header image returned error but message "
+                f"was delivered (message_id={msg.message_id}). Skipping text fallback."
             )
-        return
+            return
+
+        frappe.log_error(
+            title="OpenWA: Dynamic header failed, falling back to text",
+            message=(
+                f"Msg {msg.name}, Template {msg.template}: "
+                "image send failed, falling back to text/template delivery."
+            ),
+        )
+        # Fall through to text/template send below
 
     # No dynamic header — send text/template message directly
     from frappe_whatsapp.utils import format_number
@@ -522,11 +729,16 @@ def _fail_outbox(outbox_name: str, error: str, account=None) -> None:
 
 
 def process_pending_outbox() -> None:
-    """Scheduler safety-net: re-enqueue orphaned Pending entries.
+    """Scheduler safety-net: re-enqueue orphaned Pending entries and recover
+    stuck Sending entries.
 
     Runs every ~4 minutes via the ``all`` scheduler event.  Picks up entries
     that were never processed (e.g. worker crash, Redis restart) and
     re-enqueues them into the ``long`` queue.
+
+    Also recovers entries stuck in ``Sending`` for more than 5 minutes —
+    these are typically caused by worker crashes or Redis restarts between
+    the status update and the final Sent/Failed mark.
     """
     now = datetime.now()
     # Use a default max attempts filter. The real guard is per-entry in
@@ -559,6 +771,32 @@ def process_pending_outbox() -> None:
         limit=batch_size,
     )
 
+    # Recover orphaned Sending entries — worker crashed before marking Sent/Failed.
+    # Give a 5-minute grace period to avoid resetting entries still being processed.
+    sending_cutoff = (now - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+    stuck_sending = frappe.get_all(
+        "OpenWA Outbox",
+        filters=[
+            ["status", "=", "Sending"],
+            ["modified", "<", sending_cutoff],
+            ["attempts", "<", max_attempts],
+        ],
+        fields=["name"],
+        order_by="creation ASC",
+        limit=batch_size,
+    )
+    for entry in stuck_sending:
+        frappe.db.set_value(
+            "OpenWA Outbox",
+            entry.name,
+            {"status": "Pending"},
+        )
+        frappe.logger().warning(
+            f"OpenWA outbox recovery: reset stuck Sending entry {entry.name} to Pending"
+        )
+    if stuck_sending:
+        frappe.db.commit()
+
     candidates = list({e.name for e in entries} | {e.name for e in retry_entries})
 
     for name in candidates:
@@ -573,6 +811,87 @@ def process_pending_outbox() -> None:
 
     if candidates:
         frappe.logger().info(f"OpenWA outbox safety-net: re-enqueued {len(candidates)} entry(ies)")
+
+
+# ---------------------------------------------------------------------------
+# Proactive outbox reconciliation
+# ---------------------------------------------------------------------------
+
+
+def reconcile_stale_outbox() -> None:
+    """Proactive reconciliation: fix outbox entries that should be Sent but aren't.
+
+    This handles the case where:
+    1. The message WAS delivered (webhook confirmed via WhatsApp Message status)
+       but the outbox entry was never updated.
+    2. The outbox entry is stuck in Sending/Pending but the WhatsApp Message
+       already has a message_id (meaning it was accepted by OpenWA).
+
+    Runs every ~4 minutes via the ``all`` scheduler event and also from the
+    hourly health check.
+    """
+    now = datetime.now()
+    stale_cutoff = (now - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+
+    # Find outbox entries stuck in Pending or Sending where the linked
+    # WhatsApp Message already has a message_id or status=Sent
+    stale_entries = frappe.get_all(
+        "OpenWA Outbox",
+        filters=[
+            ["status", "in", ["Pending", "Sending"]],
+            ["modified", "<", stale_cutoff],
+        ],
+        fields=["name", "whatsapp_message", "whatsapp_account"],
+        limit_page_length=50,
+    )
+
+    reconciled = 0
+    for entry in stale_entries:
+        if not entry.whatsapp_message:
+            continue
+        try:
+            msg_status = frappe.db.get_value(
+                "WhatsApp Message", entry.whatsapp_message, "status"
+            )
+            msg_id = frappe.db.get_value(
+                "WhatsApp Message", entry.whatsapp_message, "message_id"
+            )
+        except Exception:
+            continue
+
+        # Case 1: WhatsApp Message already confirmed sent — mark outbox Sent
+        if msg_status and msg_status.lower() in ("sent", "delivered", "read"):
+            frappe.db.set_value("OpenWA Outbox", entry.name, {"status": "Sent"})
+            reconciled += 1
+            continue
+
+        # Case 2: WhatsApp Message has a message_id but status not yet updated
+        if msg_id:
+            frappe.db.set_value(
+                "WhatsApp Message",
+                entry.whatsapp_message,
+                {"status": "Sent"},
+            )
+            frappe.db.set_value("OpenWA Outbox", entry.name, {"status": "Sent"})
+            reconciled += 1
+            continue
+
+        # Case 3: Outbox attempted >= max but still Pending/Sending
+        attempts = frappe.db.get_value("OpenWA Outbox", entry.name, "attempts") or 0
+        max_attempts = frappe.db.get_value("OpenWA Outbox", entry.name, "max_attempts") or 100
+        if attempts >= max_attempts:
+            frappe.db.set_value(
+                "OpenWA Outbox",
+                entry.name,
+                {"status": "Failed", "last_error": "Max attempts exhausted (reconciliation)"},
+            )
+            reconciled += 1
+
+    if reconciled:
+        frappe.db.commit()
+        frappe.logger().info(
+            f"OpenWA outbox reconciliation: fixed {reconciled} stale entries"
+        )
 
 
 def cleanup_old_outbox() -> None:

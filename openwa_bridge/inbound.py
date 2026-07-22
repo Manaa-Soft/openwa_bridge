@@ -118,7 +118,9 @@ def receive_openwa_message() -> dict[str, str]:
     try:
         if event_type == "message.received":
             _handle_inbound_message(event_data, whatsapp_account, session_id)
-        elif event_type in ("message.ack", "message.failed", "message.sent"):
+        elif event_type == "message.sent":
+            _handle_message_sent(event_data)
+        elif event_type in ("message.ack", "message.failed"):
             _handle_status_update(event_data)
         elif event_type == "message.revoked":
             _handle_message_revoked(event_data)
@@ -154,6 +156,7 @@ def _handle_inbound_message(
 
     sender_jid: str = msg_data.get("from", "")
     phone_number = strip_jid_suffix(sender_jid)
+    is_unresolved_lid = False
 
     # Group messages — extract actual author
     if msg_data.get("isGroup", False):
@@ -170,8 +173,9 @@ def _handle_inbound_message(
         cached = _get_cached_lid_phone(session_id, sender_jid)
         if cached:
             phone_number = cached
-        # If not cached, message saves with LID digits; resolve later via background job
-        _queue_lid_resolution(session_id, sender_jid)
+        else:
+            is_unresolved_lid = True
+            _queue_lid_resolution(session_id, sender_jid)
 
     # Back-fill LID recipients: if the raw LID digits are in a Recipient List, replace with real phone
     _fix_lid_recipients(sender_jid, phone_number)
@@ -255,7 +259,8 @@ def _handle_inbound_message(
         )
 
     try:
-        _ensure_whatsapp_profile(phone_number, profile_name, whatsapp_account.name)
+        if not is_unresolved_lid:
+            _ensure_whatsapp_profile(phone_number, profile_name, whatsapp_account.name)
     except Exception:
         frappe.log_error(
             title="OpenWA: Profile create failed",
@@ -263,7 +268,7 @@ def _handle_inbound_message(
         )
 
     try:
-        _create_communication(doc, phone_number, profile_name)
+        _create_communication(doc, phone_number, profile_name, is_unresolved_lid=is_unresolved_lid)
     except Exception:
         frappe.log_error(
             title="OpenWA: Communication create failed",
@@ -334,23 +339,210 @@ def _attach_openwa_media(message_doc: "Document", media_info: dict) -> None:  # 
 # ── Status handler ───────────────────────────────────────────────────
 
 
+def _handle_message_sent(event_data: dict) -> None:
+    """Store message_id on the WhatsApp Message when ``message.sent`` arrives.
+
+    OpenWA fires ``message.sent`` with the full message object (``id``, ``to``,
+    ``body``, etc.) but NO ``status`` field.  This event arrives BEFORE
+    ``message.ack`` and is the earliest opportunity to link the WhatsApp
+    message ID back to the Frappe WhatsApp Message doc — which is critical
+    for the ``message.ack`` handler and the outbox idempotency guards.
+    """
+    wa_msg_id: str = event_data.get("id", "")
+    if not wa_msg_id:
+        return
+
+    # If the message already has this ID stored, nothing to do
+    existing = frappe.db.get_value(
+        "WhatsApp Message", {"message_id": wa_msg_id}, "name"
+    )
+    if existing:
+        return
+
+    # The sent event has ``to`` as a JID like "12345@c.us".  Extract phone.
+    to_jid: str = event_data.get("to") or event_data.get("chatId") or ""
+    phone = strip_jid_suffix(to_jid)
+    if not phone:
+        return
+
+    # Primary: find the most recent outgoing message to this EXACT phone
+    # that still has no message_id.  Use an exact match on the last segment
+    # of the `to` field (which stores the formatted phone) instead of LIKE.
+    name = frappe.db.get_value(
+        "WhatsApp Message",
+        filters={
+            "type": "Outgoing",
+            "message_id": ("is", "not set"),
+        },
+        fields=["name"],
+        order_by="creation desc",
+        limit_page_length=1,
+        pluck="name",
+    )
+
+    # Verify the matched message is actually going to this phone.
+    # The `to` field may contain the full JID or just the phone.
+    if name:
+        to_field = frappe.db.get_value("WhatsApp Message", name, "to") or ""
+        to_phone = strip_jid_suffix(to_field)
+        if to_phone != phone:
+            name = None
+
+    if not name:
+        # Fallback: try LIKE but with exact phone boundary to reduce false matches
+        name = frappe.db.get_value(
+            "WhatsApp Message",
+            filters={
+                "to": ("like", f"%{phone}"),
+                "type": "Outgoing",
+                "message_id": ("is", "not set"),
+            },
+            fields=["name"],
+            order_by="creation desc",
+            limit_page_length=1,
+            pluck="name",
+        )
+    if not name:
+        return
+
+    frappe.db.set_value("WhatsApp Message", name, "message_id", wa_msg_id)
+    frappe.logger().info(
+        f"OpenWA message.sent: stored message_id '{wa_msg_id}' "
+        f"on WhatsApp Message {name}"
+    )
+
+
 def _handle_status_update(event_data: dict) -> None:
-    """Map OpenWA ``message.ack`` / ``message.failed`` to WhatsApp Message status."""
+    """Map OpenWA ``message.ack`` / ``message.failed`` to
+    WhatsApp Message status and reconcile the linked OpenWA Outbox entry.
+
+    Status can only ADVANCE (never downgrade) — matching OpenWA's own
+    ``ackStatusTransitionFrom`` guard.  Priority:
+        pending < Sent < Delivered < Read
+    """
     message_id: str = event_data.get("messageId") or event_data.get("id", "")
     status: str = event_data.get("status", "")
 
     if not message_id or not status:
         return
 
-    name = frappe.db.get_value(
-        "WhatsApp Message",
-        filters={"message_id": message_id},
-        pluck="name",
-    )
+    name = _find_whatsapp_message(message_id)
+
     if not name:
         return
 
-    frappe.db.set_value("WhatsApp Message", name, "status", status.capitalize())
+    new_status = status.capitalize()
+    # OpenWA maps ack 5 (PLAYED) to "read" — normalize
+    if new_status in ("Played",):
+        new_status = "Read"
+
+    _STATUS_PRIORITY = {
+        "Queued": 0,
+        "Pending": 0,
+        "Sent": 1,
+        "Delivered": 2,
+        "Read": 3,
+        "Failed": -1,
+        "Revoked": -1,
+    }
+
+    current_status = frappe.db.get_value("WhatsApp Message", name, "status") or ""
+    current_priority = _STATUS_PRIORITY.get(current_status, 0)
+    new_priority = _STATUS_PRIORITY.get(new_status, 0)
+
+    if new_priority <= current_priority and new_status != current_status:
+        frappe.logger().debug(
+            f"OpenWA ack: skipping downgrade {current_status} → {new_status} "
+            f"for message {name} ({message_id})"
+        )
+        return
+
+    if new_status != current_status:
+        frappe.db.set_value("WhatsApp Message", name, "status", new_status)
+        frappe.logger().info(
+            f"OpenWA ack: {name} status {current_status} → {new_status} "
+            f"(message_id={message_id})"
+        )
+
+    # Reconcile the OpenWA Outbox: if the message was delivered/read,
+    # any linked outbox entry stuck in Pending or Sending should be
+    # marked Sent to prevent duplicate resends by the scheduler.
+    if new_status in ("Sent", "Delivered", "Read"):
+        _reconcile_outbox_on_ack(name, message_id)
+
+
+def _find_whatsapp_message(wa_msg_id: str) -> str | None:
+    """Find a WhatsApp Message by its WhatsApp message ID.
+
+    Primary lookup: exact match on ``message_id`` column.
+    Fallback: extract the phone number from the JID embedded in the
+    message ID (e.g. ``true_12345@c.us_3EB0...`` → ``12345``) and
+    search for the most recent outgoing message to that phone that
+    still has no ``message_id`` set.
+    """
+    name = frappe.db.get_value(
+        "WhatsApp Message",
+        filters={"message_id": wa_msg_id},
+        pluck="name",
+    )
+    if name:
+        return name
+
+    # Fallback: extract phone from JID-style message ID
+    phone = strip_jid_suffix(wa_msg_id.split("_")[1]) if "_" in wa_msg_id else ""
+    if not phone or not phone.isdigit():
+        return None
+
+    # Try exact match first: most recent outgoing with no message_id
+    # whose `to` field ends with this phone
+    name = frappe.db.get_value(
+        "WhatsApp Message",
+        filters={
+            "to": ("like", f"%{phone}"),
+            "type": "Outgoing",
+            "message_id": ("is", "not set"),
+        },
+        fields=["name"],
+        order_by="creation desc",
+        limit_page_length=1,
+        pluck="name",
+    )
+    if name:
+        # Store the message_id now so future lookups are instant
+        frappe.db.set_value("WhatsApp Message", name, "message_id", wa_msg_id)
+        frappe.logger().info(
+            f"OpenWA: resolved message_id '{wa_msg_id}' → WhatsApp Message {name} "
+            f"(fallback by phone {phone})"
+        )
+    return name
+
+
+def _reconcile_outbox_on_ack(whatsapp_message_name: str, message_id: str) -> None:
+    """Mark any stuck OpenWA Outbox entry as Sent when a delivery ack arrives.
+
+    This prevents the scheduler from retrying messages that were already
+    delivered.  Called from ``_handle_status_update`` when the ack carries
+    a terminal-ish status (sent / delivered / read).
+    """
+    outbox_entries = frappe.get_all(
+        "OpenWA Outbox",
+        filters={
+            "whatsapp_message": whatsapp_message_name,
+            "status": ("in", ["Pending", "Sending"]),
+        },
+        fields=["name", "status"],
+        limit_page_length=0,
+    )
+    for entry in outbox_entries:
+        frappe.db.set_value(
+            "OpenWA Outbox",
+            entry.name,
+            {"status": "Sent"},
+        )
+        frappe.logger().info(
+            f"OpenWA outbox reconciled via ack: {entry.name} "
+            f"({entry.status} -> Sent) for message {whatsapp_message_name}"
+        )
 
 
 def _handle_session_status(event_data: dict, session_id: str) -> None:
@@ -373,6 +565,30 @@ def _handle_session_status(event_data: dict, session_id: str) -> None:
     )
     if account_name:
         frappe.db.set_value("WhatsApp Account", account_name, "status", frappe_status)
+
+        # When session disconnects, log pending outbox entries for visibility
+        if status in ("disconnected", "failed"):
+            pending_count = frappe.db.count(
+                "OpenWA Outbox",
+                filters={
+                    "whatsapp_account": account_name,
+                    "status": ("in", ["Pending", "Sending"]),
+                },
+            )
+            if pending_count:
+                frappe.logger().warning(
+                    f"OpenWA session '{session_id}' on '{account_name}' "
+                    f"is {status} — {pending_count} outbox entries waiting. "
+                    f"They will be retried when the session reconnects."
+                )
+            frappe.log_error(
+                title=f"OpenWA: Session {status} on {account_name}",
+                message=(
+                    f"Session {session_id} status changed to '{status}'. "
+                    f"{pending_count} pending outbox entries will be retried "
+                    f"automatically when the session reconnects."
+                ),
+            )
 
 
 def _handle_message_revoked(event_data: dict) -> None:
@@ -489,12 +705,18 @@ def _create_communication(
     message_doc: "Document",  # noqa: F821
     phone_number: str,
     profile_name: str | None,
+    *,
+    is_unresolved_lid: bool = False,
 ) -> None:
     """Create Communication doc and optionally a Lead/Contact for the sender.
 
     Looks up an existing Contact by mobile_no. If found, creates a
     Communication linked to that Contact. If not found, creates a
     new Lead + Contact, then the Communication.
+
+    When ``is_unresolved_lid`` is True the phone is still a raw LID
+    (WhatsApp privacy ID) so we skip Lead/Contact creation — the
+    background LID resolver will back-fill them later.
     """
     formatted = format_number(phone_number)
 
@@ -502,7 +724,7 @@ def _create_communication(
         "Contact", {"mobile_no": formatted}, "name"
     )
 
-    if not contact_name:
+    if not contact_name and not is_unresolved_lid:
         lead_name = None
         try:
             lead = frappe.get_doc({
@@ -592,6 +814,7 @@ def _resolve_lid_phone_background(session_id: str, lid_jid: str) -> None:
     if phone:
         _set_cached_lid_phone(session_id, lid_jid, phone)
         _fix_lid_recipients(lid_jid, phone)
+        _backfill_lid_messages_and_contacts(lid_jid, phone)
 
 
 def _resolve_lid_phone(session_id: str, lid_jid: str) -> str | None:
@@ -658,6 +881,112 @@ def _fix_lid_recipients(sender_jid: str, resolved_phone: str) -> None:
     except Exception:
         frappe.logger().debug(
             f"OpenWA: Could not fix recipients for LID {lid_digits}"
+        )
+
+
+def _backfill_lid_messages_and_contacts(lid_jid: str, resolved_phone: str) -> None:
+    """After LID→phone resolution, back-fill WhatsApp Messages and create/update Lead+Contact.
+
+    When a message first arrives from a LID, it is saved with the raw LID
+    digits as the ``from`` field.  This function updates those messages
+    to use the real phone number, and creates the Lead/Contact that were
+    skipped during initial processing.
+    """
+    lid_digits = strip_jid_suffix(lid_jid)
+    if not resolved_phone or not lid_digits or resolved_phone == lid_digits:
+        return
+
+    formatted_new = format_number(resolved_phone)
+    formatted_lid = format_number(lid_digits)
+
+    try:
+        # Update WhatsApp Messages that still have the LID digits as sender
+        messages = frappe.get_all(
+            "WhatsApp Message",
+            filters={"from": formatted_lid, "type": "Incoming"},
+            fields=["name"],
+        )
+        for msg in messages:
+            frappe.db.set_value("WhatsApp Message", msg.name, "from", formatted_new)
+        if messages:
+            frappe.logger().info(
+                f"OpenWA: Back-filled {len(messages)} WhatsApp Messages: "
+                f"{formatted_lid} → {formatted_new}"
+            )
+    except Exception:
+        frappe.logger().debug(
+            f"OpenWA: Could not back-fill messages for LID {lid_digits}"
+        )
+
+    try:
+        # Create Lead + Contact if they don't exist for the resolved phone
+        contact_name = frappe.db.get_value("Contact", {"mobile_no": formatted_new}, "name")
+        if not contact_name:
+            # Find profile name from any existing message
+            profile_name = None
+            if messages:
+                profile_name = frappe.db.get_value(
+                    "WhatsApp Message", messages[0].name, "profile_name"
+                )
+
+            lead = frappe.get_doc({
+                "doctype": "Lead",
+                "lead_name": profile_name or formatted_new,
+                "mobile_no": formatted_new,
+                "source": "WhatsApp",
+            })
+            lead.insert(ignore_permissions=True)
+
+            contact = frappe.get_doc({
+                "doctype": "Contact",
+                "first_name": profile_name or formatted_new,
+                "mobile_no": formatted_new,
+                "links": [{"link_doctype": "Lead", "link_name": lead.name}],
+            })
+            contact.insert(ignore_permissions=True)
+            contact_name = contact.name
+
+            frappe.logger().info(
+                f"OpenWA: Created Lead {lead.name} + Contact {contact_name} "
+                f"from resolved LID {lid_digits} → {formatted_new}"
+            )
+
+            # Link Communications to the new Contact
+            for msg in messages:
+                if not frappe.db.exists(
+                    "Communication",
+                    {"reference_doctype": "WhatsApp Message", "reference_name": msg.name},
+                ):
+                    frappe.get_doc({
+                        "doctype": "Communication",
+                        "communication_type": "Communication",
+                        "communication_medium": "Chat",
+                        "subject": f"WhatsApp message from {profile_name or formatted_new}",
+                        "reference_doctype": "WhatsApp Message",
+                        "reference_name": msg.name,
+                        "party_type": "Contact",
+                        "party": contact_name,
+                        "status": "Linked",
+                    }).insert(ignore_permissions=True)
+
+        # Also fix any existing Contact that was created with LID digits
+        if contact_name and formatted_lid != formatted_new:
+            old_contacts = frappe.get_all(
+                "Contact",
+                filters={"mobile_no": formatted_lid},
+                fields=["name"],
+            )
+            for old_c in old_contacts:
+                frappe.db.set_value("Contact", old_c.name, "mobile_no", formatted_new)
+                frappe.logger().info(
+                    f"OpenWA: Updated Contact {old_c.name} mobile: "
+                    f"{formatted_lid} → {formatted_new}"
+                )
+
+    except Exception:
+        frappe.log_error(
+            title="OpenWA: LID backfill Lead/Contact failed",
+            message=f"LID: {lid_digits} → {formatted_new}\n{frappe.get_traceback()}",
         )
 
 

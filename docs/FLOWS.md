@@ -243,7 +243,11 @@ receive_openwa_message()
         │    └─ Update WhatsApp Message status field
         │
         ├─ "message.ack" / "message.failed" → _handle_status_update()
-        │    └─ Update WhatsApp Message status field
+        │    ├─ Status priority: pending(0) < Sent(1) < Delivered(2) < Read(3)
+        │    ├─ Only allows forward transitions (never downgrades)
+        │    ├─ PLAYED (Baileys ack 5) normalized to Read
+        │    ├─ Reconciles stuck outbox entries on sent/delivered/read
+        │    └─ Logs status transitions
         │
         ├─ "message.revoked" → _handle_message_revoked()
         │    └─ Set WhatsApp Message status to "Revoked"
@@ -362,7 +366,13 @@ _run_health_check()
        │
        ├─ Connection error → _set_account_status(name, "disconnected")
        │
-       ├─ status = "ready" → _set_account_status(name, "ready")
+       ├─ 404 → clear stale session_id, attempt auto-recovery
+       │
+       ├─ 429 → skip (rate-limited)
+       │
+       ├─ status = "ready" AND phone set → _set_account_status(name, "ready")
+       │
+       ├─ status = "ready" but NO phone → restart (engine alive but WhatsApp not linked)
        │
        └─ status in (disconnected, created, failed):
             │
@@ -370,7 +380,7 @@ _run_health_check()
           _start_session(base_url, session_id, api_key)
             │
             ├─ POST /api/sessions/:id/start (60s timeout)
-            ├─ Wait 3s
+            ├─ Wait 15s for initialization
             ├─ Re-check status
             └─ _set_account_status(name, new_status)
 ```
@@ -385,21 +395,22 @@ _ensure_session_ready(account)
   │
   ├─ 1. GET /api/sessions/:id (10s timeout)
   │      │
-  │      ├─ status = "ready" → return (all good)
-  │      └─ status != "ready" → continue to restart
+  │      ├─ status = "ready" AND phone set → return (truly connected)
+  │      ├─ status = "ready" but NO phone → continue to restart (engine alive but WhatsApp not linked)
+  │      ├─ status != "ready" → continue to restart
+  │      ├─ status = 429 → return (rate-limited, assume connected)
+  │      └─ status = 404 → throw "session deleted"
   │
   ├─ 2. POST /api/sessions/:id/start (60s timeout)
   │      │
   │      ├─ 200/201/400 → continue (400 = already started)
   │      └─ Other → throw "restart failed: HTTP {code}"
   │
-  ├─ 3. Wait 5s for initialization
-  │
-  ├─ 4. GET /api/sessions/:id (10s timeout)
+  ├─ 3. Poll status up to 15s (1s intervals)
   │      │
-  │      ├─ status = "ready" → return (recovered!)
+  │      ├─ status = "ready" AND phone set → return (recovered!)
   │      ├─ status = "qr_ready" → throw "requires QR re-scan"
-  │      └─ Other → continue
+  │      └─ Other → continue polling
   │
   └─ 5. throw "session is {status} and could not be recovered"
        → User must open WhatsApp Account form and click "Reconnect"
@@ -423,7 +434,7 @@ OverrideWhatsAppMessage.after_insert() [self.name now assigned]
   │    ▼
   │  Create OpenWA Outbox doc:
   │    { whatsapp_message, whatsapp_account, content_type,
-  │      status: "Pending", max_attempts: 5 }
+  │      status: "Pending", max_attempts: 100 }
   │    │
   │    ▼
   │  frappe.enqueue(process_outbox_entry, queue="long", timeout=300)
@@ -439,28 +450,38 @@ process_outbox_entry(outbox_name)
   6. Guard: attempts < max_attempts
   7. Mark status="Sending", increment attempts
   │
-  8. Circuit breaker check:
+  8. Pre-send session check (NEW):
+       │
+       ├─ GET /api/sessions/:id (10s timeout)
+       │    │
+       │    ├─ status=ready AND phone set → continue (truly connected)
+       │    ├─ status != ready or no phone → _fail_outbox("not connected")
+       │    └─ 404 → _fail_outbox("session deleted")
+       │
+       └─ On connection error → fall through to _ensure_session_ready
+  │
+  9. Circuit breaker check:
        ├─ OpenWACircuitBreaker(account).is_open()
        │    ├─ Yes → fail with cooldown message, schedule retry
        │    └─ No → continue
   │
-  9. _send_outbox_message(msg, account, outbox)
-       │
-       ├─ _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
-       │    ├─ msg.template set AND template has openwa_dynamic_header?
-       │    │    → render doc as PNG → send image with rendered text as caption
-       │    ├─ Returns True → done (no separate text send)
-       │    └─ Returns False → continue to text/template send
-       │
-       └─ _send_via_openwa()
-            ├─ use_template=1 AND template set? → send-template with vars
-            └─ Otherwise → send-text (plain text or rendered Jinja)
+  10. _send_outbox_message(msg, account, outbox)
+        │
+        ├─ _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
+        │    ├─ msg.template set AND template has openwa_dynamic_header?
+        │    │    → render doc as PNG → send image with rendered text as caption
+        │    ├─ Returns True → done (no separate text send)
+        │    └─ Returns False → continue to text/template send
+        │
+        └─ _send_via_openwa()
+             ├─ use_template=1 AND template set? → send-template with vars
+             └─ Otherwise → send-text (plain text or rendered Jinja)
   │
-  10. On success:
+  11. On success:
        ├─ breaker.record_success()
        └─ status = "Sent"
   │
-  11. On failure:
+  12. On failure:
        ├─ breaker.record_failure()
        └─ _fail_outbox():
             ├─ attempts < max_attempts?

@@ -60,7 +60,7 @@ bench --site erp.manaasoft.com scheduler enable
 
 ```bash
 cd ~
-git clone https://github.com/Open-WA/whatsapp-web.js.git OpenWA
+git clone https://github.com/rmyndharis/OpenWA.git OpenWA
 cd OpenWA
 npm install
 npm run build
@@ -68,18 +68,95 @@ npm run build
 
 ### 2. Configure OpenWA Environment
 
-OpenWA uses `.env` files for configuration. The key settings:
+OpenWA uses `.env` files for configuration. Create or edit `~/OpenWA/.env`:
 
-```bash
-# ~/OpenWA/.env (create or edit)
-AUTO_START_SESSIONS=true
+```env
+# =============================================================================
+# CORE
+# =============================================================================
+NODE_ENV=production
+# Port the app binds to when run directly (bare metal / npm run start:prod).
+# In bundled Docker Compose the container always listens on 2785;
+# the API_PORT below is only the HOST-published port.
 PORT=2785
-SSRF_ALLOWED_HOSTS=192.168.1.15,localhost
+
+# Host network interface for bare-metal / systemd. 0.0.0.0 binds to all
+# network interfaces, allowing external browser access without relying on
+# VS Code SSH port forwarding tunnels. Without this, Node.js defaults to
+# 127.0.0.1 — only accessible from inside the server.
+HOST=0.0.0.0
+
+# Docker Compose only: host-side port mapped to the container's 2785
+# (no effect on bare-metal run).
+API_PORT=2785
+LOG_LEVEL=info
+DOMAIN=localhost
+CORS_ORIGINS=http://192.168.1.15
+CSP_UPGRADE_INSECURE_REQUESTS=false
+AUTO_START_SESSIONS=true
+
+# =============================================================================
+# ENGINE
+# =============================================================================
+ENGINE_TYPE=whatsapp-web.js
+SESSION_DATA_PATH=./data/sessions
+PUPPETEER_HEADLESS=true
+PUPPETEER_ARGS=--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu
+# PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium  # uncomment if Chrome not found
+
+# =============================================================================
+# DATABASE
+# =============================================================================
+DATABASE_TYPE=sqlite
+DATABASE_SYNCHRONIZE=false
+
+# =============================================================================
+# SECURITY
+# =============================================================================
+API_MASTER_KEY=your-strong-secret-key-here
+
+# =============================================================================
+# WEBHOOK (SSRF — allow Frappe to reach OpenWA)
+# =============================================================================
+WEBHOOK_TIMEOUT=10000
+WEBHOOK_MAX_RETRIES=3
+WEBHOOK_RETRY_DELAY=5000
+
+# Keep global SSRF protection ON; whitelist only your Frappe site:
+SSRF_ALLOWED_HOSTS=your-site-name,your-server-ip,localhost,127.0.0.1,minio
+# your-site-name = your Frappe/ERPNext site name (e.g., my-site)
+# your-server-ip = the IP used to connect from VM to host (e.g., 192.168.1.15)
+# minio = MinIO service hostname (if used for file storage)
+
+# =============================================================================
+# REDIS (use port 6385 if ERPNext shares this server)
+# =============================================================================
+REDIS_ENABLED=true
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6385
+REDIS_PASSWORD=your-redis-password-here
+REDIS_CONNECT_TIMEOUT_MS=5000
+QUEUE_ENABLED=true
+# CACHE_ENABLED=true
+
+# =============================================================================
+# MEDIA (disable to prevent memory floods on reconnect)
+# =============================================================================
 MEDIA_DOWNLOAD_ENABLED=false
 STORE_EPHEMERAL_MESSAGES=false
 ```
 
-**Important**: If `~/OpenWA/data/.env.generated` exists, delete it -- it overrides your `.env` and may force `AUTO_START_SESSIONS=false`:
+> **Key settings explained:**
+> - `CORS_ORIGINS` — set to your Frappe server URL so the OpenWA dashboard loads in-browser
+> - `CSP_UPGRADE_INSECURE_REQUESTS=false` — required when accessing dashboard over plain HTTP (no TLS proxy)
+> - `SSRF_ALLOWED_HOSTS` — must include your Frappe **site name**, **server IP**, and any internal services like MinIO (e.g., `SSRF_ALLOWED_HOSTS=your-site-name,your-server-ip,localhost,127.0.0.1,minio`). This keeps global SSRF protection ON while allowing local Frappe ↔ OpenWA communication
+>   - `your-site-name` = your Frappe/ERPNext site name (e.g., `my-site`)
+>   - `your-server-ip` = the IP used to connect from VM to host (e.g., `192.168.1.15`)
+>   - `minio` = MinIO service hostname (if used for file storage)
+> - `REDIS_PORT=6385` — use 6385 when ERPNext shares the server (see [Redis Isolation](#redis-isolation-erpnext--openwa-on-same-server)); use 6379 if OpenWA is alone
+> - `AUTO_START_SESSIONS=true` — auto-reconnects WhatsApp on OpenWA restart
+
+**Important**: If `~/OpenWA/data/.env.generated` exists, delete it -- it overrides your `.env`:
 
 ```bash
 rm ~/OpenWA/data/.env.generated
@@ -174,13 +251,94 @@ bench pip install PyMuPDF  # For dynamic image headers
 
 ---
 
+## Redis Isolation (ERPNext + OpenWA on Same Server)
+
+**DO NOT modify `/etc/redis/redis.conf`** if ERPNext is running on the same server. ERPNext already manages its own Redis instances on ports 6379 (Queue), 6380 (Cache), and 6381 (Socketio).
+
+### Why the global config breaks ERPNext
+
+| Problem | Cause |
+|---|---|
+| Background jobs stall/die | `requirepass` in global config blocks Frappe workers (they don't have the password) |
+| Jobs disappear randomly | `allkeys-lru` eviction kills active job keys when memory fills up |
+| Real-time updates break | Socketio loses its Redis connection |
+
+### Solution: Dedicated Redis instance for OpenWA
+
+Create a separate Redis instance on a different port (e.g., 6385):
+
+**Step 1: Create config file**
+
+```bash
+sudo nano /etc/redis/redis-openwa.conf
+```
+
+```plaintext
+# Configuration for OpenWA BullMQ
+include /etc/redis/redis.conf
+port 6385
+pidfile /run/redis/redis-server-openwa.pid
+logfile /var/log/redis/redis-server-openwa.log
+dbfilename dump-openwa.rdb
+
+# Isolation security and sizing
+requirepass your-redis-password-here
+maxmemory 256mb
+maxmemory-policy allkeys-lru
+```
+
+**Step 2: Create systemd service**
+
+```bash
+sudo cp /lib/systemd/system/redis-server.service /etc/systemd/system/redis-openwa.service
+sudo nano /etc/systemd/system/redis-openwa.service
+```
+
+Change the `ExecStart=` line:
+
+```plaintext
+ExecStart=/usr/bin/redis-server /etc/redis/redis-openwa.conf
+```
+
+**Step 3: Start and verify**
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable redis-openwa
+sudo systemctl start redis-openwa
+
+# Verify it works on port 6385
+redis-cli -p 6385 -a your-redis-password-here ping
+# PONG
+```
+
+**Step 4: Point OpenWA to the dedicated instance**
+
+In OpenWA's `.env` or BullMQ config:
+
+```bash
+REDIS_URL=redis://:your-redis-password-here@127.0.0.1:6385
+```
+
+### Port allocation summary
+
+| Port | Service | Purpose |
+|---|---|---|
+| 6379 | Frappe Redis Queue | Background workers (ERPNext) |
+| 6380 | Frappe Redis Cache | Doc cache (ERPNext) |
+| 6381 | Frappe Redis Socketio | Real-time events (ERPNext) |
+| **6385** | **OpenWA Redis** | **BullMQ job queue (OpenWA)** |
+
+---
+
 ## Why These Steps Matter
 
 | Problem | Cause | Fix |
 |---|---|---|
 | Sessions don't auto-start on boot | `AUTO_START_SESSIONS=false` in `.env.generated` | Delete `.env.generated`, set `AUTO_START_SESSIONS=true` in `.env` |
 | OpenWA dies after server reboot | No systemd setup | `systemctl enable openwa` |
-| Frappe can't reach OpenWA | SSRF blocks private IPs | `SSRF_ALLOWED_HOSTS=192.168.1.15,localhost` |
+| Dashboard unreachable from browser (`ERR_CONNECTION_REFUSED`) | `HOST` not set — Node.js binds to `127.0.0.1` only | Add `HOST=0.0.0.0` to `.env` and restart. VS Code SSH tunnels mask this issue. |
+| Frappe can't reach OpenWA | SSRF blocks private IPs | `SSRF_ALLOWED_HOSTS=your-site-name,your-server-ip,localhost,127.0.0.1,minio` |
 | "Could not find Chrome" | Wrong user or missing Chrome | See Chrome/Puppeteer section below |
 | `send-image` returns 500 | WhatsApp Web.js returns `undefined` for media | Apply OpenWA media send patch (see below) |
 | `send-template` returns 404 | Template deleted when session recreated | Bridge auto-recovers: looks up by name, re-creates if missing |

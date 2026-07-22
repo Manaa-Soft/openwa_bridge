@@ -18,13 +18,20 @@
    "default": "3600",
    "description": "How long to remember duplicate webhook events. Default: 3600 (1 hour)."
   },
-  {
-   "fieldname": "outbox_batch_size",
-   "fieldtype": "Int",
-   "label": "Outbox Batch Size",
-   "default": "25",
-   "description": "Max outbox entries re-enqueued per scheduler cycle. Default: 25."
-  },
+   {
+    "fieldname": "outbox_batch_size",
+    "fieldtype": "Int",
+    "label": "Outbox Batch Size",
+    "default": "25",
+    "description": "Max outbox entries re-enqueued per scheduler cycle. Default: 25."
+   },
+   {
+    "fieldname": "openwa_image_timeout",
+    "fieldtype": "Int",
+    "label": "Image Send Timeout (seconds)",
+    "default": "90",
+    "description": "Timeout for dynamic header image sends. Increase if PDF rendering is slow. Default: 90."
+   },
   {
    "fieldname": "column_break_1",
    "fieldtype": "Column Break"

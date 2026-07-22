@@ -8,10 +8,24 @@ from datetime import datetime, timedelta
 
 import frappe
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Module-level Session for HTTP connection pooling (reuses TCP connections)
 _http_session = requests.Session()
 _http_session.headers.update({"Content-Type": "application/json"})
+
+# Retry on stale connections: 3 attempts with short backoff for connection
+# errors and 502/503/504 (transient gateway errors from OpenWA engine restarts).
+_retry = Retry(
+    total=3,
+    backoff_factor=0.5,
+    status_forcelist=[502, 503, 504],
+    allowed_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    raise_on_status=False,
+)
+_http_session.mount("http://", HTTPAdapter(max_retries=_retry))
+_http_session.mount("https://", HTTPAdapter(max_retries=_retry))
 
 
 def verify_openwa_signature(

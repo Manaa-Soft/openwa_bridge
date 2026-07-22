@@ -79,7 +79,11 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
     # ------------------------------------------------------------------
 
     def _ensure_session_ready(self, account: "WhatsAppAccount") -> None:  # noqa: F821
-        """Verify the OpenWA session is ready; attempt restart if not.
+        """Verify the OpenWA session is truly connected to WhatsApp.
+
+        A session can be ``ready`` (engine alive) without being connected
+        to WhatsApp (no phone number).  This method verifies the phone
+        field is set — only then is the session actually usable.
 
         Raises ``frappe.ValidationError`` if the session cannot be recovered.
         """
@@ -90,6 +94,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
         headers = {"Content-Type": "application/json", "X-API-Key": api_key}
 
         # Check current status
+        session_data = None
         try:
             resp = _http_session.get(
                 f"{base_url}/api/sessions/{session_id}",
@@ -97,9 +102,25 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 timeout=10,
             )
             if resp.status_code == 200:
-                status = resp.json().get("status", "unknown")
-                if status == "ready":
-                    return  # all good
+                session_data = resp.json()
+                status = session_data.get("status", "unknown")
+                phone = session_data.get("phone")
+                if status == "ready" and phone:
+                    return  # truly connected — engine alive AND WhatsApp linked
+                # Engine alive but not connected to WhatsApp — need restart
+            elif resp.status_code == 404:
+                frappe.throw(
+                    f"OpenWA session '{session_id}' no longer exists on the server. "
+                    "Please re-setup the WhatsApp Account from the form.",
+                    title="Session Deleted",
+                )
+            elif resp.status_code == 429:
+                # Rate-limited — assume session is fine, don't restart.
+                frappe.logger().info(
+                    f"OpenWA pre-send: session '{session_id}' rate-limited "
+                    f"— assuming connected, proceeding with send"
+                )
+                return
             else:
                 status = "disconnected"
         except Exception:
@@ -107,8 +128,10 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
 
         # Not ready — attempt restart
         frappe.logger().info(
-            f"OpenWA pre-send: session '{session_id}' status is '{status}' — "
-            f"attempting restart before sending message {self.name}"
+            f"OpenWA pre-send: session '{session_id}' status is "
+            f"'{getattr(session_data, 'get', lambda k, d=None: d)('status', 'unknown')}' "
+            f"(phone={getattr(session_data, 'get', lambda k, d=None: d)('phone', None)}) "
+            f"— attempting restart before sending message {self.name}"
         )
         try:
             start_resp = _http_session.post(
@@ -125,9 +148,10 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 f"OpenWA session is {status} and restart failed: {exc}"
             )
 
-        # Poll for readiness (up to 3s, 1s intervals) — keep brief to avoid
-        # blocking the worker thread.  The outbox retry handles longer waits.
-        for _ in range(3):
+        # Poll for readiness (up to 15s, 1s intervals) — wait longer
+        # because the engine needs time to reconnect to WhatsApp after
+        # restart.  We require BOTH status=ready AND phone set.
+        for i in range(15):
             time.sleep(1)
             try:
                 verify = _http_session.get(
@@ -136,11 +160,13 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     timeout=5,
                 )
                 if verify.status_code == 200:
-                    new_status = verify.json().get("status", "unknown")
-                    if new_status == "ready":
+                    vdata = verify.json()
+                    new_status = vdata.get("status", "unknown")
+                    phone = vdata.get("phone")
+                    if new_status == "ready" and phone:
                         frappe.logger().info(
                             f"OpenWA pre-send: session '{session_id}' restarted "
-                            f"successfully — status is now 'ready'"
+                            f"— connected as {phone}"
                         )
                         return
                     if new_status == "qr_ready":
@@ -151,7 +177,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             except Exception:
                 pass
 
-        # Not ready after brief wait — let outbox retry handle it
+        # Not ready after wait — let outbox retry handle it
         frappe.throw(
             f"OpenWA session is {status} and could not be recovered automatically. "
             "The message will be retried. You can also click 'Reconnect' on the "
@@ -160,6 +186,16 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
 
     def _send_via_openwa(self, account: "WhatsAppAccount", meta_payload: dict) -> None:  # noqa: F821
         """Translate and dispatch the payload to the OpenWA Gateway REST API."""
+        # Idempotency guard: if the message already has a message_id, it was
+        # already sent (possibly by a previous attempt or webhook reconciliation).
+        # Do NOT send again — just return.
+        if self.message_id:
+            frappe.logger().info(
+                f"OpenWA: skipping send for {self.name} — "
+                f"message_id '{self.message_id}' already set"
+            )
+            return
+
         # Ensure session is ready before attempting to send
         self._ensure_session_ready(account)
 
@@ -213,7 +249,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     f"{base_url}/api/sessions/{session_id}/messages/send-template",
                     json=send_payload,
                     headers=headers,
-                    timeout=15,
+                    timeout=30,
                 )
                 # Stale template ID recovery: if 404, look up by name and retry
                 if resp.status_code == 404:
@@ -224,7 +260,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                             f"{base_url}/api/sessions/{session_id}/messages/send-template",
                             json=send_payload,
                             headers=headers,
-                            timeout=15,
+                            timeout=30,
                         )
             else:
                 message_body = self._translate_template_payload()
@@ -232,7 +268,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     f"{base_url}/api/sessions/{session_id}/messages/send-text",
                     json={"chatId": chat_id, "text": message_body},
                     headers=headers,
-                    timeout=15,
+                    timeout=30,
                 )
 
         elif self.is_reply and self.reply_to_message_id:
@@ -249,7 +285,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     "text": self.message,
                 },
                 headers=headers,
-                timeout=15,
+                timeout=30,
             )
 
         elif self.content_type == "text":
@@ -263,7 +299,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 f"{base_url}/api/sessions/{session_id}/messages/send-text",
                 json=text_payload,
                 headers=headers,
-                timeout=15,
+                timeout=30,
             )
 
         elif self.content_type in ("image", "video", "audio", "document"):
@@ -276,7 +312,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 f"{base_url}/api/sessions/{session_id}/messages/{endpoint}",
                 json=payload,
                 headers=headers,
-                timeout=30,
+                timeout=60,
             )
 
         elif self.content_type == "reaction":
@@ -288,7 +324,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     "emoji": self.message,
                 },
                 headers=headers,
-                timeout=15,
+                timeout=30,
             )
 
         elif self.content_type == "location":
@@ -310,7 +346,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     "address": location_data.get("address", ""),
                 },
                 headers=headers,
-                timeout=15,
+                timeout=30,
             )
 
         elif self.content_type == "contact":
@@ -330,7 +366,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     "contactNumber": contact_number,
                 },
                 headers=headers,
-                timeout=15,
+                timeout=30,
             )
 
         elif self.content_type == "sticker":
@@ -352,7 +388,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 f"{base_url}/api/sessions/{session_id}/messages/send-sticker",
                 json=sticker_payload,
                 headers=headers,
-                timeout=30,
+                timeout=60,
             )
 
         elif self.content_type == "order":
@@ -373,7 +409,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     "allowMultipleAnswers": poll_data.get("allowMultipleAnswers", False),
                 },
                 headers=headers,
-                timeout=15,
+                timeout=30,
             )
 
         else:
@@ -386,8 +422,14 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 err_body = resp.text
             except Exception:
                 err_body = "(no body)"
+
+            # OpenWA guarantee: persistSentState always returns 201+messageId
+            # on success (swallows DB errors). failSend throws → 500 with NO
+            # messageId. So ANY 4xx/5xx means the message was NOT delivered.
+            # Log for diagnostics and let the caller (_fail_outbox via outbox
+            # processor) handle retry with backoff.
             frappe.log_error(
-                title="OpenWA API Error",
+                title=f"OpenWA API Error ({resp.status_code})",
                 message=(
                     f"POST {resp.url} returned {resp.status_code}\n"
                     f"Request body: {json.dumps(resp.request.body.decode() if resp.request.body else '', default=str)}\n"
@@ -398,11 +440,33 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
 
         res_data = resp.json()
 
-        if "messageId" in res_data:
+        # Extract message ID — support both top-level messageId and nested key.id
+        msg_id = res_data.get("messageId") or (
+            res_data.get("key", {}).get("id") if isinstance(res_data.get("key"), dict) else None
+        )
+
+        if msg_id:
             frappe.db.set_value(
                 "WhatsApp Message",
                 self.name,
-                {"message_id": res_data["messageId"], "status": "Sent"},
+                {"message_id": msg_id, "status": "Sent"},
+            )
+        else:
+            # Message was accepted by OpenWA (HTTP 200+) but no ID returned.
+            # Mark as Sent anyway to prevent infinite retries — the ack
+            # webhook will set the real message_id when it arrives.
+            frappe.db.set_value(
+                "WhatsApp Message",
+                self.name,
+                {"status": "Sent"},
+            )
+            frappe.log_error(
+                title="OpenWA: No messageId in response",
+                message=(
+                    f"Msg {self.name}: POST succeeded (HTTP {resp.status_code}) "
+                    f"but response had no messageId.\n"
+                    f"Response: {json.dumps(res_data, default=str)[:2000]}"
+                ),
             )
 
     # ------------------------------------------------------------------
