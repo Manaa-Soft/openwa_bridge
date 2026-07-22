@@ -274,6 +274,17 @@ SSRF_ALLOWED_HOSTS=your-site-name,your-server-ip,localhost,127.0.0.1,minio
 
 > **Why include the site name?** OpenWA resolves webhook target hosts. When Frappe's webhook URL uses a site name (e.g., `your-site-name` or `erp.example.com`), that hostname must appear in the allow list — otherwise OpenWA treats it as an internal host and blocks delivery. If you use MinIO for file storage, include `minio` as well.
 
+### Dashboard Blank White Page (HTTP without SSL)
+
+If you access the dashboard over plain HTTP (e.g., `http://SERVER_IP:2785`) without an SSL certificate or Nginx reverse proxy, browsers will block dashboard scripts due to Content Security Policy (CSP) settings — resulting in a blank white page.
+
+**Fix**: Add this to your `.env` and restart OpenWA:
+
+```bash
+echo 'CSP_UPGRADE_INSECURE_REQUESTS=false' >> ~/OpenWA/.env
+sudo systemctl restart openwa
+```
+
 **Alternative (closed networks only)** — disable protection entirely:
 
 ```bash
