@@ -511,6 +511,46 @@ class TestHandleCallReceived(IntegrationTestCase):
         mock_frappe.logger.return_value.info.assert_called_once()
 
 
+class TestHandleStatusReceived(IntegrationTestCase):
+    """Test _handle_status_received handler."""
+
+    def setUp(self):
+        super().setUp()
+        from openwa_bridge.inbound import _handle_status_received
+        self.handler = _handle_status_received
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_logs_image_status(self, mock_frappe):
+        """Should log image status with contact and type."""
+        self.handler(
+            {"contact": "1234567890@c.us", "type": "image", "hasMedia": True, "caption": "Check this out"},
+            "session-001",
+        )
+        mock_frappe.logger.return_value.info.assert_called_once()
+        info_msg = mock_frappe.logger.return_value.info.call_args[0][0]
+        self.assertIn("status.received", info_msg)
+        self.assertIn("1234567890@c.us", info_msg)
+        self.assertIn("image", info_msg)
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_logs_text_status(self, mock_frappe):
+        """Should log text status."""
+        self.handler(
+            {"contact": "0987654321@c.us", "type": "text", "hasMedia": False},
+            "session-001",
+        )
+        mock_frappe.logger.return_value.info.assert_called_once()
+        info_msg = mock_frappe.logger.return_value.info.call_args[0][0]
+        self.assertIn("text", info_msg)
+        self.assertIn("hasMedia=False", info_msg)
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_empty_data_logs_anyway(self, mock_frappe):
+        """Should still log even with empty event data."""
+        self.handler({}, "session-001")
+        mock_frappe.logger.return_value.info.assert_called_once()
+
+
 class TestCreateCommunication(IntegrationTestCase):
     """Test _create_communication helper."""
 

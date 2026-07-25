@@ -397,3 +397,208 @@ class TestGetSessionStats(IntegrationTestCase):
         call_args = mock_api.call_args
         self.assertEqual(call_args[0][1], "GET")
         self.assertIn("/stats", call_args[0][2])
+
+
+class TestGetContactStatuses(IntegrationTestCase):
+    """Test get_contact_statuses whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should GET /status/:contactId."""
+        from openwa_bridge.whatsapp_account import get_contact_statuses
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("GET", 200, [])
+
+        result = get_contact_statuses(account_name="test-account", contact_id="1234567890@c.us")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "GET")
+        self.assertIn("/status/1234567890@c.us", call_args[0][2])
+
+
+class TestGetStatusMedia(IntegrationTestCase):
+    """Test get_status_media whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should GET /status/:statusId/media."""
+        from openwa_bridge.whatsapp_account import get_status_media
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("GET", 200, {})
+
+        result = get_status_media(account_name="test-account", status_id="status-001")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "GET")
+        self.assertIn("/status/status-001/media", call_args[0][2])
+
+
+class TestSubscribeChannel(IntegrationTestCase):
+    """Test subscribe_channel whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should POST /channels/subscribe."""
+        from openwa_bridge.whatsapp_account import subscribe_channel
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("POST", 201)
+
+        result = subscribe_channel(account_name="test-account", invite_code="ABC123")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "POST")
+        self.assertIn("/channels/subscribe", call_args[0][2])
+        self.assertEqual(call_args[1]["json_data"]["inviteCode"], "ABC123")
+
+
+class TestUnsubscribeChannel(IntegrationTestCase):
+    """Test unsubscribe_channel whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should DELETE /channels/:channelId."""
+        from openwa_bridge.whatsapp_account import unsubscribe_channel
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("DELETE", 200)
+
+        result = unsubscribe_channel(account_name="test-account", channel_id="channel-001")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "DELETE")
+        self.assertIn("/channels/channel-001", call_args[0][2])
+
+
+class TestGetMessageReactions(IntegrationTestCase):
+    """Test get_message_reactions whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should GET /messages/:chatId/:messageId/reactions."""
+        from openwa_bridge.whatsapp_account import get_message_reactions
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("GET", 200, [])
+
+        result = get_message_reactions(
+            account_name="test-account",
+            chat_id="1234567890@c.us",
+            message_id="msg-001",
+        )
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "GET")
+        self.assertIn("/messages/1234567890@c.us/msg-001/reactions", call_args[0][2])
+
+
+class TestCancelBatch(IntegrationTestCase):
+    """Test cancel_batch whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should POST /messages/batch/:batchId/cancel."""
+        from openwa_bridge.whatsapp_account import cancel_batch
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("POST", 200)
+
+        result = cancel_batch(account_name="test-account", batch_id="batch-001")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "POST")
+        self.assertIn("/messages/batch/batch-001/cancel", call_args[0][2])
+
+
+class TestGetOverviewStats(IntegrationTestCase):
+    """Test get_overview_stats whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should GET /stats/overview."""
+        from openwa_bridge.whatsapp_account import get_overview_stats
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("GET", 200, {})
+
+        result = get_overview_stats(account_name="test-account")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "GET")
+        self.assertIn("/stats/overview", call_args[0][2])
+
+
+class TestGetMessageStats(IntegrationTestCase):
+    """Test get_message_stats whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint_with_period(self, mock_frappe, mock_api):
+        """Should GET /stats/messages with period param."""
+        from openwa_bridge.whatsapp_account import get_message_stats
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("GET", 200, {})
+
+        result = get_message_stats(account_name="test-account", period="7d")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "GET")
+        self.assertIn("/stats/messages?period=7d", call_args[0][2])

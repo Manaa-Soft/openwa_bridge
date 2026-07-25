@@ -142,6 +142,8 @@ def receive_openwa_message() -> dict[str, str]:
             _handle_group_update(event_data, session_id)
         elif event_type == "call.received":
             _handle_call_received(event_data, session_id)
+        elif event_type == "status.received":
+            _handle_status_received(event_data, session_id)
     except Exception as e:
         frappe.log_error(
             title="OpenWA Inbound Handler Error",
@@ -254,7 +256,8 @@ def _handle_inbound_message(
         return
 
     frappe.logger().info(
-        f"OpenWA inbound: created WhatsApp Message {doc.name} from {phone_number}"
+        f"OpenWA inbound: created WhatsApp Message {doc.name} from {phone_number} "
+        f"kind={msg_data.get('kind', 'unknown')}"
     )
 
     # These are best-effort — a failure here should NOT prevent the message from being saved
@@ -716,6 +719,19 @@ def _handle_call_received(event_data: dict, session_id: str) -> None:
     frappe.logger().info(
         f"OpenWA call.received: call={call_id}, from={caller}, "
         f"video={is_video}, group={is_group}"
+    )
+
+
+def _handle_status_received(event_data: dict, session_id: str) -> None:
+    """Log contact status/story updates."""
+    contact: str = event_data.get("contact", "") or event_data.get("from", "")
+    status_type: str = event_data.get("type", "")
+    caption: str = event_data.get("caption", "")
+    has_media: bool = event_data.get("hasMedia", False)
+
+    frappe.logger().info(
+        f"OpenWA status.received: contact={contact}, type={status_type}, "
+        f"hasMedia={has_media}, caption={caption[:50] if caption else ''}"
     )
 
 

@@ -38,7 +38,8 @@ OpenWA Bridge connects the [frappe\_whatsapp](https://github.com/Shridar2101/fra
 - **Message editing** -- edit sent message text via `POST /messages/edit`
 - **@mention support** -- auto-extracts `@NNNN@c.us` JIDs from text messages
 - **Contact management** -- check WhatsApp number, block/unblock contacts
-- **Typing indicators** -- auto-send typing indicator before each message
+- **Typing indicators** -- auto-send typing indicator before each message (non-blocking)
+- **Note**: OpenWA v0.10.9+ has built-in `SIMULATE_TYPING=true` (anti-ban). To avoid duplicate typing indicators, set `SIMULATE_TYPING=false` in OpenWA `.env` when using the bridge's indicator, or disable the bridge's indicator by commenting out the `_send_typing_indicator` call in `whatsapp_message.py`.
 - **Pairing code authentication** -- link via phone number (alternative to QR scan)
 
 ### Inbound Messages (WhatsApp -> Desk)
