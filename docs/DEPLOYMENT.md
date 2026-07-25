@@ -144,6 +144,23 @@ QUEUE_ENABLED=true
 # =============================================================================
 MEDIA_DOWNLOAD_ENABLED=false
 STORE_EPHEMERAL_MESSAGES=false
+
+# =============================================================================
+# v0.10.9+ FEATURES
+# =============================================================================
+# Typing indicator: auto-simulates typing before sending (anti-ban).
+# Bridge also sends its own typing indicator before non-template/non-reaction
+# messages. Disable one or the other to avoid redundancy.
+SIMULATE_TYPING=true
+
+# LID (Linked Identity) phone resolution: resolves @lid JIDs to phone numbers.
+RESOLVE_LID_TO_PHONE=true
+
+# Channel support: enables WhatsApp Channels API endpoints.
+CHANNELS_ENABLED=true
+
+# Status (Stories) support: enables status/story webhook events.
+STATUS_ENABLED=true
 ```
 
 > **Key settings explained:**
@@ -155,6 +172,7 @@ STORE_EPHEMERAL_MESSAGES=false
 >   - `minio` = MinIO service hostname (if used for file storage)
 > - `REDIS_PORT=6385` — use 6385 when ERPNext shares the server (see [Redis Isolation](#redis-isolation-erpnext--openwa-on-same-server)); use 6379 if OpenWA is alone
 > - `AUTO_START_SESSIONS=true` — auto-reconnects WhatsApp on OpenWA restart
+> - `SIMULATE_TYPING=true` — OpenWA built-in typing simulation (anti-ban). Bridge also has its own auto-typing before sends — see [Typing Indicator Redundancy](#typing-indicator-redundancy) below
 
 **Important**: If `~/OpenWA/data/.env.generated` exists, delete it -- it overrides your `.env`:
 
@@ -231,7 +249,7 @@ Get the API key from the OpenWA dashboard (localhost:2886).
 
 Via dashboard or API:
 - URL: `https://your-site.local/api/method/openwa_bridge.inbound.receive_openwa_message`
-- Events: message.received, message.ack, message.failed, session.status
+- Events: message.received, message.sent, message.ack, message.failed, message.revoked, message.reaction, message.edited, session.status, session.qr, session.authenticated, session.disconnected, session.reconnect_loop, group.join, group.leave, group.update, call.received, status.received
 
 ### 7. Configure Frappe
 
@@ -417,6 +435,19 @@ sudo systemctl restart openwa
 - Check `openwa_synced` is checked
 - Re-save the template to trigger re-sync
 - Check Error Logs for "OpenWA Template Sync Failed"
+
+---
+
+## Typing Indicator Redundancy
+
+OpenWA v0.10.9+ has a built-in `SIMULATE_TYPING=true` env var that automatically simulates typing before every message send (anti-ban). The bridge also sends its own typing indicator via `POST /chats/typing` before each non-template, non-reaction message.
+
+**This means typing indicators may fire twice.** Choose one approach:
+
+- **Keep OpenWA's `SIMULATE_TYPING=true`** (recommended): Simpler, built-in anti-ban logic. Disable bridge's auto-typing by setting `openwa_auto_typing=0` in OpenWA Bridge Settings.
+- **Disable OpenWA's `SIMULATE_TYPING=false`**: Use bridge's auto-typing only. Set `SIMULATE_TYPING=false` in OpenWA's `.env`. The bridge sends a "typing" indicator for 3 seconds, then a "paused" indicator, then sends the message.
+
+Both approaches produce the same result — the recipient sees "typing..." before the message arrives.
 
 ---
 
