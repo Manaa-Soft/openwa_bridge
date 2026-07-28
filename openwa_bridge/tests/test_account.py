@@ -602,3 +602,648 @@ class TestGetMessageStats(IntegrationTestCase):
         call_args = mock_api.call_args
         self.assertEqual(call_args[0][1], "GET")
         self.assertIn("/stats/messages?period=7d", call_args[0][2])
+
+
+# ---------------------------------------------------------------------------
+# Group enhancement tests
+# ---------------------------------------------------------------------------
+
+
+class TestGetGroup(IntegrationTestCase):
+    """Test get_group whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should GET /groups/:groupId."""
+        from openwa_bridge.whatsapp_account import get_group
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("GET", 200, {})
+
+        result = get_group(account_name="test-account", group_id="group-001@g.us")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "GET")
+        self.assertIn("/groups/group-001@g.us", call_args[0][2])
+
+
+class TestJoinGroupByCode(IntegrationTestCase):
+    """Test join_group_by_code whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should POST /groups/join with inviteCode."""
+        from openwa_bridge.whatsapp_account import join_group_by_code
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("POST", 201)
+
+        result = join_group_by_code(account_name="test-account", invite_code="https://chat.whatsapp.com/ABC123")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "POST")
+        self.assertIn("/groups/join", call_args[0][2])
+        self.assertEqual(call_args[1]["json_data"]["inviteCode"], "https://chat.whatsapp.com/ABC123")
+
+
+class TestGetGroupSettings(IntegrationTestCase):
+    """Test get_group_settings whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should GET /groups/:groupId/settings."""
+        from openwa_bridge.whatsapp_account import get_group_settings
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("GET", 200, {})
+
+        result = get_group_settings(account_name="test-account", group_id="group-001@g.us")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "GET")
+        self.assertIn("/groups/group-001@g.us/settings", call_args[0][2])
+
+
+class TestSetGroupSettings(IntegrationTestCase):
+    """Test set_group_settings whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should PUT /groups/:groupId/settings."""
+        from openwa_bridge.whatsapp_account import set_group_settings
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("PUT", 200)
+
+        result = set_group_settings(
+            account_name="test-account",
+            group_id="group-001@g.us",
+            settings={"announce": True},
+        )
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "PUT")
+        self.assertIn("/groups/group-001@g.us/settings", call_args[0][2])
+        self.assertEqual(call_args[1]["json_data"]["announce"], True)
+
+
+class TestSetGroupDescription(IntegrationTestCase):
+    """Test set_group_description whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should PUT /groups/:groupId/description."""
+        from openwa_bridge.whatsapp_account import set_group_description
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("PUT", 200)
+
+        result = set_group_description(
+            account_name="test-account",
+            group_id="group-001@g.us",
+            description="Welcome to our group!",
+        )
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "PUT")
+        self.assertIn("/groups/group-001@g.us/description", call_args[0][2])
+        self.assertEqual(call_args[1]["json_data"]["description"], "Welcome to our group!")
+
+
+class TestGetGroupInviteCode(IntegrationTestCase):
+    """Test get_group_invite_code whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should GET /groups/:groupId/invite-code."""
+        from openwa_bridge.whatsapp_account import get_group_invite_code
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("GET", 200, {})
+
+        result = get_group_invite_code(account_name="test-account", group_id="group-001@g.us")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "GET")
+        self.assertIn("/groups/group-001@g.us/invite-code", call_args[0][2])
+
+
+class TestRevokeGroupInviteCode(IntegrationTestCase):
+    """Test revoke_group_invite_code whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should POST /groups/:groupId/invite-code/revoke."""
+        from openwa_bridge.whatsapp_account import revoke_group_invite_code
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("POST", 200)
+
+        result = revoke_group_invite_code(account_name="test-account", group_id="group-001@g.us")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "POST")
+        self.assertIn("/groups/group-001@g.us/invite-code/revoke", call_args[0][2])
+
+
+# ---------------------------------------------------------------------------
+# Contact enhancement tests
+# ---------------------------------------------------------------------------
+
+
+class TestListContacts(IntegrationTestCase):
+    """Test list_contacts whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should GET /contacts."""
+        from openwa_bridge.whatsapp_account import list_contacts
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("GET", 200, [])
+
+        result = list_contacts(account_name="test-account")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "GET")
+        self.assertIn("/contacts", call_args[0][2])
+
+
+class TestGetContact(IntegrationTestCase):
+    """Test get_contact whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should GET /contacts/:contactId."""
+        from openwa_bridge.whatsapp_account import get_contact
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("GET", 200, {})
+
+        result = get_contact(account_name="test-account", contact_id="1234567890@c.us")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "GET")
+        self.assertIn("/contacts/1234567890@c.us", call_args[0][2])
+
+
+class TestGetContactProfilePicture(IntegrationTestCase):
+    """Test get_contact_profile_picture whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should GET /contacts/:contactId/profile-picture."""
+        from openwa_bridge.whatsapp_account import get_contact_profile_picture
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("GET", 200, {})
+
+        result = get_contact_profile_picture(
+            account_name="test-account",
+            contact_id="1234567890@c.us",
+        )
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "GET")
+        self.assertIn("/contacts/1234567890@c.us/profile-picture", call_args[0][2])
+
+
+class TestGetContactPhone(IntegrationTestCase):
+    """Test get_contact_phone whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should GET /contacts/:contactId/phone."""
+        from openwa_bridge.whatsapp_account import get_contact_phone
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("GET", 200, {})
+
+        result = get_contact_phone(
+            account_name="test-account",
+            contact_id="1234567890@c.us",
+        )
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "GET")
+        self.assertIn("/contacts/1234567890@c.us/phone", call_args[0][2])
+
+
+class TestListProfilePictures(IntegrationTestCase):
+    """Test list_profile_pictures whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should GET /contacts/profile-pictures."""
+        from openwa_bridge.whatsapp_account import list_profile_pictures
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("GET", 200, {})
+
+        result = list_profile_pictures(account_name="test-account")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "GET")
+        self.assertIn("/contacts/profile-pictures", call_args[0][2])
+
+
+# ---------------------------------------------------------------------------
+# Chat deletion test
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteChat(IntegrationTestCase):
+    """Test delete_chat whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should POST /chats/delete."""
+        from openwa_bridge.whatsapp_account import delete_chat
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("POST", 200)
+
+        result = delete_chat(account_name="test-account", chat_id="1234567890@c.us")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "POST")
+        self.assertIn("/chats/delete", call_args[0][2])
+        self.assertEqual(call_args[1]["json_data"]["chatId"], "1234567890@c.us")
+
+
+# ---------------------------------------------------------------------------
+# Status deletion test
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteStatus(IntegrationTestCase):
+    """Test delete_status whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should DELETE /status/:statusId."""
+        from openwa_bridge.whatsapp_account import delete_status
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("DELETE", 200)
+
+        result = delete_status(account_name="test-account", status_id="status-001")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "DELETE")
+        self.assertIn("/status/status-001", call_args[0][2])
+
+
+# ---------------------------------------------------------------------------
+# Label enhancement tests
+# ---------------------------------------------------------------------------
+
+
+class TestGetLabel(IntegrationTestCase):
+    """Test get_label whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should GET /labels/:labelId."""
+        from openwa_bridge.whatsapp_account import get_label
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("GET", 200, {})
+
+        result = get_label(account_name="test-account", label_id="label-001")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "GET")
+        self.assertIn("/labels/label-001", call_args[0][2])
+
+
+class TestGetChatLabels(IntegrationTestCase):
+    """Test get_chat_labels whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should GET /labels/chat/:chatId."""
+        from openwa_bridge.whatsapp_account import get_chat_labels
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("GET", 200, [])
+
+        result = get_chat_labels(account_name="test-account", chat_id="1234567890@c.us")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "GET")
+        self.assertIn("/labels/chat/1234567890@c.us", call_args[0][2])
+
+
+# ---------------------------------------------------------------------------
+# Batch status test
+# ---------------------------------------------------------------------------
+
+
+class TestGetBatchStatus(IntegrationTestCase):
+    """Test get_batch_status whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should GET /messages/batch/:batchId."""
+        from openwa_bridge.whatsapp_account import get_batch_status
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("GET", 200, {})
+
+        result = get_batch_status(account_name="test-account", batch_id="batch-001")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "GET")
+        self.assertIn("/messages/batch/batch-001", call_args[0][2])
+
+
+# ---------------------------------------------------------------------------
+# Webhook test
+# ---------------------------------------------------------------------------
+
+
+class TestTestWebhook(IntegrationTestCase):
+    """Test test_webhook whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should POST /webhooks/:webhookId/test."""
+        from openwa_bridge.whatsapp_account import test_webhook
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("POST", 200)
+
+        result = test_webhook(account_name="test-account", webhook_id="wh-001")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "POST")
+        self.assertIn("/webhooks/wh-001/test", call_args[0][2])
+
+
+# ---------------------------------------------------------------------------
+# Catalog tests (stub — 501 in current OpenWA)
+# ---------------------------------------------------------------------------
+
+
+class TestGetCatalog(IntegrationTestCase):
+    """Test get_catalog whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should GET /catalog."""
+        from openwa_bridge.whatsapp_account import get_catalog
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("GET", 501)
+
+        result = get_catalog(account_name="test-account")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "GET")
+        self.assertIn("/catalog", call_args[0][2])
+
+
+class TestGetCatalogProducts(IntegrationTestCase):
+    """Test get_catalog_products whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should GET /catalog/products."""
+        from openwa_bridge.whatsapp_account import get_catalog_products
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("GET", 501)
+
+        result = get_catalog_products(account_name="test-account")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "GET")
+        self.assertIn("/catalog/products", call_args[0][2])
+
+
+class TestGetCatalogProduct(IntegrationTestCase):
+    """Test get_catalog_product whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should GET /catalog/products/:productId."""
+        from openwa_bridge.whatsapp_account import get_catalog_product
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("GET", 501)
+
+        result = get_catalog_product(account_name="test-account", product_id="prod-001")
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "GET")
+        self.assertIn("/catalog/products/prod-001", call_args[0][2])
+
+
+class TestSendProductMessage(IntegrationTestCase):
+    """Test send_product_message whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should POST /messages/send-product."""
+        from openwa_bridge.whatsapp_account import send_product_message
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("POST", 501)
+
+        result = send_product_message(
+            account_name="test-account",
+            chat_id="1234567890@c.us",
+            product_id="prod-001",
+        )
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "POST")
+        self.assertIn("/messages/send-product", call_args[0][2])
+        self.assertEqual(call_args[1]["json_data"]["chatId"], "1234567890@c.us")
+        self.assertEqual(call_args[1]["json_data"]["productId"], "prod-001")
+
+
+class TestSendCatalogMessage(IntegrationTestCase):
+    """Test send_catalog_message whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
+        """Should POST /messages/send-catalog."""
+        from openwa_bridge.whatsapp_account import send_catalog_message
+
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+            get_password.return_value="api-key",
+        )
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("POST", 501)
+
+        result = send_catalog_message(
+            account_name="test-account",
+            chat_id="1234567890@c.us",
+            catalog_id="catalog-001",
+        )
+
+        mock_api.assert_called_once()
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "POST")
+        self.assertIn("/messages/send-catalog", call_args[0][2])
+        self.assertEqual(call_args[1]["json_data"]["chatId"], "1234567890@c.us")
+        self.assertEqual(call_args[1]["json_data"]["catalogId"], "catalog-001")

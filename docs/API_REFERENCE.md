@@ -543,6 +543,8 @@ OpenWA sends webhooks to Frappe for incoming messages and status changes.
 | `call.received` | Incoming voice/video call | `_handle_call_received()` — logs call event |
 | `status.received` | Contact posted a status/story | `_handle_status_received()` — logs status event |
 
+> **Note**: `test_webhook()` whitelisted method (`openwa_bridge.whatsapp_account.test_webhook`) sends a test webhook delivery — callable from the WhatsApp Account form to verify webhook configuration.
+
 ### Webhook Payload Structure
 
 ```json
@@ -1274,3 +1276,279 @@ Get message statistics for a time period.
 - `period`: `1h`, `24h` (default), `7d`, `30d`
 
 **Returns**: `{ stats: {...} }`
+
+---
+
+### get_group
+
+Get group metadata.
+
+**Method**: `openwa_bridge.whatsapp_account.get_group`
+
+**Args**: `{ account_name: string, group_id: string }`
+
+**Returns**: `{ group: {...} }`
+
+---
+
+### join_group_by_code
+
+Join a group via invite link.
+
+**Method**: `openwa_bridge.whatsapp_account.join_group_by_code`
+
+**Args**: `{ account_name: string, invite_code: string }`
+
+**Returns**: `{ result: {...} }`
+
+---
+
+### get_group_settings
+
+Get group settings.
+
+**Method**: `openwa_bridge.whatsapp_account.get_group_settings`
+
+**Args**: `{ account_name: string, group_id: string }`
+
+**Returns**: `{ settings: {...} }`
+
+---
+
+### set_group_settings
+
+Update group settings.
+
+**Method**: `openwa_bridge.whatsapp_account.set_group_settings`
+
+**Args**: `{ account_name: string, group_id: string, settings: object }`
+
+**Returns**: `{ status: "ok" }`
+
+---
+
+### set_group_description
+
+Update group description.
+
+**Method**: `openwa_bridge.whatsapp_account.set_group_description`
+
+**Args**: `{ account_name: string, group_id: string, description: string }`
+
+**Returns**: `{ status: "ok" }`
+
+---
+
+### get_group_invite_code
+
+Get group invite code.
+
+**Method**: `openwa_bridge.whatsapp_account.get_group_invite_code`
+
+**Args**: `{ account_name: string, group_id: string }`
+
+**Returns**: `{ inviteCode: "..." }`
+
+---
+
+### revoke_group_invite_code
+
+Revoke group invite code.
+
+**Method**: `openwa_bridge.whatsapp_account.revoke_group_invite_code`
+
+**Args**: `{ account_name: string, group_id: string }`
+
+**Returns**: `{ status: "ok" }`
+
+---
+
+### list_contacts
+
+List all contacts.
+
+**Method**: `openwa_bridge.whatsapp_account.list_contacts`
+
+**Args**: `{ account_name: string }`
+
+**Returns**: `{ contacts: [...] }`
+
+---
+
+### get_contact
+
+Get contact details.
+
+**Method**: `openwa_bridge.whatsapp_account.get_contact`
+
+**Args**: `{ account_name: string, contact_id: string }`
+
+**Returns**: `{ contact: {...} }`
+
+---
+
+### get_contact_profile_picture
+
+Get contact profile picture.
+
+**Method**: `openwa_bridge.whatsapp_account.get_contact_profile_picture`
+
+**Args**: `{ account_name: string, contact_id: string }`
+
+**Returns**: `{ profilePicture: {...} }`
+
+---
+
+### get_contact_phone
+
+Resolve phone number from JID.
+
+**Method**: `openwa_bridge.whatsapp_account.get_contact_phone`
+
+**Args**: `{ account_name: string, contact_id: string }`
+
+**Returns**: `{ phone: "..." }`
+
+---
+
+### list_profile_pictures
+
+List all profile pictures.
+
+**Method**: `openwa_bridge.whatsapp_account.list_profile_pictures`
+
+**Args**: `{ account_name: string }`
+
+**Returns**: `{ profilePictures: [...] }`
+
+---
+
+### delete_chat
+
+Delete a chat.
+
+**Method**: `openwa_bridge.whatsapp_account.delete_chat`
+
+**Args**: `{ account_name: string, chat_id: string }`
+
+**Returns**: `{ status: "ok" }`
+
+---
+
+### delete_status
+
+Delete a posted status.
+
+**Method**: `openwa_bridge.whatsapp_account.delete_status`
+
+**Args**: `{ account_name: string, status_id: string }`
+
+**Returns**: `{ status: "ok" }`
+
+---
+
+### get_label
+
+Get label details.
+
+**Method**: `openwa_bridge.whatsapp_account.get_label`
+
+**Args**: `{ account_name: string, label_id: string }`
+
+**Returns**: `{ label: {...} }`
+
+---
+
+### get_chat_labels
+
+Get labels for a chat.
+
+**Method**: `openwa_bridge.whatsapp_account.get_chat_labels`
+
+**Args**: `{ account_name: string, chat_id: string }`
+
+**Returns**: `{ labels: [...] }`
+
+---
+
+### get_batch_status
+
+Get batch send status.
+
+**Method**: `openwa_bridge.whatsapp_account.get_batch_status`
+
+**Args**: `{ account_name: string, batch_id: string }`
+
+**Returns**: `{ batchStatus: {...} }`
+
+---
+
+### test_webhook
+
+Test webhook delivery.
+
+**Method**: `openwa_bridge.whatsapp_account.test_webhook`
+
+**Args**: `{ account_name: string, webhook_id: string }`
+
+**Returns**: `{ result: {...} }`
+
+---
+
+### get_catalog
+
+Get catalog (stub — returns 501).
+
+**Method**: `openwa_bridge.whatsapp_account.get_catalog`
+
+**Args**: `{ account_name: string }`
+
+**Returns**: `{ status: "501", message: "Not Implemented" }`
+
+---
+
+### get_catalog_products
+
+Get catalog products (stub — returns 501).
+
+**Method**: `openwa_bridge.whatsapp_account.get_catalog_products`
+
+**Args**: `{ account_name: string }`
+
+**Returns**: `{ status: "501", message: "Not Implemented" }`
+
+---
+
+### get_catalog_product
+
+Get catalog product (stub — returns 501).
+
+**Method**: `openwa_bridge.whatsapp_account.get_catalog_product`
+
+**Args**: `{ account_name: string, product_id: string }`
+
+**Returns**: `{ status: "501", message: "Not Implemented" }`
+
+---
+
+### send_product_message
+
+Send a product message (stub — returns 501).
+
+**Method**: `openwa_bridge.whatsapp_account.send_product_message`
+
+**Args**: `{ account_name: string, chat_id: string, product_id: string }`
+
+**Returns**: `{ status: "501", message: "Not Implemented" }`
+
+---
+
+### send_catalog_message
+
+Send a catalog message (stub — returns 501).
+
+**Method**: `openwa_bridge.whatsapp_account.send_catalog_message`
+
+**Args**: `{ account_name: string, chat_id: string, catalog_id: string }`
+
+**Returns**: `{ status: "501", message: "Not Implemented" }`

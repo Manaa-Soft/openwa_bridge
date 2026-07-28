@@ -691,8 +691,77 @@ Check frappe.has_permission()
         ├─ get_overview_stats(account)
         │    └─ GET /stats/overview → { stats }
         │
-        └─ get_message_stats(account, period)
-             └─ GET /stats/messages?period=24h → { stats }
+        ├─ get_message_stats(account, period)
+        │    └─ GET /stats/messages?period=24h → { stats }
+        │
+        ├─ get_group(account, group_id)
+        │    └─ GET /groups/:groupId → { group }
+        │
+        ├─ join_group_by_code(account, invite_code)
+        │    └─ POST /groups/join { inviteCode } → { result }
+        │
+        ├─ get_group_settings(account, group_id)
+        │    └─ GET /groups/:groupId/settings → { settings }
+        │
+        ├─ set_group_settings(account, group_id, settings)
+        │    └─ PUT /groups/:groupId/settings { settings } → { status }
+        │
+        ├─ set_group_description(account, group_id, description)
+        │    └─ PUT /groups/:groupId/description { description } → { status }
+        │
+        ├─ get_group_invite_code(account, group_id)
+        │    └─ GET /groups/:groupId/invite-code → { inviteCode }
+        │
+        ├─ revoke_group_invite_code(account, group_id)
+        │    └─ POST /groups/:groupId/invite-code/revoke → { status }
+        │
+        ├─ list_contacts(account)
+        │    └─ GET /contacts → { contacts: [...] }
+        │
+        ├─ get_contact(account, contact_id)
+        │    └─ GET /contacts/:contactId → { contact }
+        │
+        ├─ get_contact_profile_picture(account, contact_id)
+        │    └─ GET /contacts/:contactId/profile-picture → { profilePicture }
+        │
+        ├─ get_contact_phone(account, contact_id)
+        │    └─ GET /contacts/:contactId/phone → { phone }
+        │
+        ├─ list_profile_pictures(account)
+        │    └─ GET /contacts/profile-pictures → { profilePictures: [...] }
+        │
+        ├─ delete_chat(account, chat_id)
+        │    └─ POST /chats/delete { chatId } → { status }
+        │
+        ├─ delete_status(account, status_id)
+        │    └─ DELETE /status/:statusId → { status }
+        │
+        ├─ get_label(account, label_id)
+        │    └─ GET /labels/:labelId → { label }
+        │
+        ├─ get_chat_labels(account, chat_id)
+        │    └─ GET /labels/chat/:chatId → { labels: [...] }
+        │
+        ├─ get_batch_status(account, batch_id)
+        │    └─ GET /messages/batch/:batchId → { batchStatus }
+        │
+        ├─ test_webhook(account, webhook_id)
+        │    └─ POST /webhooks/:webhookId/test → { result }
+        │
+        ├─ get_catalog(account)
+        │    └─ GET /catalog → 501 Not Implemented
+        │
+        ├─ get_catalog_products(account)
+        │    └─ GET /catalog/products → 501 Not Implemented
+        │
+        ├─ get_catalog_product(account, product_id)
+        │    └─ GET /catalog/products/:productId → 501 Not Implemented
+        │
+        ├─ send_product_message(account, chat_id, product_id)
+        │    └─ POST /messages/send-product → 501 Not Implemented
+        │
+        └─ send_catalog_message(account, chat_id, catalog_id)
+             └─ POST /messages/send-catalog → 501 Not Implemented
 ```
 
 ## Flow 13: Outbox Cleanup (Daily Scheduler)

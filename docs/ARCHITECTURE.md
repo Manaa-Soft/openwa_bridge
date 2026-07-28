@@ -134,6 +134,28 @@ OpenWA Bridge is a Frappe app that intercepts `frappe_whatsapp` DocType operatio
 │    /api/sessions/:id/messages/batch/:id  │
 │    /api/sessions/:id/stats/overview      │
 │    /api/sessions/:id/stats/messages      │
+│    /api/sessions/:id/groups              │
+│    /api/sessions/:id/groups/:id          │
+│    /api/sessions/:id/groups/join         │
+│    /api/sessions/:id/groups/:id/settings │
+│    /api/sessions/:id/groups/:id/desc     │
+│    /api/sessions/:id/groups/:id/invite   │
+│    /api/sessions/:id/contacts            │
+│    /api/sessions/:id/contacts/:id        │
+│    /api/sessions/:id/contacts/:id/pp     │
+│    /api/sessions/:id/contacts/:id/phone  │
+│    /api/sessions/:id/contacts/pp         │
+│    /api/sessions/:id/chats/delete        │
+│    /api/sessions/:id/status/:id (DEL)    │
+│    /api/sessions/:id/labels/:id          │
+│    /api/sessions/:id/labels/chat/:id     │
+│    /api/sessions/:id/messages/batch/:id/status│
+│    /api/sessions/:id/webhooks/:id/test   │
+│    /api/sessions/:id/catalog             │
+│    /api/sessions/:id/catalog/products    │
+│    /api/sessions/:id/catalog/products/:id│
+│    /api/sessions/:id/messages/send-prod  │
+│    /api/sessions/:id/messages/send-cat   │
 │                                          │
 │  Dashboard: localhost:2886               │
 │  Webhooks: POST to Frappe inbound.py     │
@@ -168,7 +190,7 @@ Each override class extends the parent and selectively intercepts methods:
 - **OverrideWhatsAppMessage**: Intercepts `notify()` — if OpenWA enabled, routes via OpenWA; otherwise falls back to parent (Meta API). Supports `sticker` content type and `@mention` extraction in text messages.
 - **OverrideWhatsAppTemplates**: Intercepts `before_save()` — skips Meta API calls for OpenWA accounts, syncs to OpenWA REST API instead.
 - **OverrideWhatsAppNotification**: Overrides `send_template_message()` and `notify()` — routes by `openwa_send_type` (Template/Jinja/fallback).
-- **whatsapp_account.py**: Not an override class — provides whitelisted methods for QR code display, one-click session setup, contact management, typing indicators, bulk messaging, stickers, and pairing code auth. Registered via `doc_events` for `on_trash` cleanup.
+- **whatsapp_account.py**: Not an override class — provides 67+ whitelisted methods for QR code display, one-click session setup, contact management, typing indicators, bulk messaging, stickers, pairing code auth, group management, labels, channels, catalog, webhook testing, and more. Registered via `doc_events` for `on_trash` cleanup.
 - **inbound.py**: Webhook endpoint handles 17 event types: `message.received`, `message.sent`, `message.ack`, `message.failed`, `message.revoked`, `message.reaction`, `message.edited`, `session.status`, `session.qr`, `session.authenticated`, `session.disconnected`, `session.reconnect_loop`, `group.join`, `group.leave`, `group.update`, `call.received`, `status.received`. Auto-creates Communication and Lead/Contact for new inbound messages. Includes `kind` field logging for message origin discrimination.
 
 ### doc_events Hooks

@@ -546,7 +546,33 @@ Total webhook events: **17** (up from 10)
 - [x] `get_message_stats()` — message statistics for a time period
 - [x] `get_channel_messages()` — list channel messages
 
-Total whitelisted methods: **44** (up from 35)
+### Additional Whitelisted Methods (23 added)
+
+- [x] `get_group()` — get group metadata
+- [x] `join_group_by_code()` — join group via invite link
+- [x] `get_group_settings()` — get group settings
+- [x] `set_group_settings()` — update group settings
+- [x] `set_group_description()` — update group description
+- [x] `get_group_invite_code()` — get group invite code
+- [x] `revoke_group_invite_code()` — revoke group invite code
+- [x] `list_contacts()` — list all contacts
+- [x] `get_contact()` — get contact details
+- [x] `get_contact_profile_picture()` — get contact profile picture
+- [x] `get_contact_phone()` — resolve phone from JID
+- [x] `list_profile_pictures()` — list all profile pictures
+- [x] `delete_chat()` — delete a chat
+- [x] `delete_status()` — delete a posted status
+- [x] `get_label()` — get label details
+- [x] `get_chat_labels()` — get labels for a chat
+- [x] `get_batch_status()` — get batch send status
+- [x] `test_webhook()` — test webhook delivery
+- [x] `get_catalog()` — get catalog (stub, returns 501)
+- [x] `get_catalog_products()` — get catalog products (stub, returns 501)
+- [x] `get_catalog_product()` — get catalog product (stub, returns 501)
+- [x] `send_product_message()` — send product message (stub, returns 501)
+- [x] `send_catalog_message()` — send catalog message (stub, returns 501)
+
+Total whitelisted methods: **67** (up from 44)
 
 ### Typing Indicator
 
