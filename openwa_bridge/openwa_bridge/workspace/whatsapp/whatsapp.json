@@ -1,5 +1,6 @@
 {
  "doctype": "Workspace",
+ "name": "WhatsApp",
  "label": "WhatsApp",
  "title": "WhatsApp",
  "module": "OpenWA Bridge",
