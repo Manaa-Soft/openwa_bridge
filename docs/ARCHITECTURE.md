@@ -276,3 +276,24 @@ process_outbox_entry()
 ```
 
 The scheduler safety-net (`process_pending_outbox`) runs every ~4 minutes and re-enqueues any Pending entries whose `next_retry_at` has passed — catches orphaned entries from worker crashes or Redis restarts.
+
+---
+### 8. WhatsApp Catalog Product
+
+The bridge provides a **WhatsApp Catalog Product** DocType that links ERPNext Items
+to WhatsApp for product sharing.  OpenWA's native catalog endpoints are stubs
+(501), so the bridge falls back to richly formatted text+image messages.
+
+**DocType**: ``WhatsApp Catalog Product``
+**File**: ``catalog.py`` — whitelisted methods for sync and send
+**Methods added**: 6 (get_catalog_products, get_catalog_product, sync_catalog_products,
+                    send_product_to_chat_direct, send_catalog_to_chat, get_openwa_catalog_info)
+
+**Fallback flow**:
+```
+send_product_to_chat()
+  → POST /messages/send-product  (501?)
+       → YES → _send_fallback_product_message()
+                → POST /messages/send-text  (richly formatted)
+  → NO  → return { status: "ok", method: "openwa" }
+```

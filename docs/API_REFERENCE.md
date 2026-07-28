@@ -4,6 +4,10 @@ All endpoints are relative to: `http://<host>:2785/api/sessions/<sessionId>/`
 
 Authentication: `X-API-Key: <api_key>` header on all requests.
 
+> **Note**: The WhatsApp Catalog endpoints (Section 8) are stubs — both whatsapp-web.js
+> and Baileys engines return **501 Not Implemented**. The bridge handles this with a
+> fallback that sends richly formatted text+image messages instead.
+
 ---
 
 ## Messages
@@ -1495,60 +1499,149 @@ Test webhook delivery.
 
 ---
 
-### get_catalog
+## 8. WhatsApp Catalog (Bridge DocType)
 
-Get catalog (stub — returns 501).
+The bridge provides a **WhatsApp Catalog Product** DocType that links ERPNext Items
+to a WhatsApp product catalog. The underlying OpenWA catalog endpoints are stubs
+(501), so the bridge falls back to richly formatted text+image messages when
+the engine does not support native catalog operations.
 
-**Method**: `openwa_bridge.whatsapp_account.get_catalog`
+### DocType: WhatsApp Catalog Product
 
-**Args**: `{ account_name: string }`
-
-**Returns**: `{ status: "501", message: "Not Implemented" }`
-
----
+| Field | Type | Source |
+|---|---|---|
+| `product_name` | Data | Auto-fetched from Item, editable |
+| `item_code` | Link → Item | ERPNext Item |
+| `whatsapp_account` | Link → WhatsApp Account | Target account |
+| `is_available` | Check | Default: Yes |
+| `description` | Text Editor | Auto-fetched from Item, editable |
+| `price` | Currency | Auto-fetched from Item rate |
+| `currency` | Link → Currency | Default from system |
+| `image` | Attach Image | Auto-fetched from Item image |
+| `retailer_id` | Data | Optional external ID |
+| `sync_status` | Select | Not Synced / Synced / Failed |
+| `openwa_product_id` | Data | Read-only, set after OpenWA sync |
+| `last_sync_on` | Datetime | Read-only |
 
 ### get_catalog_products
 
-Get catalog products (stub — returns 501).
+List all catalog products for an account.
 
-**Method**: `openwa_bridge.whatsapp_account.get_catalog_products`
+**Method**: `openwa_bridge.catalog.get_catalog_products`
 
 **Args**: `{ account_name: string }`
 
-**Returns**: `{ status: "501", message: "Not Implemented" }`
+**Returns**:
+```json
+{
+  "status": "ok",
+  "products": [
+    { "name": "WCP-0001", "product_name": "Widget", "item_code": "ITEM-001",
+      "price": 29.99, "currency": "USD", "sync_status": "Synced",
+      "is_available": 1, "image": null, "modified": "..." }
+  ]
+}
+```
 
 ---
 
 ### get_catalog_product
 
-Get catalog product (stub — returns 501).
+Get a single catalog product.
 
-**Method**: `openwa_bridge.whatsapp_account.get_catalog_product`
+**Method**: `openwa_bridge.catalog.get_catalog_product`
 
-**Args**: `{ account_name: string, product_id: string }`
+**Args**: `{ account_name: string, product_name: string }`
 
-**Returns**: `{ status: "501", message: "Not Implemented" }`
-
----
-
-### send_product_message
-
-Send a product message (stub — returns 501).
-
-**Method**: `openwa_bridge.whatsapp_account.send_product_message`
-
-**Args**: `{ account_name: string, chat_id: string, product_id: string }`
-
-**Returns**: `{ status: "501", message: "Not Implemented" }`
+**Returns**:
+```json
+{
+  "status": "ok",
+  "product": { "name": "WCP-0001", "product_name": "Widget", ... }
+}
+```
 
 ---
 
-### send_catalog_message
+### sync_catalog_products
 
-Send a catalog message (stub — returns 501).
+Sync products to the WhatsApp catalog. Falls back to local storage if OpenWA
+returns 501.
 
-**Method**: `openwa_bridge.whatsapp_account.send_catalog_message`
+**Method**: `openwa_bridge.catalog.sync_catalog_products`
 
-**Args**: `{ account_name: string, chat_id: string, catalog_id: string }`
+**Args**: `{ account_name: string, product_names?: string }`
 
-**Returns**: `{ status: "501", message: "Not Implemented" }`
+If `product_names` is omitted, syncs all non-synced products. Provide comma-
+separated names to sync specific products.
+
+**Returns**:
+```json
+{
+  "status": "ok",
+  "synced": 5,
+  "failed": 0,
+  "results": [
+    { "name": "WCP-0001", "status": "ok", "method": "local" }
+  ]
+}
+```
+
+---
+
+### send_product_to_chat_direct
+
+Send a catalog product to a WhatsApp chat. Tries native send-product first,
+falls back to formatted text + image message.
+
+**Method**: `openwa_bridge.catalog.send_product_to_chat_direct`
+
+**Args**: `{ account_name: string, chat_id: string, product_name: string }`
+
+**Returns**:
+```json
+{
+  "status": "ok",
+  "method": "fallback",
+  "result": { "messageId": "true_967777715787@c.us_3EB0..." }
+}
+```
+
+---
+
+### send_catalog_to_chat
+
+Send the full catalog link to a chat. Falls back to a summary message listing
+available products.
+
+**Method**: `openwa_bridge.catalog.send_catalog_to_chat`
+
+**Args**: `{ account_name: string, chat_id: string }`
+
+**Returns**:
+```json
+{
+  "status": "ok",
+  "method": "fallback",
+  "result": { "messageId": "true_967777715787@c.us_3EB0..." }
+}
+```
+
+---
+
+### get_openwa_catalog_info
+
+Get catalog info from OpenWA. Returns local product count if OpenWA returns 501.
+
+**Method**: `openwa_bridge.catalog.get_openwa_catalog_info`
+
+**Args**: `{ account_name: string }`
+
+**Returns**:
+```json
+{
+  "status": "ok",
+  "method": "local",
+  "catalog": { "name": "test-account", "productCount": 12 }
+}
+```

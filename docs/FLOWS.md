@@ -778,3 +778,33 @@ tasks.cleanup_old_outbox()
   └─ DELETE OpenWA Outbox WHERE status='Failed' AND creation < (now - 30 days)
        └─ Removes old failed entries
 ```
+
+---
+
+## Flow 12: WhatsApp Catalog Product (Desk to Chat)
+
+```
+User creates WhatsApp Catalog Product (linked to ERPNext Item)
+  └→ _auto_fetch_item_fields() populates name, desc, price, image from Item
+       └→ Editable overrides for WhatsApp-specific presentation
+  └→ Sync button or schedule
+       └→ sync_to_catalog()
+            └→ POST /api/sessions/:id/catalog/products  (501?)
+                 └→ YES → mark Synced locally (ready for fallback)
+                 └→ NO  → store openwa_product_id
+  └→ Send to Chat button
+       └→ send_to_chat(chat_id)
+            └→ POST /api/sessions/:id/messages/send-product  (501?)
+                 └→ YES → _send_fallback_product_message()
+                          └→ POST /messages/send-text
+                               { chatId, text: "*Product Name*\n\ndesc\n\n*Price:* USD 29.99",
+                                 mediaUrl: ".../image.png" }
+                 └→ NO  → message sent via native catalog
+```
+
+### Key Points
+- **OpenWA catalog endpoints are stubs (501)** — both engines return Not Implemented
+- **Fallback works today** — formatted text+image messages are sent instead
+- **When OpenWA implements catalog** — bridge automatically uses native path, no code change needed
+- **Item auto-fetch** — name, description, image, and valuation_rate are pulled from the linked Item
+- **All fields are editable** — WhatsApp-specific overrides don't affect the original Item

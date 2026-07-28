@@ -596,3 +596,58 @@ Total whitelisted methods: **67** (up from 44)
 - [x] `_DEFAULT_WEBHOOK_EVENTS` updated to 17 events
 - [x] 25 additional whitelisted methods (status, call, chat, search, groups, labels, batch, profile, stats, channels)
 - [x] Test coverage: 30 new tests across 3 files
+
+---
+
+## WhatsApp Catalog Product Integration
+
+**Status**: Complete
+**Commit**: (pending)
+
+### New DocType
+
+- [x] **WhatsApp Catalog Product** — links ERPNext Items to WhatsApp catalog
+- [x] Auto-fetches Item name, description, image, and price
+- [x] Editable overrides for WhatsApp-specific presentation
+- [x] Sync status tracking (Not Synced / Synced / Failed)
+- [x] OpenWA product ID storage for future native catalog support
+
+### Whitelisted Methods (6 added)
+
+- [x] `get_catalog_products(account_name)` — list all catalog products
+- [x] `get_catalog_product(account_name, product_name)` — get single product
+- [x] `sync_catalog_products(account_name, product_names?)` — sync to catalog
+- [x] `send_product_to_chat_direct(account_name, chat_id, product_name)` — send to chat
+- [x] `send_catalog_to_chat(account_name, chat_id)` — send catalog summary
+- [x] `get_openwa_catalog_info(account_name)` — get catalog info
+
+### Fallback Strategy
+
+Since OpenWA catalog endpoints return **501 Not Implemented**, the bridge:
+1. Attempts native endpoint first (`/catalog/products`, `/messages/send-product`)
+2. On 501, falls back to richly formatted text+image messages
+3. When OpenWA eventually implements catalog, bridge auto-upgrades with no code change
+
+### Tests
+
+- [x] `test_build_product_payload` — unit tests for payload construction
+- [x] `test_sync_single_product` — success, 501 fallback, failure paths
+- [x] `test_send_product_to_chat` — success, 501 fallback, error paths
+- [x] `test_send_fallback_product_message` — formatted text + image
+- [x] `test_send_catalog_summary` — with and without products
+- [x] `test_get_catalog_products` — list endpoint
+- [x] `test_sync_catalog_products` — bulk sync
+
+### Files Changed
+
+| File | Change |
+|---|---|
+| `whatsapp_catalog_product.json` | New DocType definition (12 fields) |
+| `whatsapp_catalog_product.py` | DocType controller + sync/send methods |
+| `whatsapp_catalog_product.js` | Client-side auto-fetch + action buttons |
+| `catalog.py` | 6 whitelisted methods + fallback logic |
+| `API_REFERENCE.md` | New catalog section with 6 methods |
+| `ARCHITECTURE.md` | Catalog module section |
+| `FLOWS.md` | Flow 12: WhatsApp Catalog Product |
+| `IMPROVEMENTS.md` | This section |
+| `test_catalog.py` | 10 test classes, ~50 test cases |
