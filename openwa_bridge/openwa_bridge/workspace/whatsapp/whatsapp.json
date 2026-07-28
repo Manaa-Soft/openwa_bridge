@@ -156,10 +156,17 @@
  "number_cards": [],
  "quick_lists": [],
  "custom_blocks": [],
- "sidebar_items": [
-  {
-   "type": "Link",
-   "label": "WhatsApp Account",
+  "sidebar_items": [
+   {
+    "type": "Link",
+    "label": "Home",
+    "link_type": "URL",
+    "link_to": "/desk/whatsapp",
+    "icon": "home"
+   },
+   {
+    "type": "Link",
+    "label": "WhatsApp Account",
    "link_type": "DocType",
    "link_to": "WhatsApp Account",
    "icon": "user"
