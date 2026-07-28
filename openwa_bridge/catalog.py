@@ -30,12 +30,12 @@ def _send_fallback_product_message(account: dict, chat_id: str,
     caption_lines = [
         f"*{product.product_name}*",
         "",
-        product.description or "No description available.",
+        product.description or frappe._("No description available."),
         "",
     ]
     if product.price:
-        caption_lines.append(f"*Price:* {product.currency or ''} {float(product.price):.2f}")
-    caption_lines.append(f"*Available:* {'Yes' if product.is_available else 'No'}")
+        caption_lines.append(f"*{frappe._('Price')}:* {product.currency or ''} {float(product.price):.2f}")
+    caption_lines.append(f"*{frappe._('Available')}:* {frappe._('Yes') if product.is_available else frappe._('No')}")
 
     caption = "\n".join(caption_lines)
 
@@ -66,11 +66,11 @@ def _send_catalog_summary(account, chat_id: str, account_name: str):
     )
 
     if not products:
-        lines = ["*Catalog*", "", "No products available at the moment."]
+        lines = [f"*{frappe._('Catalog')}*", "", frappe._("No products available at the moment.")]
     else:
-        lines = ["*Available Products*", ""]
+        lines = [f"*{frappe._('Available Products')}*", ""]
         for p in products:
-            price_str = f"{p.currency or ''} {float(p.price or 0):.2f}" if p.price else "Price on request"
+            price_str = f"{p.currency or ''} {float(p.price or 0):.2f}" if p.price else frappe._("Price on request")
             lines.append(f"- *{p.product_name}* — {price_str}")
 
     text = "\n".join(lines)
