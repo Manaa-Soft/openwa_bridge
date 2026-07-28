@@ -14,9 +14,11 @@
   "is_available",
   "section_break_content",
   "description",
-  "column_break_pricing",
-  "price",
-  "currency",
+   "column_break_pricing",
+   "price",
+   "currency",
+   "price_list",
+   "uom",
   "section_break_image",
   "image",
   "column_break_catalog",
@@ -87,14 +89,28 @@
    "precision": "2"
   },
   {
-   "fieldname": "currency",
-   "fieldtype": "Link",
-   "label": "Currency",
-   "options": "Currency",
-   "reqd": 1
-  },
-  {
-   "fieldname": "section_break_image",
+    "fieldname": "currency",
+    "fieldtype": "Link",
+    "label": "Currency",
+    "options": "Currency",
+    "reqd": 1
+   },
+   {
+    "fieldname": "price_list",
+    "fieldtype": "Link",
+    "label": "Price List",
+    "options": "Price List",
+    "read_only": 1
+   },
+   {
+    "fieldname": "uom",
+    "fieldtype": "Link",
+    "label": "UOM",
+    "options": "UOM",
+    "read_only": 1
+   },
+   {
+    "fieldname": "section_break_image",
    "fieldtype": "Section Break",
    "label": "Media"
   },

@@ -100,6 +100,8 @@ class TestSendFallbackProductMessage(IntegrationTestCase):
             "is_available": True,
             "image": "",
             "item_code": "",
+            "uom": "",
+            "price_list": "",
         }
         for k, v in defaults.items():
             setattr(product, k, overrides.get(k, v))
@@ -166,19 +168,13 @@ class TestSendFallbackProductMessage(IntegrationTestCase):
         self.assertEqual(result["method"], "fallback")
         self.assertIn("/messages/send-text", mock_api.call_args[0][2])
 
-    @patch("openwa_bridge.catalog.frappe.db.get_value")
-    @patch("openwa_bridge.catalog.frappe.get_single_value")
     @patch("openwa_bridge.catalog.openwa_api")
-    def test_enriches_caption_with_erpnext_data(self, mock_api, mock_single_val,
-                                                 mock_db_val):
+    def test_enriches_caption_with_stored_fields(self, mock_api):
         mock_api.return_value = {"messageId": "msg-004"}
-        mock_single_val.return_value = "Standard Selling"
-        mock_db_val.side_effect = [
-            {"stock_uom": "Box"},
-            {"price_list_rate": 35.0, "price_list": "Standard Selling"},
-        ]
         account = {"openwa_session_id": "sess-001"}
-        product = self._make_product(item_code="ITEM-001", price=0)
+        product = self._make_product(
+            price=35.0, uom="Box", price_list="Standard Selling",
+        )
 
         result = self.sender(account, "12345@c.us", product)
 

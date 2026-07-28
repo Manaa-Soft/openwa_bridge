@@ -14,7 +14,7 @@ class WhatsAppCatalogProduct(Document):
         item = frappe.db.get_value(
             "Item",
             self.item_code,
-            ["item_name", "description", "image", "valuation_rate"],
+            ["item_name", "description", "image", "valuation_rate", "stock_uom"],
             as_dict=True,
         )
         if not item:
@@ -30,6 +30,18 @@ class WhatsAppCatalogProduct(Document):
             self.price = item.valuation_rate or 0
         if not self.currency:
             self.currency = frappe.db.get_single_value("Currency", "default_currency") or "USD"
+        if not self.uom:
+            self.uom = item.stock_uom or ""
+        if not self.price_list:
+            selling = frappe.get_single_value("Selling Settings", "selling_price_list")
+            if selling:
+                ip = frappe.db.get_value(
+                    "Item Price",
+                    {"item_code": self.item_code, "price_list": selling, "selling": 1},
+                    "price_list",
+                )
+                if ip:
+                    self.price_list = ip
 
     @frappe.whitelist()
     def send_to_chat(self, chat_id: str) -> dict:

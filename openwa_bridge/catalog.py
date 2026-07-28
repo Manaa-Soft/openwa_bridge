@@ -37,36 +37,15 @@ def _send_fallback_product_message(account: dict, chat_id: str,
         "",
     ]
 
-    uom = ""
-    if product.get("item_code"):
-        item = frappe.db.get_value("Item", product.item_code,
-                                   "stock_uom", as_dict=True)
-        if item:
-            uom = item.stock_uom or ""
+    uom = product.get("uom") or ""
+    price_list = product.get("price_list") or ""
 
     price_line = ""
     if product.price:
         price_str = f"{product.currency or ''} {float(product.price):,.2f}"
         if uom:
             price_str += f" /{uom}"
-        price_line = f"*{frappe._('Price')}:* {price_str}"
-
-    price_list_name = ""
-    if product.get("item_code"):
-        selling = frappe.get_single_value("Selling Settings",
-                                           "selling_price_list")
-        if selling:
-            ip = frappe.db.get_value("Item Price",
-                                     {"item_code": product.item_code,
-                                      "price_list": selling,
-                                      "selling": 1},
-                                     ["price_list_rate", "price_list"],
-                                     as_dict=True)
-            if ip:
-                price_list_name = ip.price_list or ""
-                price_line = f"*{ip.price_list}:* {product.currency or ''} {float(ip.price_list_rate):,.2f}"
-                if uom:
-                    price_line += f" /{uom}"
+        price_line = f"*{price_list or frappe._('Price')}:* {price_str}"
 
     if price_line:
         caption_lines.append(price_line)

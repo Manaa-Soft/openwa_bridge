@@ -23,6 +23,28 @@ frappe.ui.form.on("WhatsApp Catalog Product", {
                                 frm.set_value("currency", c || "USD");
                             });
                         }
+                        if (!frm.doc.uom)
+                            frm.set_value("uom", item.stock_uom || "");
+                        if (!frm.doc.price_list) {
+                            frappe.call({
+                                method: "frappe.client.get_list",
+                                args: {
+                                    doctype: "Item Price",
+                                    filters: {
+                                        item_code: frm.doc.item_code,
+                                        selling: 1,
+                                    },
+                                    fields: ["price_list"],
+                                    limit: 1,
+                                    order_by: "creation desc",
+                                },
+                                callback: function (r2) {
+                                    if (r2.message && r2.message.length) {
+                                        frm.set_value("price_list", r2.message[0].price_list);
+                                    }
+                                },
+                            });
+                        }
                     }
                 },
             });
