@@ -121,6 +121,40 @@ class TestSendFallbackProductMessage(IntegrationTestCase):
         self.assertIn("Test Widget", payload.get("text", ""))
         self.assertEqual(payload["chatId"], "12345@c.us")
 
+    @patch("openwa_bridge.catalog.frappe.utils.get_url")
+    @patch("openwa_bridge.catalog.openwa_api")
+    def test_sends_image_with_caption_when_product_has_image(self, mock_api, mock_get_url):
+        mock_get_url.return_value = "http://example.com/files/widget.png"
+        mock_api.return_value = {"messageId": "msg-002"}
+        account = {"openwa_session_id": "sess-001"}
+        product = self._make_product(image="/files/widget.png")
+
+        result = self.sender(account, "12345@c.us", product)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["method"], "fallback")
+        call_args = mock_api.call_args[0]
+        self.assertIn("/messages/send-image", call_args[2])
+        payload = mock_api.call_args[1].get("json_data", {})
+        self.assertEqual(payload["url"], "http://example.com/files/widget.png")
+        self.assertIn("Test Widget", payload.get("caption", ""))
+
+    @patch("openwa_bridge.catalog.frappe.utils.get_url")
+    @patch("openwa_bridge.catalog.openwa_api")
+    def test_falls_back_to_text_when_image_fails(self, mock_api, mock_get_url):
+        mock_get_url.return_value = "http://example.com/files/widget.png"
+        mock_api.side_effect = [Exception("image download failed"),
+                                {"messageId": "msg-003"}]
+        account = {"openwa_session_id": "sess-001"}
+        product = self._make_product(image="/files/widget.png")
+
+        result = self.sender(account, "12345@c.us", product)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["method"], "fallback")
+        self.assertEqual(mock_api.call_count, 2)
+        self.assertIn("/messages/send-text", mock_api.call_args[0][2])
+
 
 class TestSendCatalogSummary(IntegrationTestCase):
     """Test _send_catalog_summary."""

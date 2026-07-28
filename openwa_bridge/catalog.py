@@ -24,24 +24,33 @@ def _get_account(account_name: str) -> dict:
 
 def _send_fallback_product_message(account: dict, chat_id: str,
                                     product) -> dict:
-    """Send a richly formatted text message with product details."""
+    """Send product details as an image with caption, falling back to text-only."""
     from openwa_bridge.utils import openwa_api
 
-    lines = [
+    caption_lines = [
         f"*{product.product_name}*",
         "",
         product.description or "No description available.",
         "",
     ]
     if product.price:
-        lines.append(f"*Price:* {product.currency or ''} {float(product.price):.2f}")
-    lines.append(f"*Available:* {'Yes' if product.is_available else 'No'}")
+        caption_lines.append(f"*Price:* {product.currency or ''} {float(product.price):.2f}")
+    caption_lines.append(f"*Available:* {'Yes' if product.is_available else 'No'}")
 
-    text = "\n".join(lines)
+    caption = "\n".join(caption_lines)
 
-    payload: dict = {"chatId": chat_id, "text": text}
+    if product.image:
+        try:
+            image_url = frappe.utils.get_url(product.image)
+            result = openwa_api(account, "POST", "/messages/send-image",
+                                json_data={"chatId": chat_id, "url": image_url,
+                                           "caption": caption})
+            return {"status": "ok", "method": "fallback", "result": result}
+        except Exception:
+            pass
 
-    result = openwa_api(account, "POST", "/messages/send-text", json_data=payload)
+    result = openwa_api(account, "POST", "/messages/send-text",
+                        json_data={"chatId": chat_id, "text": caption})
     return {"status": "ok", "method": "fallback", "result": result}
 
 
