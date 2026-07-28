@@ -16,15 +16,15 @@ app_icon = "/assets/openwa_bridge/icons/openwa_bridge.svg"
 required_apps = ["frappe_whatsapp"]
 
 # Each item in the list will be shown as an app in the apps page
-# add_to_apps_screen = [
-# 	{
-# 		"name": "openwa_bridge",
-# 		"logo": "/assets/openwa_bridge/logo.png",
-# 		"title": "OpenWA Bridge",
-# 		"route": "/openwa_bridge",
-# 		"has_permission": "openwa_bridge.api.permission.has_app_permission"
-# 	}
-# ]
+add_to_apps_screen = [
+	{
+		"name": "OpenWA Bridge",
+		"logo": "/assets/openwa_bridge/images/openwa_bridge.svg",
+		"title": "OpenWA Bridge",
+		"route": "/desk#workspace/WhatsApp",
+		"has_permission": "openwa_bridge.api.permission.has_app_permission"
+	}
+]
 
 # Includes in <head>
 # ------------------
