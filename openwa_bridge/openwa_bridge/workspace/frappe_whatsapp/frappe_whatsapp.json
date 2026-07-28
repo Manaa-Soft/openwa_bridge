@@ -12,7 +12,7 @@
  "sequence_id": 15,
  "indicator_color": "green",
  "hide_custom": 0,
- "content": "[]",
+ "content": "[{\"id\":\"h1\",\"type\":\"header\",\"data\":{\"text\":\"Frappe Whatsapp\",\"level\":4,\"col\":12}},{\"id\":\"s1\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"WhatsApp Account\",\"col\":4}},{\"id\":\"s2\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"WhatsApp Profile\",\"col\":4}},{\"id\":\"s3\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"WhatsApp Message\",\"col\":4}},{\"id\":\"s4\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"WhatsApp Templates\",\"col\":4}},{\"id\":\"s5\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"WhatsApp Notification\",\"col\":4}},{\"id\":\"s6\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"WhatsApp Settings\",\"col\":4}},{\"id\":\"c1\",\"type\":\"card\",\"data\":{\"card_name\":\"Accounts & Profiles\",\"col\":4}},{\"id\":\"c2\",\"type\":\"card\",\"data\":{\"card_name\":\"Messages & Templates\",\"col\":4}},{\"id\":\"c3\",\"type\":\"card\",\"data\":{\"card_name\":\"Flows\",\"col\":4}},{\"id\":\"c4\",\"type\":\"card\",\"data\":{\"card_name\":\"Notifications & Recipients\",\"col\":4}}]",
  "shortcuts": [
   {
    "label": "WhatsApp Account",

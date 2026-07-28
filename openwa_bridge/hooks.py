@@ -21,7 +21,7 @@ add_to_apps_screen = [
 		"name": "OpenWA Bridge",
 		"logo": "/assets/openwa_bridge/images/openwa_bridge.svg",
 		"title": "OpenWA Bridge",
-		"route": "/desk#workspace/WhatsApp"
+		"route": "/desk/whatsapp"
 	}
 ]
 
