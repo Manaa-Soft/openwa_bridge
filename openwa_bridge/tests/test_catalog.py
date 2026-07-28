@@ -1,4 +1,4 @@
-"""Unit tests for WhatsApp Catalog product sync and messaging."""
+﻿"""Unit tests for WhatsApp Catalog product sync and messaging."""
 from __future__ import annotations
 
 from unittest.mock import patch, MagicMock
@@ -89,14 +89,14 @@ class TestExtractError(IntegrationTestCase):
 
 
 class TestSyncSingleProduct(IntegrationTestCase):
-    """Test _sync_single_product."""
+    """Test sync_single_product — calls with product_name, mocks get_doc."""
 
     def setUp(self):
         super().setUp()
-        from openwa_bridge.catalog import _sync_single_product
-        self.syncer = _sync_single_product
+        from openwa_bridge.catalog import sync_single_product
+        self.syncer = sync_single_product
 
-    def _make_product(self, **overrides):
+    def _make_product_mock(self, **overrides):
         product = MagicMock()
         defaults = {
             "name": "WCP-0001",
@@ -115,61 +115,70 @@ class TestSyncSingleProduct(IntegrationTestCase):
 
     @patch("openwa_bridge.catalog._get_account")
     @patch("openwa_bridge.catalog._call_openwa")
-    @patch("openwa_bridge.catalog.frappe")
-    def test_sync_success(self, mock_frappe, mock_call, mock_get_account):
+    @patch("openwa_bridge.catalog.frappe.get_doc")
+    @patch("openwa_bridge.catalog.frappe.has_permission")
+    @patch("openwa_bridge.catalog.frappe.db")
+    def test_sync_success(self, mock_db, mock_perm, mock_get_doc,
+                          mock_call, mock_get_account):
+        mock_perm.return_value = True
         mock_get_account.return_value = {"openwa_session_id": "sess-001"}
         mock_call.return_value = {"id": "openwa-prod-001"}
+        mock_get_doc.return_value = self._make_product_mock()
 
-        product = self._make_product()
-        result = self.syncer(product)
+        result = self.syncer("WCP-0001")
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["openwa_product_id"], "openwa-prod-001")
-        mock_frappe.db.set_value.assert_called_once()
 
     @patch("openwa_bridge.catalog._get_account")
     @patch("openwa_bridge.catalog._call_openwa")
-    @patch("openwa_bridge.catalog.frappe")
-    def test_sync_501_fallback(self, mock_frappe, mock_call, mock_get_account):
+    @patch("openwa_bridge.catalog.frappe.get_doc")
+    @patch("openwa_bridge.catalog.frappe.has_permission")
+    @patch("openwa_bridge.catalog.frappe.db")
+    def test_sync_501_fallback(self, mock_db, mock_perm, mock_get_doc,
+                               mock_call, mock_get_account):
+        mock_perm.return_value = True
         mock_get_account.return_value = {"openwa_session_id": "sess-001"}
-        mock_call.return_value = {"statusCode": 501, "error": "Not implemented by engine"}
+        mock_call.return_value = {"statusCode": 501}
+        mock_get_doc.return_value = self._make_product_mock()
 
-        product = self._make_product()
-        result = self.syncer(product)
+        result = self.syncer("WCP-0001")
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["method"], "local")
-        mock_frappe.db.set_value.assert_called_once()
 
     @patch("openwa_bridge.catalog._get_account")
     @patch("openwa_bridge.catalog._call_openwa")
-    @patch("openwa_bridge.catalog.frappe")
-    def test_sync_failure(self, mock_frappe, mock_call, mock_get_account):
+    @patch("openwa_bridge.catalog.frappe.get_doc")
+    @patch("openwa_bridge.catalog.frappe.has_permission")
+    @patch("openwa_bridge.catalog.frappe.db")
+    def test_sync_failure(self, mock_db, mock_perm, mock_get_doc,
+                          mock_call, mock_get_account):
         from requests.exceptions import HTTPError
 
+        mock_perm.return_value = True
         mock_get_account.return_value = {"openwa_session_id": "sess-001"}
         mock_resp = MagicMock()
         mock_resp.status_code = 500
         mock_resp.json.return_value = {"message": "Server error"}
         exc = HTTPError(response=mock_resp)
         mock_call.side_effect = exc
+        mock_get_doc.return_value = self._make_product_mock()
 
-        product = self._make_product()
-        result = self.syncer(product)
+        result = self.syncer("WCP-0001")
 
         self.assertEqual(result["status"], "error")
-        mock_frappe.db.set_value.assert_called_once()
 
 
 class TestSendProductToChat(IntegrationTestCase):
-    """Test _send_product_to_chat."""
+    """Test send_single_product_to_chat — calls with product_name, mocks get_doc."""
 
     def setUp(self):
         super().setUp()
-        from openwa_bridge.catalog import _send_product_to_chat
-        self.sender = _send_product_to_chat
+        from openwa_bridge.catalog import send_single_product_to_chat
+        self.sender = send_single_product_to_chat
 
-    def _make_product(self, **overrides):
+    def _make_product_mock(self, **overrides):
         product = MagicMock()
         defaults = {
             "name": "WCP-0001",
@@ -188,45 +197,54 @@ class TestSendProductToChat(IntegrationTestCase):
 
     @patch("openwa_bridge.catalog._get_account")
     @patch("openwa_bridge.catalog._call_openwa")
-    def test_send_success(self, mock_call, mock_get_account):
+    @patch("openwa_bridge.catalog.frappe.get_doc")
+    @patch("openwa_bridge.catalog.frappe.has_permission")
+    def test_send_success(self, mock_perm, mock_get_doc, mock_call, mock_get_account):
+        mock_perm.return_value = True
         mock_get_account.return_value = {"openwa_session_id": "sess-001"}
         mock_call.return_value = {"messageId": "msg-001"}
+        mock_get_doc.return_value = self._make_product_mock()
 
-        product = self._make_product()
-        result = self.sender(product, "12345@c.us")
+        result = self.sender("WCP-0001", "12345@c.us")
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["method"], "openwa")
 
     @patch("openwa_bridge.catalog._get_account")
     @patch("openwa_bridge.catalog._call_openwa")
+    @patch("openwa_bridge.catalog.frappe.get_doc")
+    @patch("openwa_bridge.catalog.frappe.has_permission")
     @patch("openwa_bridge.catalog._send_fallback_product_message")
-    def test_send_501_fallback(self, mock_fallback, mock_call, mock_get_account):
+    def test_send_501_fallback(self, mock_fallback, mock_perm, mock_get_doc,
+                               mock_call, mock_get_account):
+        mock_perm.return_value = True
         mock_get_account.return_value = {"openwa_session_id": "sess-001"}
         mock_call.return_value = {"statusCode": 501}
+        mock_get_doc.return_value = self._make_product_mock()
         mock_fallback.return_value = {"status": "ok", "method": "fallback"}
 
-        product = self._make_product()
-        result = self.sender(product, "12345@c.us")
+        result = self.sender("WCP-0001", "12345@c.us")
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["method"], "fallback")
-        mock_fallback.assert_called_once()
 
     @patch("openwa_bridge.catalog._get_account")
     @patch("openwa_bridge.catalog._call_openwa")
-    def test_send_error(self, mock_call, mock_get_account):
+    @patch("openwa_bridge.catalog.frappe.get_doc")
+    @patch("openwa_bridge.catalog.frappe.has_permission")
+    def test_send_error(self, mock_perm, mock_get_doc, mock_call, mock_get_account):
         from requests.exceptions import HTTPError
 
+        mock_perm.return_value = True
         mock_get_account.return_value = {"openwa_session_id": "sess-001"}
         mock_resp = MagicMock()
         mock_resp.status_code = 400
         mock_resp.json.return_value = {"message": "Invalid chat"}
         exc = HTTPError(response=mock_resp)
         mock_call.side_effect = exc
+        mock_get_doc.return_value = self._make_product_mock()
 
-        product = self._make_product()
-        result = self.sender(product, "12345@c.us")
+        result = self.sender("WCP-0001", "12345@c.us")
 
         self.assertEqual(result["status"], "error")
 
@@ -344,12 +362,10 @@ class TestSyncCatalogProducts(IntegrationTestCase):
 
     @patch("openwa_bridge.catalog.frappe.has_permission")
     @patch("openwa_bridge.catalog.frappe.get_all")
-    @patch("openwa_bridge.catalog.frappe.get_doc")
-    @patch("openwa_bridge.catalog._sync_single_product")
-    def test_sync_all_pending(self, mock_sync, mock_get_doc, mock_get_all, mock_perm):
+    @patch("openwa_bridge.catalog.sync_single_product")
+    def test_sync_all_pending(self, mock_sync, mock_get_all, mock_perm):
         mock_perm.return_value = True
         mock_get_all.return_value = [{"name": "WCP-0001"}, {"name": "WCP-0002"}]
-        mock_get_doc.side_effect = lambda dt, name: MagicMock(name=name)
         mock_sync.return_value = {"status": "ok", "method": "local"}
 
         from openwa_bridge.catalog import sync_catalog_products

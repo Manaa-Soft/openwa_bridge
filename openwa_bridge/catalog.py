@@ -97,30 +97,39 @@ def _send_fallback_product_message(account: dict, chat_id: str,
 # Single product operations (called from DocType controller)
 # ---------------------------------------------------------------------------
 
-def _sync_single_product(product) -> dict:  # noqa: ANN001
+# ---------------------------------------------------------------------------
+# Public API — accept product name strings, load fresh from DB
+# ---------------------------------------------------------------------------
+
+
+@frappe.whitelist()
+def sync_single_product(product_name: str) -> dict:
     """Sync one WhatsApp Catalog Product to OpenWA.
 
-    Can be called from the DocType controller or directly.
-    Uses ``doc.save()`` instead of raw ``set_value`` so Frappe's
-    optimistic concurrency ``modified`` timestamp stays in sync.
+    Loads a fresh doc from DB (no ``has_been_modified`` risk) and
+    updates sync status via ``frappe.db.set_value()``.
     """
+    if not frappe.has_permission("WhatsApp Catalog Product", "write"):
+        frappe.throw("Insufficient permissions.", frappe.PermissionError)
+    product = frappe.get_doc("WhatsApp Catalog Product", product_name)
     account = _get_account(product.whatsapp_account)
     payload = _build_product_payload(product)
 
     try:
         result = _call_openwa(account, "POST", "/catalog/products", json_data=payload)
     except requests.exceptions.HTTPError as exc:
-        product.sync_status = "Failed"
-        product.save()
+        frappe.db.set_value("WhatsApp Catalog Product", product_name,
+                            "sync_status", "Failed")
         error_msg = _extract_error(exc)
         frappe.log_error(title="WhatsApp Catalog: Sync Failed",
-                         message=f"Product {product.name}: {error_msg}")
+                         message=f"Product {product_name}: {error_msg}")
         return {"status": "error", "error": error_msg}
 
     if isinstance(result, dict) and result.get("statusCode") == 501:
-        product.sync_status = "Synced"
-        product.last_sync_on = frappe.utils.now()
-        product.save()
+        frappe.db.set_value("WhatsApp Catalog Product", product_name, {
+            "sync_status": "Synced",
+            "last_sync_on": frappe.utils.now(),
+        })
         return {"status": "ok", "method": "local",
                 "message": "Stored locally (OpenWA catalog not yet available)"}
 
@@ -128,22 +137,27 @@ def _sync_single_product(product) -> dict:  # noqa: ANN001
     if isinstance(result, dict):
         openwa_id = result.get("id") or result.get("productId") or ""
 
-    product.sync_status = "Synced"
-    product.openwa_product_id = openwa_id
-    product.last_sync_on = frappe.utils.now()
-    product.save()
+    frappe.db.set_value("WhatsApp Catalog Product", product_name, {
+        "sync_status": "Synced",
+        "openwa_product_id": openwa_id,
+        "last_sync_on": frappe.utils.now(),
+    })
     return {"status": "ok", "method": "openwa", "openwa_product_id": openwa_id}
 
 
-def _send_product_to_chat(product, chat_id: str) -> dict:  # noqa: ANN001
+@frappe.whitelist()
+def send_single_product_to_chat(product_name: str, chat_id: str) -> dict:
     """Send a WhatsApp Catalog Product to a specific chat.
 
-    Tries native send-product first, falls back to formatted text.
+    Loads fresh from DB, tries native send-product, falls back to
+    formatted text+image.
     """
+    if not frappe.has_permission("WhatsApp Catalog Product", "read"):
+        frappe.throw("Insufficient permissions.", frappe.PermissionError)
+    product = frappe.get_doc("WhatsApp Catalog Product", product_name)
     account = _get_account(product.whatsapp_account)
 
-    # Try native catalog send-product
-    payload = {"chatId": chat_id, "productId": product.openwa_product_id or product.name}
+    payload = {"chatId": chat_id, "productId": product.openwa_product_id or product_name}
     try:
         result = _call_openwa(account, "POST", "/messages/send-product",
                               json_data=payload)
@@ -232,9 +246,8 @@ def sync_catalog_products(account_name: str, product_names: str | None = None) -
     results = []
 
     for p in products:
-        doc = frappe.get_doc("WhatsApp Catalog Product", p.name)
         try:
-            result = _sync_single_product(doc)
+            result = sync_single_product(p.name)
             results.append({"name": p.name, "status": "ok", "method": result.get("method")})
             synced += 1
         except Exception as exc:
@@ -333,4 +346,4 @@ def send_product_to_chat_direct(account_name: str, chat_id: str,
     if product.whatsapp_account != account_name:
         frappe.throw("Product does not belong to this account.")
 
-    return _send_product_to_chat(product, chat_id)
+    return send_single_product_to_chat(product_name, chat_id)

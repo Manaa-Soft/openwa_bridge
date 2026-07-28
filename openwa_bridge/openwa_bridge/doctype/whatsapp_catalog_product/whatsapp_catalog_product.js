@@ -32,9 +32,9 @@ frappe.ui.form.on("WhatsApp Catalog Product", {
     refresh: function (frm) {
         if (frm.doc.docstatus === 0 || frm.doc.docstatus === 1) {
             frm.add_custom_button(__("Sync to WhatsApp"), function () {
-                frm.call({
-                    doc: frm.doc,
-                    method: "sync_to_catalog",
+                frappe.call({
+                    method: "openwa_bridge.catalog.sync_single_product",
+                    args: { product_name: frm.doc.name },
                     callback: function (r) {
                         if (r.message && r.message.status === "ok") {
                             frappe.msgprint(__("Product synced to WhatsApp catalog."));
@@ -58,10 +58,12 @@ frappe.ui.form.on("WhatsApp Catalog Product", {
                         },
                     ],
                     function (values) {
-                        frm.call({
-                            doc: frm.doc,
-                            method: "send_to_chat",
-                            args: { chat_id: values.chat_id },
+                        frappe.call({
+                            method: "openwa_bridge.catalog.send_single_product_to_chat",
+                            args: {
+                                product_name: frm.doc.name,
+                                chat_id: values.chat_id,
+                            },
                             callback: function (r) {
                                 if (r.message && r.message.status === "ok") {
                                     frappe.msgprint(__("Product sent to chat."));
