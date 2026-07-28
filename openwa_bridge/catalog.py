@@ -127,6 +127,43 @@ def send_catalog_to_chat(account_name: str, chat_id: str) -> dict:
 
 
 @frappe.whitelist()
+def send_product_to_customer(product_name: str, customer: str) -> dict:
+    """Send a WhatsApp Catalog Product to a Customer's WhatsApp number.
+
+    Looks up the Customer's primary Contact, resolves the phone number
+    to a WhatsApp chat ID, and sends the product as a fallback text+image
+    message.
+    """
+    if not frappe.has_permission("WhatsApp Catalog Product", "read"):
+        frappe.throw("Insufficient permissions.", frappe.PermissionError)
+
+    product = frappe.get_doc("WhatsApp Catalog Product", product_name)
+    account = _get_account(product.whatsapp_account)
+
+    contact = frappe.get_all(
+        "Contact",
+        filters=[
+            ["Dynamic Link", "link_doctype", "=", "Customer"],
+            ["Dynamic Link", "link_name", "=", customer],
+        ],
+        fields=["name", "mobile_no", "phone"],
+        limit=1,
+    )
+    if not contact:
+        frappe.throw(f"No Contact found for Customer {customer}.")
+
+    phone = contact[0].mobile_no or contact[0].phone
+    if not phone:
+        frappe.throw(f"Contact {contact[0].name} has no phone number set.")
+
+    from frappe_whatsapp.utils import format_number
+    raw = format_number(phone)
+    chat_id = f"{raw}@c.us" if "@" not in raw else raw
+
+    return _send_fallback_product_message(account, chat_id, product)
+
+
+@frappe.whitelist()
 def send_product_to_chat_direct(account_name: str, chat_id: str,
                                  product_name: str) -> dict:
     """Send a specific catalog product to a chat by product name."""

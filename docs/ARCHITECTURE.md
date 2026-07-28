@@ -287,8 +287,9 @@ formatted text+image fallback messages.
 
 **DocType**: ``WhatsApp Catalog Product``
 **File**: ``catalog.py`` — whitelisted methods for product messaging
-**Methods added**: 5 (get_catalog_products, get_catalog_product, send_product_to_chat,
-                    send_catalog_to_chat, send_product_to_chat_direct)
+**Methods added**: 6 (get_catalog_products, get_catalog_product, send_product_to_chat,
+                    send_product_to_customer, send_catalog_to_chat,
+                    send_product_to_chat_direct)
 
 **Send flow**:
 ```

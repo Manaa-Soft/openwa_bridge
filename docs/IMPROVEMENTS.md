@@ -615,6 +615,7 @@ Total whitelisted methods: **67** (up from 44)
 - [x] `get_catalog_products(account_name)` — list all catalog products
 - [x] `get_catalog_product(account_name, product_name)` — get single product
 - [x] `send_product_to_chat(product_name, chat_id)` — send to chat (fallback text+image)
+- [x] `send_product_to_customer(product_name, customer)` — lookup Customer Contact, resolve phone, send
 - [x] `send_catalog_to_chat(account_name, chat_id)` — send catalog summary (fallback text)
 - [x] `send_product_to_chat_direct(account_name, chat_id, product_name)` — account-qualified send
 
@@ -628,6 +629,7 @@ All products are stored locally and sent as fallback text+image messages.
 ### Tests
 
 - [x] `test_send_product_to_chat` — always uses fallback
+- [x] `test_send_product_to_customer` — resolves Contact, sends to phone
 - [x] `test_send_fallback_product_message` — formatted text + image
 - [x] `test_send_catalog_summary` — with and without products
 - [x] `test_get_catalog_products` — list endpoint

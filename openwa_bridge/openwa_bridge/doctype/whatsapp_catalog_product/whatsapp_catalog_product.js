@@ -62,6 +62,38 @@ frappe.ui.form.on("WhatsApp Catalog Product", {
                     __("Send")
                 );
             });
+
+            frm.add_custom_button(__("Send to Customer"), function () {
+                frappe.prompt(
+                    [
+                        {
+                            fieldname: "customer",
+                            label: __("Customer"),
+                            fieldtype: "Link",
+                            options: "Customer",
+                            reqd: 1,
+                        },
+                    ],
+                    function (values) {
+                        frappe.call({
+                            method: "openwa_bridge.catalog.send_product_to_customer",
+                            args: {
+                                product_name: frm.doc.name,
+                                customer: values.customer,
+                            },
+                            callback: function (r) {
+                                if (r.message && r.message.status === "ok") {
+                                    frappe.msgprint(__("Product sent to customer."));
+                                } else {
+                                    frappe.msgprint(__("Send failed: ") + (r.message ? r.message.error : "Unknown"));
+                                }
+                            },
+                        });
+                    },
+                    __("Send Product to Customer"),
+                    __("Send")
+                );
+            });
         }
     },
 });

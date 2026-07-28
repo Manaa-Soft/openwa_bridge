@@ -1603,6 +1603,29 @@ available products.
 
 ---
 
+### send_product_to_customer
+
+Send a catalog product to a Customer's WhatsApp number. Looks up the
+Customer's primary Contact, resolves the phone number to a chat ID, and
+sends the product as a text+image fallback message.
+
+**Method**: `openwa_bridge.catalog.send_product_to_customer`
+
+**Args**: `{ product_name: string, customer: string }`
+
+**Raises**: If no Contact or no phone number is found for the Customer.
+
+**Returns**:
+```json
+{
+  "status": "ok",
+  "method": "fallback",
+  "result": { "messageId": "true_967777715787@c.us_3EB0..." }
+}
+```
+
+---
+
 ### send_product_to_chat_direct
 
 Send a specific catalog product to a chat by product name (account-qualified).

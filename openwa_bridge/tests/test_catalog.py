@@ -172,6 +172,68 @@ class TestSendCatalogSummary(IntegrationTestCase):
         self.assertIn("No products available", payload.get("text", ""))
 
 
+class TestSendProductToCustomer(IntegrationTestCase):
+    """Test send_product_to_customer — resolves Customer Contact → phone → chat."""
+
+    def setUp(self):
+        super().setUp()
+        from openwa_bridge.catalog import send_product_to_customer
+        self.sender = send_product_to_customer
+
+    def _make_product_mock(self, **overrides):
+        product = MagicMock()
+        defaults = {
+            "name": "WCP-0001",
+            "product_name": "Test Widget",
+            "description": "A fine widget",
+            "price": 29.99,
+            "currency": "USD",
+            "is_available": True,
+            "image": "",
+            "whatsapp_account": "test-account",
+        }
+        for k, v in defaults.items():
+            setattr(product, k, overrides.get(k, v))
+        return product
+
+    @patch("openwa_bridge.catalog._get_account")
+    @patch("openwa_bridge.catalog.frappe.get_doc")
+    @patch("openwa_bridge.catalog.frappe.has_permission")
+    @patch("openwa_bridge.catalog._send_fallback_product_message")
+    def test_sends_to_customer_contact(self, mock_fallback, mock_perm,
+                                        mock_get_doc, mock_get_account):
+        mock_perm.return_value = True
+        mock_get_doc.return_value = self._make_product_mock()
+        mock_get_account.return_value = {"openwa_session_id": "sess-001"}
+        mock_fallback.return_value = {"status": "ok", "method": "fallback"}
+
+        with patch("openwa_bridge.catalog.frappe.get_all") as mock_get_all:
+            mock_get_all.side_effect = [
+                [{"name": "CON-001", "mobile_no": "+967712345678", "phone": ""}],
+            ]
+
+            result = self.sender("WCP-0001", "Acme Corp")
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["method"], "fallback")
+        args = mock_fallback.call_args[0]
+        self.assertIn("@c.us", args[1])
+
+    @patch("openwa_bridge.catalog._get_account")
+    @patch("openwa_bridge.catalog.frappe.get_doc")
+    @patch("openwa_bridge.catalog.frappe.has_permission")
+    def test_raises_if_no_contact(self, mock_perm, mock_get_doc, mock_get_account):
+        mock_perm.return_value = True
+        mock_get_doc.return_value = self._make_product_mock()
+        mock_get_account.return_value = {"openwa_session_id": "sess-001"}
+
+        with patch("openwa_bridge.catalog.frappe.get_all") as mock_get_all:
+            mock_get_all.return_value = []
+
+            with self.assertRaises(frappe.ValidationError):
+                self.sender("WCP-0001", "No Contact Customer")
+
+
 class TestGetCatalogProducts(IntegrationTestCase):
     """Test get_catalog_products whitelisted method."""
 
