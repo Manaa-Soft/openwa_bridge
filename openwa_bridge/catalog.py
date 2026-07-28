@@ -108,6 +108,10 @@ def sync_single_product(product_name: str) -> dict:
 
     Loads a fresh doc from DB (no ``has_been_modified`` risk) and
     updates sync status via ``frappe.db.set_value()``.
+
+    If the OpenWA engine does not support the catalog endpoint (any
+    HTTP error), the product is silently stored locally so it can still
+    be sent as a rich-text fallback message.
     """
     if not frappe.has_permission("WhatsApp Catalog Product", "write"):
         frappe.throw("Insufficient permissions.", frappe.PermissionError)
@@ -117,13 +121,8 @@ def sync_single_product(product_name: str) -> dict:
 
     try:
         result = _call_openwa(account, "POST", "/catalog/products", json_data=payload)
-    except requests.exceptions.HTTPError as exc:
-        frappe.db.set_value("WhatsApp Catalog Product", product_name,
-                            "sync_status", "Failed")
-        error_msg = _extract_error(exc)
-        frappe.log_error(title="WhatsApp Catalog: Sync Failed",
-                         message=f"Product {product_name}: {error_msg}")
-        return {"status": "error", "error": error_msg}
+    except requests.exceptions.HTTPError:
+        result = {"statusCode": 501}
 
     if isinstance(result, dict) and result.get("statusCode") == 501:
         frappe.db.set_value("WhatsApp Catalog Product", product_name, {
@@ -131,7 +130,7 @@ def sync_single_product(product_name: str) -> dict:
             "last_sync_on": frappe.utils.now(),
         })
         return {"status": "ok", "method": "local",
-                "message": "Stored locally (OpenWA catalog not yet available)"}
+                "message": "Stored locally (OpenWA catalog endpoint unavailable)"}
 
     openwa_id = ""
     if isinstance(result, dict):
@@ -157,12 +156,12 @@ def send_single_product_to_chat(product_name: str, chat_id: str) -> dict:
     product = frappe.get_doc("WhatsApp Catalog Product", product_name)
     account = _get_account(product.whatsapp_account)
 
-    payload = {"chatId": chat_id, "productId": product.openwa_product_id or product_name}
     try:
         result = _call_openwa(account, "POST", "/messages/send-product",
-                              json_data=payload)
-    except requests.exceptions.HTTPError as exc:
-        return {"status": "error", "error": _extract_error(exc)}
+                              json_data={"chatId": chat_id,
+                                         "productId": product.openwa_product_id or product_name})
+    except requests.exceptions.HTTPError:
+        return _send_fallback_product_message(account, chat_id, product)
 
     if isinstance(result, dict) and result.get("statusCode") == 501:
         return _send_fallback_product_message(account, chat_id, product)

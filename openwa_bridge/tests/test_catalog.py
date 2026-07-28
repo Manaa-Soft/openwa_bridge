@@ -152,8 +152,8 @@ class TestSyncSingleProduct(IntegrationTestCase):
     @patch("openwa_bridge.catalog.frappe.get_doc")
     @patch("openwa_bridge.catalog.frappe.has_permission")
     @patch("openwa_bridge.catalog.frappe.db")
-    def test_sync_failure(self, mock_db, mock_perm, mock_get_doc,
-                          mock_call, mock_get_account):
+    def test_sync_any_http_error_falls_back(self, mock_db, mock_perm, mock_get_doc,
+                                             mock_call, mock_get_account):
         from requests.exceptions import HTTPError
 
         mock_perm.return_value = True
@@ -167,7 +167,8 @@ class TestSyncSingleProduct(IntegrationTestCase):
 
         result = self.syncer("WCP-0001")
 
-        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["method"], "local")
 
 
 class TestSendProductToChat(IntegrationTestCase):
@@ -232,7 +233,9 @@ class TestSendProductToChat(IntegrationTestCase):
     @patch("openwa_bridge.catalog._call_openwa")
     @patch("openwa_bridge.catalog.frappe.get_doc")
     @patch("openwa_bridge.catalog.frappe.has_permission")
-    def test_send_error(self, mock_perm, mock_get_doc, mock_call, mock_get_account):
+    @patch("openwa_bridge.catalog._send_fallback_product_message")
+    def test_send_any_http_error_falls_back(self, mock_fallback, mock_perm, mock_get_doc,
+                                             mock_call, mock_get_account):
         from requests.exceptions import HTTPError
 
         mock_perm.return_value = True
@@ -243,10 +246,12 @@ class TestSendProductToChat(IntegrationTestCase):
         exc = HTTPError(response=mock_resp)
         mock_call.side_effect = exc
         mock_get_doc.return_value = self._make_product_mock()
+        mock_fallback.return_value = {"status": "ok", "method": "fallback"}
 
         result = self.sender("WCP-0001", "12345@c.us")
 
-        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["method"], "fallback")
 
 
 class TestSendFallbackProductMessage(IntegrationTestCase):
