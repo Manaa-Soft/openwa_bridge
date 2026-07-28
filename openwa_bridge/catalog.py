@@ -40,8 +40,6 @@ def _send_fallback_product_message(account: dict, chat_id: str,
     text = "\n".join(lines)
 
     payload: dict = {"chatId": chat_id, "text": text}
-    if product.image:
-        payload["mediaUrl"] = frappe.utils.get_url(product.image)
 
     result = openwa_api(account, "POST", "/messages/send-text", json_data=payload)
     return {"status": "ok", "method": "fallback", "result": result}

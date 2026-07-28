@@ -121,20 +121,6 @@ class TestSendFallbackProductMessage(IntegrationTestCase):
         self.assertIn("Test Widget", payload.get("text", ""))
         self.assertEqual(payload["chatId"], "12345@c.us")
 
-    @patch("openwa_bridge.catalog.openwa_api")
-    @patch("openwa_bridge.catalog.frappe.utils.get_url")
-    def test_includes_image_when_present(self, mock_get_url, mock_api):
-        mock_get_url.return_value = "http://example.com/files/widget.png"
-        mock_api.return_value = {"messageId": "msg-002"}
-        account = {"openwa_session_id": "sess-001"}
-        product = self._make_product(image="/files/widget.png")
-
-        result = self.sender(account, "12345@c.us", product)
-
-        self.assertEqual(result["status"], "ok")
-        payload = mock_api.call_args[1].get("json_data", {})
-        self.assertIn("mediaUrl", payload)
-
 
 class TestSendCatalogSummary(IntegrationTestCase):
     """Test _send_catalog_summary."""
