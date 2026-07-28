@@ -25,6 +25,9 @@ def _get_account(account_name: str) -> dict:
 def _send_fallback_product_message(account: dict, chat_id: str,
                                     product) -> dict:
     """Send product details as an image with caption, falling back to text-only."""
+    import base64
+    import os
+
     from openwa_bridge.utils import openwa_api
 
     caption_lines = [
@@ -41,11 +44,16 @@ def _send_fallback_product_message(account: dict, chat_id: str,
 
     if product.image:
         try:
-            image_url = frappe.utils.get_url(product.image)
-            result = openwa_api(account, "POST", "/messages/send-image",
-                                json_data={"chatId": chat_id, "url": image_url,
-                                           "caption": caption})
-            return {"status": "ok", "method": "fallback", "result": result}
+            file_path = frappe.get_site_path(product.image.strip("/"))
+            if os.path.exists(file_path):
+                with open(file_path, "rb") as f:
+                    b64 = base64.b64encode(f.read()).decode()
+                import mimetypes
+                mimetype = mimetypes.guess_type(file_path)[0] or "image/jpeg"
+                result = openwa_api(account, "POST", "/messages/send-image",
+                                    json_data={"chatId": chat_id, "base64": b64,
+                                               "mimetype": mimetype, "caption": caption})
+                return {"status": "ok", "method": "fallback", "result": result}
         except Exception:
             pass
 
