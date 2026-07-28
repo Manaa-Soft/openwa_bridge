@@ -281,19 +281,20 @@ The scheduler safety-net (`process_pending_outbox`) runs every ~4 minutes and re
 ### 8. WhatsApp Catalog Product
 
 The bridge provides a **WhatsApp Catalog Product** DocType that links ERPNext Items
-to WhatsApp for product sharing.  OpenWA's native catalog endpoints are stubs
-(501), so the bridge falls back to richly formatted text+image messages.
+to WhatsApp for product sharing.  OpenWA does not support catalog operations (neither
+engine implements WhatsApp Business catalog), so all products are sent as richly
+formatted text+image fallback messages.
 
 **DocType**: ``WhatsApp Catalog Product``
-**File**: ``catalog.py`` — whitelisted methods for sync and send
-**Methods added**: 6 (get_catalog_products, get_catalog_product, sync_catalog_products,
-                    send_product_to_chat_direct, send_catalog_to_chat, get_openwa_catalog_info)
+**File**: ``catalog.py`` — whitelisted methods for product messaging
+**Methods added**: 5 (get_catalog_products, get_catalog_product, send_product_to_chat,
+                    send_catalog_to_chat, send_product_to_chat_direct)
 
-**Fallback flow**:
+**Send flow**:
 ```
-send_product_to_chat()
-  → POST /messages/send-product  (501?)
-       → YES → _send_fallback_product_message()
-                → POST /messages/send-text  (richly formatted)
-  → NO  → return { status: "ok", method: "openwa" }
+send_product_to_chat(product_name, chat_id)
+  → _send_fallback_product_message()
+       → POST /messages/send-text
+            { chatId, text: "*Product Name*\n\ndesc\n\n*Price:* USD 29.99",
+              mediaUrl: ".../image.png" }
 ```

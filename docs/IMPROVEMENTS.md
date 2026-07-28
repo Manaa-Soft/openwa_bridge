@@ -609,45 +609,39 @@ Total whitelisted methods: **67** (up from 44)
 - [x] **WhatsApp Catalog Product** — links ERPNext Items to WhatsApp catalog
 - [x] Auto-fetches Item name, description, image, and price
 - [x] Editable overrides for WhatsApp-specific presentation
-- [x] Sync status tracking (Not Synced / Synced / Failed)
-- [x] OpenWA product ID storage for future native catalog support
 
-### Whitelisted Methods (6 added)
+### Whitelisted Methods (5 added)
 
 - [x] `get_catalog_products(account_name)` — list all catalog products
 - [x] `get_catalog_product(account_name, product_name)` — get single product
-- [x] `sync_catalog_products(account_name, product_names?)` — sync to catalog
-- [x] `send_product_to_chat_direct(account_name, chat_id, product_name)` — send to chat
-- [x] `send_catalog_to_chat(account_name, chat_id)` — send catalog summary
-- [x] `get_openwa_catalog_info(account_name)` — get catalog info
+- [x] `send_product_to_chat(product_name, chat_id)` — send to chat (fallback text+image)
+- [x] `send_catalog_to_chat(account_name, chat_id)` — send catalog summary (fallback text)
+- [x] `send_product_to_chat_direct(account_name, chat_id, product_name)` — account-qualified send
 
-### Fallback Strategy
+### Sync Removed
 
-Since OpenWA catalog endpoints return **501 Not Implemented**, the bridge:
-1. Attempts native endpoint first (`/catalog/products`, `/messages/send-product`)
-2. On 501, falls back to richly formatted text+image messages
-3. When OpenWA eventually implements catalog, bridge auto-upgrades with no code change
+OpenWA neither implements nor will implement WhatsApp Business catalog create/update
+operations. The sync-to-OpenWA feature (`sync_catalog_products`, `sync_single_product`,
+`get_openwa_catalog_info`, `_build_product_payload`, `_call_openwa`) has been removed.
+All products are stored locally and sent as fallback text+image messages.
 
 ### Tests
 
-- [x] `test_build_product_payload` — unit tests for payload construction
-- [x] `test_sync_single_product` — success, 501 fallback, failure paths
-- [x] `test_send_product_to_chat` — success, 501 fallback, error paths
+- [x] `test_send_product_to_chat` — always uses fallback
 - [x] `test_send_fallback_product_message` — formatted text + image
 - [x] `test_send_catalog_summary` — with and without products
 - [x] `test_get_catalog_products` — list endpoint
-- [x] `test_sync_catalog_products` — bulk sync
 
 ### Files Changed
 
 | File | Change |
 |---|---|
 | `whatsapp_catalog_product.json` | New DocType definition (12 fields) |
-| `whatsapp_catalog_product.py` | DocType controller + sync/send methods |
-| `whatsapp_catalog_product.js` | Client-side auto-fetch + action buttons |
-| `catalog.py` | 6 whitelisted methods + fallback logic |
-| `API_REFERENCE.md` | New catalog section with 6 methods |
-| `ARCHITECTURE.md` | Catalog module section |
-| `FLOWS.md` | Flow 12: WhatsApp Catalog Product |
+| `whatsapp_catalog_product.py` | DocType controller (sync removed, send simplified) |
+| `whatsapp_catalog_product.js` | Client-side auto-fetch + Send button only |
+| `catalog.py` | 5 whitelisted methods, no OpenWA catalog calls |
+| `API_REFERENCE.md` | Updated catalog section (5 methods, no sync) |
+| `ARCHITECTURE.md` | Updated catalog module section |
+| `FLOWS.md` | Flow 14: WhatsApp Catalog Product (simplified) |
 | `IMPROVEMENTS.md` | This section |
-| `test_catalog.py` | 10 test classes, ~50 test cases |
+| `test_catalog.py` | 5 test classes, no sync tests |

@@ -31,21 +31,6 @@ frappe.ui.form.on("WhatsApp Catalog Product", {
 
     refresh: function (frm) {
         if (frm.doc.docstatus === 0 || frm.doc.docstatus === 1) {
-            frm.add_custom_button(__("Sync to WhatsApp"), function () {
-                frappe.call({
-                    method: "openwa_bridge.catalog.sync_single_product",
-                    args: { product_name: frm.doc.name },
-                    callback: function (r) {
-                        if (r.message && r.message.status === "ok") {
-                            frappe.msgprint(__("Product synced to WhatsApp catalog."));
-                            frm.reload_doc();
-                        } else {
-                            frappe.msgprint(__("Sync failed: ") + (r.message ? r.message.error : "Unknown"));
-                        }
-                    },
-                });
-            });
-
             frm.add_custom_button(__("Send to Chat"), function () {
                 frappe.prompt(
                     [
@@ -59,7 +44,7 @@ frappe.ui.form.on("WhatsApp Catalog Product", {
                     ],
                     function (values) {
                         frappe.call({
-                            method: "openwa_bridge.catalog.send_single_product_to_chat",
+                            method: "openwa_bridge.catalog.send_product_to_chat",
                             args: {
                                 product_name: frm.doc.name,
                                 chat_id: values.chat_id,

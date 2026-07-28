@@ -32,23 +32,8 @@ class WhatsAppCatalogProduct(Document):
             self.currency = frappe.db.get_single_value("Currency", "default_currency") or "USD"
 
     @frappe.whitelist()
-    def sync_to_catalog(self) -> dict:
-        """Sync this product to the WhatsApp catalog via OpenWA.
-
-        Delegates to :func:`openwa_bridge.catalog.sync_single_product`
-        with a fresh DB load to avoid concurrency issues.
-        """
-        from openwa_bridge.catalog import sync_single_product
-
-        return sync_single_product(self.name)
-
-    @frappe.whitelist()
     def send_to_chat(self, chat_id: str) -> dict:
-        """Send this product as a message to a WhatsApp chat.
+        """Send this product as a fallback text+image message to a WhatsApp chat."""
+        from openwa_bridge.catalog import send_product_to_chat
 
-        Delegates to :func:`openwa_bridge.catalog.send_single_product_to_chat`
-        with a fresh DB load to avoid concurrency issues.
-        """
-        from openwa_bridge.catalog import send_single_product_to_chat
-
-        return send_single_product_to_chat(self.name, chat_id)
+        return send_product_to_chat(self.name, chat_id)

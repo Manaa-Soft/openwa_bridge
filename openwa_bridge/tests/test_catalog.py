@@ -1,4 +1,4 @@
-﻿"""Unit tests for WhatsApp Catalog product sync and messaging."""
+﻿"""Unit tests for WhatsApp Catalog product messaging."""
 from __future__ import annotations
 
 from unittest.mock import patch, MagicMock
@@ -9,60 +9,12 @@ from frappe.tests import IntegrationTestCase
 from openwa_bridge.tests.conftest import mock_openwa_api
 
 
-class TestBuildProductPayload(IntegrationTestCase):
-    """Test _build_product_payload helper."""
-
-    def setUp(self):
-        super().setUp()
-        from openwa_bridge.catalog import _build_product_payload
-        self.builder = _build_product_payload
-
-    def _make_product(self, **overrides):
-        product = MagicMock()
-        defaults = {
-            "product_name": "Test Widget",
-            "description": "A fine widget",
-            "price": 29.99,
-            "currency": "USD",
-            "is_available": True,
-            "retailer_id": "",
-            "image": "",
-        }
-        for k, v in defaults.items():
-            setattr(product, k, overrides.get(k, v))
-        return product
-
-    def test_basic_payload(self):
-        product = self._make_product()
-        payload = self.builder(product, include_image=False)
-        self.assertEqual(payload["name"], "Test Widget")
-        self.assertEqual(payload["description"], "A fine widget")
-        self.assertEqual(payload["price"], 29.99)
-        self.assertEqual(payload["currency"], "USD")
-        self.assertTrue(payload["isAvailable"])
-
-    def test_retailer_id_included(self):
-        product = self._make_product(retailer_id="SKU-001")
-        payload = self.builder(product)
-        self.assertEqual(payload.get("retailerId"), "SKU-001")
-
-    def test_empty_description(self):
-        product = self._make_product(description="")
-        payload = self.builder(product)
-        self.assertEqual(payload["description"], "")
-
-    def test_zero_price(self):
-        product = self._make_product(price=0)
-        payload = self.builder(product)
-        self.assertEqual(payload["price"], 0)
-
-
 class TestExtractError(IntegrationTestCase):
-    """Test _extract_error helper."""
+    """Test _extract_error helper (shared from whatsapp_account.py)."""
 
     def setUp(self):
         super().setUp()
-        from openwa_bridge.catalog import _extract_error
+        from openwa_bridge.whatsapp_account import _extract_error
         self.extractor = _extract_error
 
     def test_extracts_json_message(self):
@@ -88,96 +40,13 @@ class TestExtractError(IntegrationTestCase):
         self.assertEqual(result, "connection error")
 
 
-class TestSyncSingleProduct(IntegrationTestCase):
-    """Test sync_single_product — calls with product_name, mocks get_doc."""
-
-    def setUp(self):
-        super().setUp()
-        from openwa_bridge.catalog import sync_single_product
-        self.syncer = sync_single_product
-
-    def _make_product_mock(self, **overrides):
-        product = MagicMock()
-        defaults = {
-            "name": "WCP-0001",
-            "product_name": "Test Widget",
-            "description": "A fine widget",
-            "price": 29.99,
-            "currency": "USD",
-            "is_available": True,
-            "retailer_id": "",
-            "image": "",
-            "whatsapp_account": "test-account",
-        }
-        for k, v in defaults.items():
-            setattr(product, k, overrides.get(k, v))
-        return product
-
-    @patch("openwa_bridge.catalog._get_account")
-    @patch("openwa_bridge.catalog._call_openwa")
-    @patch("openwa_bridge.catalog.frappe.get_doc")
-    @patch("openwa_bridge.catalog.frappe.has_permission")
-    @patch("openwa_bridge.catalog.frappe.db")
-    def test_sync_success(self, mock_db, mock_perm, mock_get_doc,
-                          mock_call, mock_get_account):
-        mock_perm.return_value = True
-        mock_get_account.return_value = {"openwa_session_id": "sess-001"}
-        mock_call.return_value = {"id": "openwa-prod-001"}
-        mock_get_doc.return_value = self._make_product_mock()
-
-        result = self.syncer("WCP-0001")
-
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["openwa_product_id"], "openwa-prod-001")
-
-    @patch("openwa_bridge.catalog._get_account")
-    @patch("openwa_bridge.catalog._call_openwa")
-    @patch("openwa_bridge.catalog.frappe.get_doc")
-    @patch("openwa_bridge.catalog.frappe.has_permission")
-    @patch("openwa_bridge.catalog.frappe.db")
-    def test_sync_501_fallback(self, mock_db, mock_perm, mock_get_doc,
-                               mock_call, mock_get_account):
-        mock_perm.return_value = True
-        mock_get_account.return_value = {"openwa_session_id": "sess-001"}
-        mock_call.return_value = {"statusCode": 501}
-        mock_get_doc.return_value = self._make_product_mock()
-
-        result = self.syncer("WCP-0001")
-
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["method"], "local")
-
-    @patch("openwa_bridge.catalog._get_account")
-    @patch("openwa_bridge.catalog._call_openwa")
-    @patch("openwa_bridge.catalog.frappe.get_doc")
-    @patch("openwa_bridge.catalog.frappe.has_permission")
-    @patch("openwa_bridge.catalog.frappe.db")
-    def test_sync_any_http_error_falls_back(self, mock_db, mock_perm, mock_get_doc,
-                                             mock_call, mock_get_account):
-        from requests.exceptions import HTTPError
-
-        mock_perm.return_value = True
-        mock_get_account.return_value = {"openwa_session_id": "sess-001"}
-        mock_resp = MagicMock()
-        mock_resp.status_code = 500
-        mock_resp.json.return_value = {"message": "Server error"}
-        exc = HTTPError(response=mock_resp)
-        mock_call.side_effect = exc
-        mock_get_doc.return_value = self._make_product_mock()
-
-        result = self.syncer("WCP-0001")
-
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["method"], "local")
-
-
 class TestSendProductToChat(IntegrationTestCase):
-    """Test send_single_product_to_chat — calls with product_name, mocks get_doc."""
+    """Test send_product_to_chat — always uses fallback text+image."""
 
     def setUp(self):
         super().setUp()
-        from openwa_bridge.catalog import send_single_product_to_chat
-        self.sender = send_single_product_to_chat
+        from openwa_bridge.catalog import send_product_to_chat
+        self.sender = send_product_to_chat
 
     def _make_product_mock(self, **overrides):
         product = MagicMock()
@@ -189,7 +58,6 @@ class TestSendProductToChat(IntegrationTestCase):
             "currency": "USD",
             "is_available": True,
             "image": "",
-            "openwa_product_id": "openwa-prod-001",
             "whatsapp_account": "test-account",
         }
         for k, v in defaults.items():
@@ -197,30 +65,13 @@ class TestSendProductToChat(IntegrationTestCase):
         return product
 
     @patch("openwa_bridge.catalog._get_account")
-    @patch("openwa_bridge.catalog._call_openwa")
-    @patch("openwa_bridge.catalog.frappe.get_doc")
-    @patch("openwa_bridge.catalog.frappe.has_permission")
-    def test_send_success(self, mock_perm, mock_get_doc, mock_call, mock_get_account):
-        mock_perm.return_value = True
-        mock_get_account.return_value = {"openwa_session_id": "sess-001"}
-        mock_call.return_value = {"messageId": "msg-001"}
-        mock_get_doc.return_value = self._make_product_mock()
-
-        result = self.sender("WCP-0001", "12345@c.us")
-
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["method"], "openwa")
-
-    @patch("openwa_bridge.catalog._get_account")
-    @patch("openwa_bridge.catalog._call_openwa")
     @patch("openwa_bridge.catalog.frappe.get_doc")
     @patch("openwa_bridge.catalog.frappe.has_permission")
     @patch("openwa_bridge.catalog._send_fallback_product_message")
-    def test_send_501_fallback(self, mock_fallback, mock_perm, mock_get_doc,
-                               mock_call, mock_get_account):
+    def test_send_fallback(self, mock_fallback, mock_perm, mock_get_doc,
+                            mock_get_account):
         mock_perm.return_value = True
         mock_get_account.return_value = {"openwa_session_id": "sess-001"}
-        mock_call.return_value = {"statusCode": 501}
         mock_get_doc.return_value = self._make_product_mock()
         mock_fallback.return_value = {"status": "ok", "method": "fallback"}
 
@@ -228,30 +79,7 @@ class TestSendProductToChat(IntegrationTestCase):
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["method"], "fallback")
-
-    @patch("openwa_bridge.catalog._get_account")
-    @patch("openwa_bridge.catalog._call_openwa")
-    @patch("openwa_bridge.catalog.frappe.get_doc")
-    @patch("openwa_bridge.catalog.frappe.has_permission")
-    @patch("openwa_bridge.catalog._send_fallback_product_message")
-    def test_send_any_http_error_falls_back(self, mock_fallback, mock_perm, mock_get_doc,
-                                             mock_call, mock_get_account):
-        from requests.exceptions import HTTPError
-
-        mock_perm.return_value = True
-        mock_get_account.return_value = {"openwa_session_id": "sess-001"}
-        mock_resp = MagicMock()
-        mock_resp.status_code = 400
-        mock_resp.json.return_value = {"message": "Invalid chat"}
-        exc = HTTPError(response=mock_resp)
-        mock_call.side_effect = exc
-        mock_get_doc.return_value = self._make_product_mock()
-        mock_fallback.return_value = {"status": "ok", "method": "fallback"}
-
-        result = self.sender("WCP-0001", "12345@c.us")
-
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["method"], "fallback")
+        mock_fallback.assert_called_once()
 
 
 class TestSendFallbackProductMessage(IntegrationTestCase):
@@ -360,22 +188,3 @@ class TestGetCatalogProducts(IntegrationTestCase):
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(len(result["products"]), 1)
-
-
-class TestSyncCatalogProducts(IntegrationTestCase):
-    """Test sync_catalog_products whitelisted method."""
-
-    @patch("openwa_bridge.catalog.frappe.has_permission")
-    @patch("openwa_bridge.catalog.frappe.get_all")
-    @patch("openwa_bridge.catalog.sync_single_product")
-    def test_sync_all_pending(self, mock_sync, mock_get_all, mock_perm):
-        mock_perm.return_value = True
-        mock_get_all.return_value = [{"name": "WCP-0001"}, {"name": "WCP-0002"}]
-        mock_sync.return_value = {"status": "ok", "method": "local"}
-
-        from openwa_bridge.catalog import sync_catalog_products
-        result = sync_catalog_products("test-account")
-
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["synced"], 2)
-        self.assertEqual(result["failed"], 0)
