@@ -1,0 +1,326 @@
+{
+ "doctype": "Workspace",
+ "label": "Frappe Whatsapp",
+ "title": "Frappe Whatsapp",
+ "module": "Frappe Whatsapp",
+ "app": "openwa_bridge",
+ "icon": "brand-whatsapp",
+ "type": "Workspace",
+ "standard": 1,
+ "public": 1,
+ "sequence_id": 15,
+ "indicator_color": "green",
+ "hide_custom": 0,
+ "content": "[]",
+ "shortcuts": [
+  {
+   "label": "WhatsApp Account",
+   "type": "DocType",
+   "link_to": "WhatsApp Account",
+   "doc_view": "List",
+   "color": "green",
+   "description": "Connect and manage WhatsApp Business accounts",
+   "onboard": 1
+  },
+  {
+   "label": "WhatsApp Profile",
+   "type": "DocType",
+   "link_to": "WhatsApp Profiles",
+   "doc_view": "List",
+   "color": "cyan",
+   "description": "Manage WhatsApp business profiles"
+  },
+  {
+   "label": "WhatsApp Message",
+   "type": "DocType",
+   "link_to": "WhatsApp Message",
+   "doc_view": "List",
+   "color": "blue",
+   "description": "View all sent and received WhatsApp messages",
+   "onboard": 1
+  },
+  {
+   "label": "WhatsApp Templates",
+   "type": "DocType",
+   "link_to": "WhatsApp Templates",
+   "doc_view": "List",
+   "color": "purple",
+   "description": "Manage pre-approved message templates"
+  },
+  {
+   "label": "WhatsApp Notification",
+   "type": "DocType",
+   "link_to": "WhatsApp Notification",
+   "doc_view": "List",
+   "color": "red",
+   "description": "Configure automated WhatsApp notifications"
+  },
+  {
+   "label": "WhatsApp Settings",
+   "type": "DocType",
+   "link_to": "WhatsApp Settings",
+   "doc_view": "Form",
+   "color": "grey",
+   "description": "System-wide WhatsApp configuration"
+  }
+ ],
+ "links": [
+  {
+   "type": "Card Break",
+   "label": "Accounts & Profiles",
+   "icon": "users",
+   "description": "Manage WhatsApp accounts and business profiles"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Account",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Account",
+   "onboard": 1
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Profiles",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Profiles"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Settings",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Settings"
+  },
+  {
+   "type": "Card Break",
+   "label": "Messages & Templates",
+   "icon": "message-square",
+   "description": "Messages, templates, and bulk sending"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Message",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Message",
+   "onboard": 1
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Message Fields",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Message Fields"
+  },
+  {
+   "type": "Link",
+   "label": "Bulk WhatsApp Message",
+   "link_type": "DocType",
+   "link_to": "Bulk WhatsApp Message"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Templates",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Templates"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Button",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Button"
+  },
+  {
+   "type": "Card Break",
+   "label": "Flows",
+   "icon": "git-branch",
+   "description": "Interactive WhatsApp Flows"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Flow",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Flow"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Flow Screen",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Flow Screen"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Flow Field",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Flow Field"
+  },
+  {
+   "type": "Card Break",
+   "label": "Notifications & Recipients",
+   "icon": "bell",
+   "description": "Notification rules and recipient management"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Notification",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Notification"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Notification Log",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Notification Log"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Recipient",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Recipient"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Recipient List",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Recipient List"
+  }
+ ],
+ "charts": [],
+ "number_cards": [],
+ "quick_lists": [],
+ "custom_blocks": [],
+ "sidebar_items": [
+  {
+   "type": "Link",
+   "label": "WhatsApp Account",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Account",
+   "icon": "user"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Profiles",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Profiles",
+   "icon": "user-check"
+  },
+  {
+   "type": "Section Break",
+   "label": "Messaging",
+   "icon": "message-circle",
+   "collapsible": 0
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Message",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Message",
+   "icon": "message-circle"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Message Fields",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Message Fields",
+   "icon": "list"
+  },
+  {
+   "type": "Link",
+   "label": "Bulk WhatsApp Message",
+   "link_type": "DocType",
+   "link_to": "Bulk WhatsApp Message",
+   "icon": "send"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Templates",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Templates",
+   "icon": "file-text"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Button",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Button",
+   "icon": "square"
+  },
+  {
+   "type": "Section Break",
+   "label": "Flows",
+   "icon": "git-branch",
+   "collapsible": 1
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Flow",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Flow",
+   "icon": "git-branch"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Flow Screen",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Flow Screen",
+   "icon": "layout"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Flow Field",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Flow Field",
+   "icon": "list"
+  },
+  {
+   "type": "Section Break",
+   "label": "Notifications",
+   "icon": "bell",
+   "collapsible": 1
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Notification",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Notification",
+   "icon": "bell"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Notification Log",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Notification Log",
+   "icon": "activity"
+  },
+  {
+   "type": "Section Break",
+   "label": "Recipients",
+   "icon": "users",
+   "collapsible": 1
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Recipient",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Recipient",
+   "icon": "user-plus"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Recipient List",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Recipient List",
+   "icon": "users"
+  },
+  {
+   "type": "Section Break",
+   "label": "Configuration",
+   "icon": "settings",
+   "collapsible": 0
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Settings",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Settings",
+   "icon": "settings"
+  }
+ ]
+}

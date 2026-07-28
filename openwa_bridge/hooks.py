@@ -4,6 +4,7 @@ app_publisher = "Manaa Soft"
 app_description = "Seamlessly integrates the OpenWA Gateway with the core frappe_whatsapp module for reliable WhatsApp routing."
 app_email = "manaamnaa2018@gmail.com"
 app_license = "gpl-3.0"
+app_icon = "/assets/openwa_bridge/icons/openwa_bridge.svg"
 
 # Send non-GET requests for this app's endpoints as native `application/json`
 # bodies instead of form-encoded, per-key JSON-stringified values.

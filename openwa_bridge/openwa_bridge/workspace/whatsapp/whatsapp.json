@@ -1,57 +1,145 @@
 {
- "name": "WhatsApp",
- "module": "OpenWA Bridge",
  "doctype": "Workspace",
- "title": "WhatsApp",
- "icon": "octicon octicon-comment-discussion",
- "type": "Link",
- "link": "whatsapp",
- "app": "openwa_bridge",
  "label": "WhatsApp",
- "category": "Modules",
+ "title": "WhatsApp",
+ "module": "OpenWA Bridge",
+ "app": "openwa_bridge",
+ "icon": "brand-whatsapp",
+ "type": "Workspace",
+ "standard": 1,
+ "public": 1,
+ "sequence_id": 10,
+ "indicator_color": "green",
+ "hide_custom": 0,
+ "content": "[]",
  "shortcuts": [
   {
    "label": "WhatsApp Account",
-   "type": "Link",
-   "link": "Form/WhatsApp Account",
+   "type": "DocType",
+   "link_to": "WhatsApp Account",
+   "doc_view": "List",
+   "color": "green",
    "description": "Manage WhatsApp accounts and OpenWA sessions",
-   "onboard": 1,
-   "dependencies": "WhatsApp Account"
+   "onboard": 1
   },
   {
    "label": "WhatsApp Message",
-   "type": "Link",
-   "link": "List/WhatsApp Message",
+   "type": "DocType",
+   "link_to": "WhatsApp Message",
+   "doc_view": "List",
+   "color": "blue",
    "description": "View all WhatsApp messages (incoming and outgoing)",
-   "onboard": 1,
-   "dependencies": "WhatsApp Message"
-  },
-  {
-   "label": "WhatsApp Templates",
-   "type": "Link",
-   "link": "List/WhatsApp Templates",
-   "description": "Manage message templates synced with OpenWA",
-   "dependencies": "WhatsApp Templates"
-  },
-  {
-   "label": "WhatsApp Notification",
-   "type": "Link",
-   "link": "List/WhatsApp Notification",
-   "description": "Configure notification rules for documents",
-   "dependencies": "WhatsApp Notification"
+   "onboard": 1
   },
   {
    "label": "OpenWA Outbox",
-   "type": "Link",
-   "link": "List/OpenWA Outbox",
-   "description": "View queued outgoing messages and retry status",
-   "dependencies": "OpenWA Outbox"
+   "type": "DocType",
+   "link_to": "OpenWA Outbox",
+   "doc_view": "List",
+   "color": "orange",
+   "description": "View queued outgoing messages and retry status"
+  },
+  {
+   "label": "WhatsApp Templates",
+   "type": "DocType",
+   "link_to": "WhatsApp Templates",
+   "doc_view": "List",
+   "color": "purple",
+   "description": "Manage message templates synced with OpenWA"
+  },
+  {
+   "label": "WhatsApp Notification",
+   "type": "DocType",
+   "link_to": "WhatsApp Notification",
+   "doc_view": "List",
+   "color": "red",
+   "description": "Configure notification rules for documents"
+  },
+  {
+   "label": "WhatsApp Catalog Product",
+   "type": "DocType",
+   "link_to": "WhatsApp Catalog Product",
+   "doc_view": "List",
+   "color": "cyan",
+   "description": "Manage products for WhatsApp catalog sharing"
   },
   {
    "label": "OpenWA Bridge Settings",
-   "type": "Link",
-   "link": "Form/OpenWA Bridge Settings",
+   "type": "DocType",
+   "link_to": "OpenWA Bridge Settings",
+   "doc_view": "Form",
+   "color": "grey",
    "description": "System-wide OpenWA Bridge configuration"
+  }
+ ],
+ "links": [
+  {
+   "type": "Card Break",
+   "label": "Accounts",
+   "icon": "user",
+   "description": "Manage WhatsApp accounts and sessions"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Account",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Account",
+   "onboard": 1
+  },
+  {
+   "type": "Card Break",
+   "label": "Messages",
+   "icon": "message-circle",
+   "description": "Outgoing and incoming messages"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Message",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Message",
+   "onboard": 1
+  },
+  {
+   "type": "Link",
+   "label": "OpenWA Outbox",
+   "link_type": "DocType",
+   "link_to": "OpenWA Outbox"
+  },
+  {
+   "type": "Card Break",
+   "label": "Content",
+   "icon": "file-text",
+   "description": "Templates, notifications, and products"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Templates",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Templates"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Notification",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Notification"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Catalog Product",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Catalog Product"
+  },
+  {
+   "type": "Card Break",
+   "label": "Configuration",
+   "icon": "settings",
+   "description": "System settings"
+  },
+  {
+   "type": "Link",
+   "label": "OpenWA Bridge Settings",
+   "link_type": "DocType",
+   "link_to": "OpenWA Bridge Settings"
   }
  ],
  "charts": [
@@ -64,6 +152,58 @@
    "is_custom": 0
   }
  ],
+ "number_cards": [],
  "quick_lists": [],
- "onboard": 1
+ "custom_blocks": [],
+ "sidebar_items": [
+  {
+   "type": "Link",
+   "label": "WhatsApp Account",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Account",
+   "icon": "user"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Message",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Message",
+   "icon": "message-circle"
+  },
+  {
+   "type": "Link",
+   "label": "OpenWA Outbox",
+   "link_type": "DocType",
+   "link_to": "OpenWA Outbox",
+   "icon": "send"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Templates",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Templates",
+   "icon": "file-text"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Notification",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Notification",
+   "icon": "bell"
+  },
+  {
+   "type": "Link",
+   "label": "WhatsApp Catalog Product",
+   "link_type": "DocType",
+   "link_to": "WhatsApp Catalog Product",
+   "icon": "package"
+  },
+  {
+   "type": "Link",
+   "label": "OpenWA Bridge Settings",
+   "link_type": "DocType",
+   "link_to": "OpenWA Bridge Settings",
+   "icon": "settings"
+  }
+ ]
 }
