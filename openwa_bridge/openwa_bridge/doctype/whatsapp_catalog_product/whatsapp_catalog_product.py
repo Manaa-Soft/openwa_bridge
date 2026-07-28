@@ -9,7 +9,7 @@ class WhatsAppCatalogProduct(Document):
         self._auto_fetch_item_fields()
 
     def _auto_fetch_item_fields(self) -> None:
-        if not self.item_code:
+        if not self.item_code or self.get("__islocal") != 1:
             return
         item = frappe.db.get_value(
             "Item",

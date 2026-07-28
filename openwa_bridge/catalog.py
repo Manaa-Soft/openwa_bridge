@@ -101,6 +101,8 @@ def _sync_single_product(product) -> dict:  # noqa: ANN001
     """Sync one WhatsApp Catalog Product to OpenWA.
 
     Can be called from the DocType controller or directly.
+    Uses ``doc.save()`` instead of raw ``set_value`` so Frappe's
+    optimistic concurrency ``modified`` timestamp stays in sync.
     """
     account = _get_account(product.whatsapp_account)
     payload = _build_product_payload(product)
@@ -108,22 +110,17 @@ def _sync_single_product(product) -> dict:  # noqa: ANN001
     try:
         result = _call_openwa(account, "POST", "/catalog/products", json_data=payload)
     except requests.exceptions.HTTPError as exc:
-        frappe.db.set_value("WhatsApp Catalog Product", product.name,
-                            "sync_status", "Failed")
-        frappe.db.commit()
+        product.sync_status = "Failed"
+        product.save()
         error_msg = _extract_error(exc)
         frappe.log_error(title="WhatsApp Catalog: Sync Failed",
                          message=f"Product {product.name}: {error_msg}")
         return {"status": "error", "error": error_msg}
 
     if isinstance(result, dict) and result.get("statusCode") == 501:
-        # Mark as synced anyway — the product data is stored locally and
-        # will be usable via the fallback message path.
-        frappe.db.set_value("WhatsApp Catalog Product", product.name, {
-            "sync_status": "Synced",
-            "last_sync_on": frappe.utils.now(),
-        })
-        frappe.db.commit()
+        product.sync_status = "Synced"
+        product.last_sync_on = frappe.utils.now()
+        product.save()
         return {"status": "ok", "method": "local",
                 "message": "Stored locally (OpenWA catalog not yet available)"}
 
@@ -131,12 +128,10 @@ def _sync_single_product(product) -> dict:  # noqa: ANN001
     if isinstance(result, dict):
         openwa_id = result.get("id") or result.get("productId") or ""
 
-    frappe.db.set_value("WhatsApp Catalog Product", product.name, {
-        "sync_status": "Synced",
-        "openwa_product_id": openwa_id,
-        "last_sync_on": frappe.utils.now(),
-    })
-    frappe.db.commit()
+    product.sync_status = "Synced"
+    product.openwa_product_id = openwa_id
+    product.last_sync_on = frappe.utils.now()
+    product.save()
     return {"status": "ok", "method": "openwa", "openwa_product_id": openwa_id}
 
 
