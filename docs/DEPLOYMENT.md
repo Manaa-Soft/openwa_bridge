@@ -161,6 +161,17 @@ CHANNELS_ENABLED=true
 
 # Status (Stories) support: enables status/story webhook events.
 STATUS_ENABLED=true
+
+# =============================================================================
+# v0.12.x FEATURES (OpenWA 0.12.0+)
+# =============================================================================
+# Pin the WhatsApp Web locale so the onboarding-modal auto-dismissal detector
+# matches. PUPPETEER_ARGS REPLACES the default flag list — repeat existing flags.
+# PUPPETEER_ARGS=--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu,--lang=en-US
+#
+# Accept additional "Continue" button labels for a localised onboarding modal
+# (comma-separated). Only needed if your WhatsApp Web renders non-English.
+# WWEBJS_ONBOARDING_CONTINUE_LABELS=Continuer,Continuar
 ```
 
 > **Key settings explained:**
@@ -362,6 +373,8 @@ REDIS_URL=redis://:your-redis-password-here@127.0.0.1:6385
 | `send-template` returns 404 | Template deleted when session recreated | Bridge auto-recovers: looks up by name, re-creates if missing |
 | Template not found in error logs | Stale `openwa_template_id` after session recreate | Re-save template in Frappe to re-sync, or let outbox auto-recover |
 | Messages stuck as Pending | Session dead or API key wrong | Check `curl http://localhost:2785/api/sessions`, verify session ID matches Frappe |
+| Session shows "Action Required" (0.12.0+) | WhatsApp "What's new" onboarding modal not dismissed | Acknowledge the modal once in a browser signed in as that account, then use the **Recover** button (stop→start, no QR rescan) |
+| Sends return 409 with a live engine | Session in reconnect backoff (`disconnected` + engine loaded) | Do nothing — the gateway reconnects automatically. `start` answers 400 during backoff |
 
 ### systemd Boot Chain
 
@@ -451,6 +464,22 @@ Both approaches produce the same result — the recipient sees "typing..." befor
 
 ---
 
+## OpenWA 0.12.x Behaviour (bridge support)
+
+The bridge is aware of the OpenWA 0.12.x session-lifecycle changes:
+
+| Feature | What changed | Bridge behaviour |
+|---|---|---|
+| `engineLoaded` (0.12.1) | Session payload reports whether the gateway holds a live engine | Health check only restarts `disconnected` sessions **without** a live engine. A reconnecting session (engine loaded) is left alone — `start` would answer 400 there. |
+| `action_required` status (0.12.0) | New status when the "What's new" onboarding modal needs a human; sends return 409 until cleared | Health check auto-runs **stop→start** once (no QR rescan). If still stuck, the account shows "Action Required" with `lastError` and a **Recover** button. Acknowledging the modal once in a browser signed in as that account clears it permanently. |
+| `POST /sessions/:id/logout` (0.12.0) | New endpoint that unlinks the device from the WhatsApp account | New **Unlink** button on the WhatsApp Account page. `200` → device removed from Linked Devices, credentials wiped (fresh QR scan required). `502` `SESSION_LOGOUT_INCOMPLETE` → session stopped locally, retry after starting. |
+| `force-kill` returns `400` (0.12.0) | Breaking: force-kill with no live engine now answers 400 instead of 200 | Health check no longer force-kills `failed` sessions (evicted by design) — it deletes and recreates them directly. |
+| `409 SESSION_NAME_TEARDOWN_PENDING` (0.12.0) | Retryable 409 on `start`/`delete` while a prior logout owns cleanup | Bridge retries briefly before treating it as a failure. |
+
+**Note:** upgrade OpenWA to **0.12.1+** so `engineLoaded` is present. On 0.12.0 (field absent) the bridge falls back to the pre-0.12 behaviour for `disconnected` sessions.
+
+---
+
 ## Testing Checklist
 
 ### Basic Message Flow
@@ -495,6 +524,12 @@ Both approaches produce the same result — the recipient sees "typing..." befor
 - [ ] Verify Communication record created
 - [ ] Verify new contact/lead created for unknown numbers
 - [ ] Send reaction -> verify reaction recorded
+
+### OpenWA 0.12.x
+- [ ] Reconnecting session (`disconnected` + engine loaded) is NOT restarted by the health check
+- [ ] `action_required` session auto-recovers via stop→start; if stuck, account shows "Action Required" + Recover button
+- [ ] Unlink button removes the device from the account's Linked Devices (fresh QR required to reconnect)
+- [ ] Unlink while not started returns a clear "not started" error
 
 ---
 

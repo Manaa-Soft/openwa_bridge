@@ -564,6 +564,7 @@ def _handle_session_status(event_data: dict, session_id: str) -> None:
         "ready": "Active",
         "disconnected": "Inactive",
         "failed": "Inactive",
+        "action_required": "Inactive",
     }
     frappe_status = status_map.get(status)
     if not frappe_status:
@@ -597,6 +598,23 @@ def _handle_session_status(event_data: dict, session_id: str) -> None:
                     f"Session {session_id} status changed to '{status}'. "
                     f"{pending_count} pending outbox entries will be retried "
                     f"automatically when the session reconnects."
+                ),
+            )
+
+        # action_required (OpenWA 0.12.0+) — the "What's new" onboarding modal
+        # needs a human. Sends return 409 until it is acknowledged, so surface
+        # lastError and the recovery step instead of treating it like a plain
+        # disconnect.
+        if status == "action_required":
+            last_error = event_data.get("lastError") or ""
+            frappe.log_error(
+                title=f"OpenWA: Session action_required on {account_name}",
+                message=(
+                    f"Session {session_id} needs an operator: "
+                    f"{last_error or 'WhatsApp onboarding modal not dismissed'}. "
+                    "Acknowledge the 'What's new' modal in a browser signed in "
+                    "as that account, then stop and start the session — no QR "
+                    "rescan is needed."
                 ),
             )
 

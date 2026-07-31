@@ -87,6 +87,22 @@ class TestHandleSessionStatus(IntegrationTestCase):
         )
 
     @patch("openwa_bridge.inbound.frappe")
+    def test_action_required_sets_inactive_and_logs(self, mock_frappe):
+        """action_required (OpenWA 0.12.0+) should set Inactive and log."""
+        mock_frappe.db.get_value.return_value = "Test Account"
+        mock_frappe.db.set_value.return_value = None
+        mock_frappe.db.count.return_value = 0
+
+        self.handler(
+            make_session_status_data("action_required"), "session-001"
+        )
+
+        mock_frappe.db.set_value.assert_called_once_with(
+            "WhatsApp Account", "Test Account", "status", "Inactive"
+        )
+        mock_frappe.log_error.assert_called_once()
+
+    @patch("openwa_bridge.inbound.frappe")
     def test_unknown_status_noop(self, mock_frappe):
         """Unknown status should not update anything."""
         self.handler(make_session_status_data("connecting"), "session-001")

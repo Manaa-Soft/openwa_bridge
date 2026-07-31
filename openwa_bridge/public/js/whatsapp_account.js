@@ -28,6 +28,7 @@ frappe.ui.form.on("WhatsApp Account", {
                     frm.page.set_indicator(label, "green");
                     _add_disconnect_button(frm);
                     _add_manage_events_button(frm);
+                    _add_unlink_button(frm);
                     _add_delete_session_button(frm);
                 } else if (s === "qr_ready" || s === "initializing") {
                     frm.page.set_indicator(__("Scan QR Code"), "orange");
@@ -44,12 +45,31 @@ frappe.ui.form.on("WhatsApp Account", {
                     const errMsg = r.message.error || __("OpenWA Error");
                     frm.page.set_indicator(errMsg, "red");
                     _add_reconnect_button(frm);
+                } else if (s === "action_required") {
+                    // OpenWA 0.12.0+: the "What's new" onboarding modal needs a
+                    // human. Recover re-drives the engine (no QR rescan).
+                    const lastError = r.message.last_error || __("WhatsApp onboarding modal needs acknowledgment");
+                    frm.page.set_indicator(__("Action Required"), "orange");
+                    frappe.show_alert({
+                        message: __("Action Required: {0}", [lastError]),
+                        indicator: "orange",
+                        duration: 8,
+                    });
+                    _add_recover_button(frm);
+                    _add_manage_events_button(frm);
+                    _add_delete_session_button(frm);
                 } else if (s === "failed") {
                     frm.page.set_indicator(__("Session Failed — Reconnect to Fix"), "red");
                     _add_reconnect_button(frm);
                     _add_delete_session_button(frm);
+                } else if (s === "disconnected" && r.message.engine_loaded) {
+                    // Live engine still registered — automatic reconnect backoff
+                    // is in progress. Start would answer 400, so leave it alone.
+                    frm.page.set_indicator(__("Reconnecting..."), "orange");
+                    _add_manage_events_button(frm);
+                    _add_delete_session_button(frm);
                 } else {
-                    // disconnected / created / unknown
+                    // disconnected (no engine) / created / unknown
                     frm.page.set_indicator(__("Disconnected"), "red");
                     _add_reconnect_button(frm);
                     _add_manage_events_button(frm);
@@ -113,6 +133,87 @@ function _add_reconnect_button(frm) {
             );
         },
         __("OpenWA")
+    );
+}
+
+function _add_recover_button(frm) {
+    frm.add_custom_button(
+        __("Recover"),
+        () => {
+            frappe.confirm(
+                __("Restart the WhatsApp session to clear the onboarding modal? The session will stop and start again using the stored login — no QR scan is needed."),
+                () => {
+                    frappe.call({
+                        method: "openwa_bridge.whatsapp_account.recover_openwa_session",
+                        args: { account_name: frm.doc.name },
+                        freeze: true,
+                        freeze_message: __("Recovering session..."),
+                        callback(r) {
+                            const msg = r.message || {};
+                            if (msg.status === "error") {
+                                frappe.msgprint({
+                                    title: __("Recovery Failed"),
+                                    indicator: "red",
+                                    message: msg.error,
+                                });
+                                return;
+                            }
+                            frappe.show_alert({
+                                message: __("Session restarted"),
+                                indicator: "green",
+                            });
+                            frm.reload_doc();
+                        },
+                    });
+                }
+            );
+        },
+        __("OpenWA")
+    );
+}
+
+function _add_unlink_button(frm) {
+    frm.add_custom_button(
+        __("Unlink"),
+        () => {
+            frappe.confirm(
+                __("Unlink this device from the WhatsApp account? The device is removed from the account's Linked Devices and a fresh QR scan (or pairing code) is required to reconnect. The session is not deleted from OpenWA — delete the session separately to remove local data too."),
+                () => {
+                    frappe.call({
+                        method: "openwa_bridge.whatsapp_account.logout_openwa_session",
+                        args: { account_name: frm.doc.name },
+                        freeze: true,
+                        freeze_message: __("Unlinking device..."),
+                        callback(r) {
+                            const msg = r.message || {};
+                            if (msg.status === "error") {
+                                frappe.msgprint({
+                                    title: __("Unlink Failed"),
+                                    indicator: "red",
+                                    message: msg.error,
+                                });
+                                return;
+                            }
+                            if (msg.status === "incomplete") {
+                                frappe.msgprint({
+                                    title: __("Unlink Incomplete"),
+                                    indicator: "orange",
+                                    message: msg.error,
+                                });
+                                return;
+                            }
+                            frappe.show_alert({
+                                message: __("Device unlinked — scan the QR code to reconnect"),
+                                indicator: "green",
+                            });
+                            frm.reload_doc();
+                        },
+                    });
+                }
+            );
+        },
+        __("OpenWA"),
+        true  // right-aligned
     );
 }
 

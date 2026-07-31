@@ -355,7 +355,8 @@ def get_openwa_session_status(account_name: str) -> dict:
     """Return the current OpenWA session status for the given WhatsApp Account.
 
     Returns:
-        dict: { status, phone, push_name, connected_at, last_active } or
+        dict: { status, phone, push_name, connected_at, last_active,
+               engine_loaded, last_error } or
               { status: "not_found" }  — session deleted from OpenWA
               { status: "auth_error" } — API key invalid or missing access
               { status: "error" }      — OpenWA server unreachable
@@ -398,6 +399,8 @@ def get_openwa_session_status(account_name: str) -> dict:
             "push_name": session.get("pushName"),
             "connected_at": session.get("connectedAt"),
             "last_active": session.get("lastActive"),
+            "engine_loaded": session.get("engineLoaded"),
+            "last_error": session.get("lastError"),
         }
 
     if resp.status_code == 404:
@@ -420,6 +423,8 @@ def get_openwa_session_status(account_name: str) -> dict:
                         "push_name": session.get("pushName"),
                         "connected_at": session.get("connectedAt"),
                         "last_active": session.get("lastActive"),
+                        "engine_loaded": session.get("engineLoaded"),
+                        "last_error": session.get("lastError"),
                     }
             except Exception:
                 pass
@@ -614,6 +619,105 @@ def delete_openwa_session(account_name: str) -> dict:
         f"OpenWA: deleted session '{session_id}' for '{account_name}'"
     )
     return {"status": "deleted"}
+
+
+@frappe.whitelist()
+def recover_openwa_session(account_name: str) -> dict:
+    """Stop then start an ``action_required`` session (OpenWA 0.12.0+).
+
+    Sessions stuck on WhatsApp's "What's new" onboarding modal sit in
+    ``action_required`` and every send answers 409. A stop→start re-drives the
+    engine from the stored credentials — no QR rescan is needed.
+
+    Returns:
+        dict: { status: "restarted" } or { status: "error", error: "..." }
+    """
+    if not frappe.has_permission("WhatsApp Account", "write", account_name):
+        frappe.throw("Insufficient permissions to manage WhatsApp Account.", frappe.PermissionError)
+    account = _get_account(account_name)
+    try:
+        openwa_api(account, "POST", "/stop")
+    except Exception as exc:
+        return {"status": "error", "error": f"Failed to stop session: {exc}"}
+    time.sleep(2)
+    try:
+        _start_session(account)
+    except Exception as exc:
+        return {"status": "error", "error": f"Failed to restart session: {exc}"}
+    return {"status": "restarted"}
+
+
+@frappe.whitelist()
+def logout_openwa_session(account_name: str) -> dict:
+    """Unlink the device from the WhatsApp account (OpenWA 0.12.0+).
+
+    Calls ``POST /api/sessions/:id/logout``. A ``200`` means the engine-native
+    unlink completed AND the local credential cleanup completed — the device is
+    removed from the account's Linked Devices and a fresh QR scan / pairing
+    code is required to reconnect. A ``502`` (``SESSION_LOGOUT_INCOMPLETE``)
+    means the session was stopped locally but WhatsApp never confirmed the
+    unlink — retryable.
+
+    Returns:
+        dict: { status: "unlinked" } |
+              { status: "incomplete", error } |
+              { status: "error", error }
+    """
+    if not frappe.has_permission("WhatsApp Account", "write", account_name):
+        frappe.throw("Insufficient permissions to manage WhatsApp Account.", frappe.PermissionError)
+    account = _get_account(account_name)
+    session_id = account.get("openwa_session_id")
+    if not session_id:
+        frappe.throw("No session ID set for this account.")
+
+    base_url = account.get("openwa_base_url").strip("/")
+    api_key = get_api_key(account)
+    headers = {"Content-Type": "application/json", "X-API-Key": api_key}
+    url = f"{base_url}/api/sessions/{session_id}/logout"
+
+    try:
+        resp = _http_session.post(url, headers=headers, timeout=60)
+    except requests.exceptions.ConnectionError:
+        return {"status": "error", "error": "Could not reach OpenWA server."}
+    except requests.exceptions.Timeout:
+        return {"status": "error", "error": "OpenWA server timed out."}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+    if resp.status_code == 200:
+        # Device unlinked — credentials wiped. Clear the doc so the user is
+        # taken through a fresh QR setup.
+        frappe.db.set_value("WhatsApp Account", account_name, "openwa_session_id", "")
+        frappe.db.set_value("WhatsApp Account", account_name, "status", "Inactive")
+        frappe.db.commit()
+        frappe.cache().delete_value(f"openwa_account:{account_name}")
+        frappe.logger().info(
+            f"OpenWA: session '{session_id}' unlinked for '{account_name}'"
+        )
+        return {"status": "unlinked"}
+
+    if resp.status_code == 502:
+        try:
+            code = resp.json().get("code", "")
+        except Exception:
+            code = ""
+        if code == "SESSION_LOGOUT_INCOMPLETE":
+            return {
+                "status": "incomplete",
+                "error": (
+                    "The session was stopped locally, but WhatsApp did not "
+                    "confirm the unlink. Start the session again and retry."
+                ),
+            }
+        return {"status": "error", "error": "OpenWA returned 502 on logout."}
+
+    if resp.status_code == 400:
+        return {"status": "error", "error": "Session is not started — nothing to unlink."}
+
+    if resp.status_code in (401, 403):
+        return {"status": "error", "error": "OpenWA API key invalid or not authorized."}
+
+    return {"status": "error", "error": f"OpenWA returned {resp.status_code} on logout."}
 
 
 # ---------------------------------------------------------------------------
