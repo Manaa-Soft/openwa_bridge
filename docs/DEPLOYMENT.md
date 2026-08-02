@@ -478,6 +478,8 @@ The bridge is aware of the OpenWA 0.12.x session-lifecycle changes:
 
 **Note:** upgrade OpenWA to **0.12.1+** so `engineLoaded` is present. On 0.12.0 (field absent) the bridge falls back to the pre-0.12 behaviour for `disconnected` sessions.
 
+**0.12.2–0.12.4 (internal releases):** no API-contract changes — `openapi.json` is byte-identical to 0.12.1 — so the bridge needs no changes for them. Recommended version is **0.12.4** (includes the 0.12.3 `AUTO_START_SESSIONS` fix). Deployment note: since 0.12.3, `.env.example` no longer pins a full settings file — do **not** blindly `cp .env.example .env`; copy only the variables you actually override (e.g. `AUTO_START_SESSIONS=true`).
+
 ---
 
 ## Testing Checklist
