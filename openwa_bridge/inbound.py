@@ -24,14 +24,14 @@ MAX_MEDIA_SIZE_MB = 10
 @frappe.whitelist(allow_guest=True)
 def receive_openwa_message() -> dict[str, str]:
     """
-    Inbound webhook endpoint for OpenWA Gateway.
-
-    Configure in OpenWA dashboard:
-      URL: https://your-domain/api/method/openwa_bridge.inbound.receive_openwa_message
-      Events: message.received, message.ack, message.failed
-      Secret: (set same value in WhatsApp Account -> openwa_webhook_secret)
-
-    Always returns HTTP 200 to prevent OpenWA retry loops.
+    Process an OpenWA webhook payload and route supported events to their handlers.
+    
+    Invalid JSON, missing event data, rate-limit violations, and failed signature
+    checks return an error status. Duplicate events return a duplicate status; other
+    accepted events return an OK status.
+    
+    Returns:
+        dict[str, str]: A status response describing the webhook result.
     """
     raw_body = frappe.request.get_data()
     try:
@@ -161,7 +161,15 @@ def _handle_inbound_message(
     whatsapp_account: "WhatsAppAccount | None",  # noqa: F821
     session_id: str,
 ) -> None:
-    """Map OpenWA ``message.received`` to WhatsApp Message DocType."""
+    """
+    Create a WhatsApp Message record from an incoming OpenWA message event.
+    
+    Parameters:
+    	msg_data (dict): OpenWA message event data.
+    	whatsapp_account (WhatsAppAccount | None): Account associated with the message, when already resolved.
+    	session_id (str): OpenWA session identifier used to resolve the account and sender.
+    
+    """
     # Skip outgoing echo
     if msg_data.get("fromMe"):
         return
@@ -353,13 +361,11 @@ def _attach_openwa_media(message_doc: "Document", media_info: dict) -> None:  # 
 
 
 def _handle_message_sent(event_data: dict) -> None:
-    """Store message_id on the WhatsApp Message when ``message.sent`` arrives.
-
-    OpenWA fires ``message.sent`` with the full message object (``id``, ``to``,
-    ``body``, etc.) but NO ``status`` field.  This event arrives BEFORE
-    ``message.ack`` and is the earliest opportunity to link the WhatsApp
-    message ID back to the Frappe WhatsApp Message doc — which is critical
-    for the ``message.ack`` handler and the outbox idempotency guards.
+    """
+    Associate an OpenWA message ID with the most recent matching outgoing WhatsApp message.
+    
+    Parameters:
+    	event_data (dict): OpenWA event data containing the message ID and recipient.
     """
     wa_msg_id: str = event_data.get("id", "")
     if not wa_msg_id:
@@ -483,13 +489,16 @@ def _handle_status_update(event_data: dict) -> None:
 
 
 def _find_whatsapp_message(wa_msg_id: str) -> str | None:
-    """Find a WhatsApp Message by its WhatsApp message ID.
-
-    Primary lookup: exact match on ``message_id`` column.
-    Fallback: extract the phone number from the JID embedded in the
-    message ID (e.g. ``true_12345@c.us_3EB0...`` → ``12345``) and
-    search for the most recent outgoing message to that phone that
-    still has no ``message_id`` set.
+    """
+    Finds the Frappe document name associated with an OpenWA message ID.
+    
+    Parameters:
+        wa_msg_id (str): The OpenWA message identifier.
+    
+    Returns:
+        str | None: The matching WhatsApp Message document name, or None when no
+            matching message is found. Fallback matches are associated with the
+            supplied message ID for future lookups.
     """
     name = frappe.db.get_value(
         "WhatsApp Message",
@@ -556,7 +565,13 @@ def _reconcile_outbox_on_ack(whatsapp_message_name: str, message_id: str) -> Non
 
 
 def _handle_session_status(event_data: dict, session_id: str) -> None:
-    """Update WhatsApp Account status from OpenWA session.status events."""
+    """
+    Update the WhatsApp Account status for a recognized OpenWA session event.
+    
+    Parameters:
+    	event_data (dict): OpenWA session event data containing the session status.
+    	session_id (str): OpenWA session identifier used to locate the account.
+    """
     status = event_data.get("status", "")
     if not status:
         return
@@ -741,7 +756,13 @@ def _handle_call_received(event_data: dict, session_id: str) -> None:
 
 
 def _handle_status_received(event_data: dict, session_id: str) -> None:
-    """Log contact status/story updates."""
+    """
+    Log a received contact status or story update.
+    
+    Parameters:
+    	event_data (dict): Event payload containing the contact, status type, caption, and media indicator.
+    	session_id (str): OpenWA session identifier.
+    """
     contact: str = event_data.get("contact", "") or event_data.get("from", "")
     status_type: str = event_data.get("type", "")
     caption: str = event_data.get("caption", "")

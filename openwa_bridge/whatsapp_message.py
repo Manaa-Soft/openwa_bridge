@@ -13,7 +13,11 @@ from openwa_bridge.utils import openwa_api, frappe_to_openwa_vars, get_api_key, 
 
 
 def _send_typing_indicator(base_url: str, session_id: str, api_key: str, chat_id: str, state: str = "typing") -> None:
-    """Send a typing/recording/paused indicator to a chat. Non-blocking — failures are logged and swallowed."""
+    """Send a typing, recording, or paused indicator for a WhatsApp chat.
+    
+    Parameters:
+        state (str): Indicator state to send. Defaults to ``"typing"``.
+    """
     try:
         headers = {"Content-Type": "application/json", "X-API-Key": api_key}
         _http_session.post(
@@ -199,7 +203,16 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
         )
 
     def _send_via_openwa(self, account: "WhatsAppAccount", meta_payload: dict) -> None:  # noqa: F821
-        """Translate and dispatch the payload to the OpenWA Gateway REST API."""
+        """
+        Translate and send the message through the OpenWA Gateway.
+        
+        Parameters:
+        	account (WhatsAppAccount): WhatsApp account containing the OpenWA session configuration.
+        	meta_payload (dict): Message payload data used to construct the OpenWA request.
+        
+        Raises:
+        	Exception: If the session is unavailable, the message content is invalid or unsupported, or OpenWA rejects the request.
+        """
         # Idempotency guard: if the message already has a message_id, it was
         # already sent (possibly by a previous attempt or webhook reconciliation).
         # Do NOT send again — just return.

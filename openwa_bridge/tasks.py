@@ -49,11 +49,13 @@ def _check_session_status(base_url: str, session_id: str, api_key: str) -> dict 
 
 
 def _start_session(base_url: str, session_id: str, api_key: str) -> bool:
-    """POST /api/sessions/:id/start and return True on success.
-
-    A 409 ``SESSION_NAME_TEARDOWN_PENDING`` means a prior logout still owns
-    destructive cleanup for the session name — it is retryable, so we wait
-    briefly and retry up to three times before giving up.
+    """
+    Start an OpenWA session.
+    
+    Retries session teardown conflicts briefly before reporting failure.
+    
+    Returns:
+    	bool: `true` if the session starts successfully or is already started, `false` otherwise.
     """
     for _ in range(4):
         try:
@@ -72,7 +74,16 @@ def _start_session(base_url: str, session_id: str, api_key: str) -> bool:
 
 
 def _stop_session(base_url: str, session_id: str, api_key: str) -> bool:
-    """POST /api/sessions/:id/stop and return True on success."""
+    """Stop an OpenWA session.
+    
+    Parameters:
+        base_url (str): Base URL of the OpenWA server.
+        session_id (str): Identifier of the session to stop.
+        api_key (str): OpenWA API key.
+    
+    Returns:
+        bool: `True` if the session stops successfully or is already stopped, `False` otherwise.
+    """
     try:
         resp = _http_session.post(
             f"{base_url.rstrip('/')}/api/sessions/{session_id}/stop",
@@ -128,7 +139,13 @@ def _poll_status(
 
 
 def _set_account_status(account_name: str, openwa_status: str) -> None:
-    """Update the WhatsApp Account status field based on OpenWA session status."""
+    """
+    Update the WhatsApp Account status to reflect the OpenWA session state.
+    
+    Parameters:
+    	account_name (str): Name of the WhatsApp Account to update.
+    	openwa_status (str): Current OpenWA session status.
+    """
     status_map = {
         "ready": "Active",
         "disconnected": "Inactive",
@@ -168,7 +185,9 @@ def hourly() -> None:
 
 
 def _run_health_check() -> None:
-    """Check all OpenWA sessions and restart any that are disconnected."""
+    """
+    Check all configured OpenWA sessions, recover sessions that require restarting, and synchronize account statuses.
+    """
     accounts = _get_openwa_accounts()
     if not accounts:
         return

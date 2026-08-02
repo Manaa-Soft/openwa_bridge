@@ -1,4 +1,4 @@
-﻿"""Unit tests for WhatsApp Catalog product messaging."""
+"""Unit tests for WhatsApp Catalog product messaging."""
 from __future__ import annotations
 
 from unittest.mock import patch, MagicMock
@@ -49,6 +49,15 @@ class TestSendProductToChat(IntegrationTestCase):
         self.sender = send_product_to_chat
 
     def _make_product_mock(self, **overrides):
+        """
+        Create a mock catalog product with default attributes and optional overrides.
+        
+        Parameters:
+        	**overrides: Product attributes that replace their default values.
+        
+        Returns:
+        	MagicMock: A mock product configured with the specified attributes.
+        """
         product = MagicMock()
         defaults = {
             "name": "WCP-0001",
@@ -231,6 +240,15 @@ class TestSendProductToCustomer(IntegrationTestCase):
         self.sender = send_product_to_customer
 
     def _make_product_mock(self, **overrides):
+        """
+        Create a mock catalog product with default attributes and optional overrides.
+        
+        Parameters:
+        	**overrides: Product attributes that replace their default values.
+        
+        Returns:
+        	MagicMock: A mock product configured with the specified attributes.
+        """
         product = MagicMock()
         defaults = {
             "name": "WCP-0001",
