@@ -26,6 +26,8 @@ OpenWA Bridge is a Frappe app that intercepts `frappe_whatsapp` DocType operatio
 │  │  │    └─ notify() → _send_via_openwa()                  │   │  │
 │  │  │         Routes: text/image/video/audio/doc/reaction/  │   │  │
 │  │  │                  location/contact/poll/reply/template │   │  │
+│  │  │                  edit/sticker                         │   │  │
+│  │  │         Auto-typing indicator before send             │   │  │
 │  │  │                                                      │   │  │
 │  │  │  OverrideWhatsAppTemplates                           │   │  │
 │  │  │    └─ validate() → set_whatsapp_account()             │   │  │
@@ -112,6 +114,7 @@ OpenWA Bridge is a Frappe app that intercepts `frappe_whatsapp` DocType operatio
 │    /api/sessions/:id/messages/send-tmpl  │
 │    /api/sessions/:id/messages/reply      │
 │    /api/sessions/:id/messages/react      │
+│    /api/sessions/:id/messages/edit       │
 │    /api/sessions/:id/messages/send-loc   │
 │    /api/sessions/:id/messages/send-contact│
 │    /api/sessions/:id/messages/send-poll  │
@@ -124,6 +127,35 @@ OpenWA Bridge is a Frappe app that intercepts `frappe_whatsapp` DocType operatio
 │    /api/sessions/:id/contacts/:jid/block │
 │    /api/sessions/:id/pairing-code        │
 │    /api/sessions/:id/templates (CRUD)    │
+│    /api/sessions/:id/statuses            │
+│    /api/sessions/:id/statuses/:id/media  │
+│    /api/sessions/:id/channels            │
+│    /api/sessions/:id/channels/:id/messages│
+│    /api/sessions/:id/messages/batch/:id  │
+│    /api/sessions/:id/stats/overview      │
+│    /api/sessions/:id/stats/messages      │
+│    /api/sessions/:id/groups              │
+│    /api/sessions/:id/groups/:id          │
+│    /api/sessions/:id/groups/join         │
+│    /api/sessions/:id/groups/:id/settings │
+│    /api/sessions/:id/groups/:id/desc     │
+│    /api/sessions/:id/groups/:id/invite   │
+│    /api/sessions/:id/contacts            │
+│    /api/sessions/:id/contacts/:id        │
+│    /api/sessions/:id/contacts/:id/pp     │
+│    /api/sessions/:id/contacts/:id/phone  │
+│    /api/sessions/:id/contacts/pp         │
+│    /api/sessions/:id/chats/delete        │
+│    /api/sessions/:id/status/:id (DEL)    │
+│    /api/sessions/:id/labels/:id          │
+│    /api/sessions/:id/labels/chat/:id     │
+│    /api/sessions/:id/messages/batch/:id/status│
+│    /api/sessions/:id/webhooks/:id/test   │
+│    /api/sessions/:id/catalog             │
+│    /api/sessions/:id/catalog/products    │
+│    /api/sessions/:id/catalog/products/:id│
+│    /api/sessions/:id/messages/send-prod  │
+│    /api/sessions/:id/messages/send-cat   │
 │                                          │
 │  Dashboard: localhost:2886               │
 │  Webhooks: POST to Frappe inbound.py     │
@@ -158,8 +190,8 @@ Each override class extends the parent and selectively intercepts methods:
 - **OverrideWhatsAppMessage**: Intercepts `notify()` — if OpenWA enabled, routes via OpenWA; otherwise falls back to parent (Meta API). Supports `sticker` content type and `@mention` extraction in text messages.
 - **OverrideWhatsAppTemplates**: Intercepts `before_save()` — skips Meta API calls for OpenWA accounts, syncs to OpenWA REST API instead.
 - **OverrideWhatsAppNotification**: Overrides `send_template_message()` and `notify()` — routes by `openwa_send_type` (Template/Jinja/fallback).
-- **whatsapp_account.py**: Not an override class — provides whitelisted methods for QR code display, one-click session setup, contact management, typing indicators, bulk messaging, stickers, and pairing code auth. Registered via `doc_events` for `on_trash` cleanup.
-- **inbound.py**: Webhook endpoint handles 10 event types: `message.received`, `message.sent`, `message.ack`, `message.failed`, `message.revoked`, `message.reaction`, `session.status`, `session.qr`, `session.authenticated`, `session.disconnected`. Auto-creates Communication and Lead/Contact for new inbound messages.
+- **whatsapp_account.py**: Not an override class — provides 67+ whitelisted methods for QR code display, one-click session setup, contact management, typing indicators, bulk messaging, stickers, pairing code auth, group management, labels, channels, catalog, webhook testing, and more. Registered via `doc_events` for `on_trash` cleanup.
+- **inbound.py**: Webhook endpoint handles 17 event types: `message.received`, `message.sent`, `message.ack`, `message.failed`, `message.revoked`, `message.reaction`, `message.edited`, `session.status`, `session.qr`, `session.authenticated`, `session.disconnected`, `session.reconnect_loop`, `group.join`, `group.leave`, `group.update`, `call.received`, `status.received`. Auto-creates Communication and Lead/Contact for new inbound messages. Includes `kind` field logging for message origin discrimination.
 
 ### doc_events Hooks
 
@@ -244,3 +276,26 @@ process_outbox_entry()
 ```
 
 The scheduler safety-net (`process_pending_outbox`) runs every ~4 minutes and re-enqueues any Pending entries whose `next_retry_at` has passed — catches orphaned entries from worker crashes or Redis restarts.
+
+---
+### 8. WhatsApp Catalog Product
+
+The bridge provides a **WhatsApp Catalog Product** DocType that links ERPNext Items
+to WhatsApp for product sharing.  OpenWA does not support catalog operations (neither
+engine implements WhatsApp Business catalog), so all products are sent as richly
+formatted text+image fallback messages.
+
+**DocType**: ``WhatsApp Catalog Product``
+**File**: ``catalog.py`` — whitelisted methods for product messaging
+**Methods added**: 6 (get_catalog_products, get_catalog_product, send_product_to_chat,
+                    send_product_to_customer, send_catalog_to_chat,
+                    send_product_to_chat_direct)
+
+**Send flow**:
+```
+send_product_to_chat(product_name, chat_id)
+  → _send_fallback_product_message()
+       → POST /messages/send-text
+            { chatId, text: "*Product Name*\n\ndesc\n\n*Price:* USD 29.99",
+              mediaUrl: ".../image.png" }
+```

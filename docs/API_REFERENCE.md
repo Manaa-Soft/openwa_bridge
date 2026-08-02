@@ -4,6 +4,10 @@ All endpoints are relative to: `http://<host>:2785/api/sessions/<sessionId>/`
 
 Authentication: `X-API-Key: <api_key>` header on all requests.
 
+> **Note**: The WhatsApp Catalog endpoints (Section 8) are stubs — both whatsapp-web.js
+> and Baileys engines return **501 Not Implemented**. The bridge handles this with a
+> fallback that sends richly formatted text+image messages instead.
+
 ---
 
 ## Messages
@@ -221,6 +225,27 @@ Send a sticker message. Supports URL or base64.
 
 ---
 
+### POST /messages/edit
+
+Edit an already-sent message body.
+
+```json
+{
+  "chatId": "967777715787@c.us",
+  "messageId": "true_967777715787@c.us_3EB0...",
+  "body": "Updated message text"
+}
+```
+
+**DTO fields**:
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `chatId` | string | Yes | Chat where the message was sent |
+| `messageId` | string | Yes | ID of the message to edit |
+| `body` | string | Yes | New message body |
+
+---
+
 ### POST /messages/send-bulk
 
 Send a text message to multiple contacts.
@@ -334,6 +359,102 @@ DELETE /api/sessions/:sessionId/contacts/967777715787@c.us/block
 
 ---
 
+## Status (Stories)
+
+### GET /statuses
+
+List all contact statuses (stories).
+
+```
+GET /api/sessions/:sessionId/statuses
+```
+
+### GET /statuses/:statusId/media
+
+Download the media for a specific status.
+
+```
+GET /api/sessions/:sessionId/statuses/{statusId}/media
+```
+
+---
+
+## Channels
+
+### POST /channels/subscribe
+
+Subscribe to a WhatsApp channel via invite code.
+
+```json
+{
+  "inviteCode": "https://whatsapp.com/channel/0029Vabc..."
+}
+```
+
+### DELETE /channels/:channelId
+
+Unsubscribe from a channel.
+
+```
+DELETE /api/sessions/:sessionId/channels/{channelId}
+```
+
+### GET /channels/:channelId/messages
+
+List messages in a channel.
+
+```
+GET /api/sessions/:sessionId/channels/{channelId}?limit=50
+```
+
+---
+
+## Message Reactions
+
+### GET /messages/:messageId/reactions
+
+Get all reactions for a specific message.
+
+```
+GET /api/sessions/:sessionId/messages/{messageId}/reactions
+```
+
+---
+
+## Batch Operations
+
+### DELETE /messages/batch/:batchId
+
+Cancel a pending batch send operation.
+
+```
+DELETE /api/sessions/:sessionId/messages/batch/{batchId}
+```
+
+---
+
+## Statistics
+
+### GET /stats/overview
+
+Get session overview statistics.
+
+```
+GET /api/sessions/:sessionId/stats/overview
+```
+
+### GET /stats/messages
+
+Get message statistics for a time period.
+
+```
+GET /api/sessions/:sessionId/stats/messages?period=24h
+```
+
+**Query params**: `period` — `1h`, `24h`, `7d`, `30d`
+
+---
+
 ## Templates
 
 Templates are scoped per session. Name must be unique within a session.
@@ -409,15 +530,24 @@ OpenWA sends webhooks to Frappe for incoming messages and status changes.
 | Event | Description | Handler |
 |---|---|---|
 | `message.received` | Incoming message from a contact | `_handle_inbound_message()` — creates WhatsApp Message, Communication, Lead |
-| `message.sent` | Outgoing message acknowledged by server | `_handle_status_update()` — updates message status |
-| `message.ack` | Delivery/read receipt | `_handle_status_update()` — updates message status |
+| `message.sent` | Outgoing message acknowledged by server | `_handle_message_sent()` — updates message status |
+| `message.ack` | Delivery/read receipt | `_handle_status_update()` — updates message status (ack downgrade protection) |
 | `message.failed` | Send failure | `_handle_status_update()` — marks message as Failed |
 | `message.revoked` | Message deleted by sender | `_handle_message_revoked()` — marks message as Revoked |
 | `message.reaction` | Reaction to a message | `_handle_message_reaction()` — logs reaction |
+| `message.edited` | Message edited by sender | `_handle_message_edited()` — updates message body |
 | `session.status` | Session status changed | `_handle_session_status()` — updates account Active/Inactive |
 | `session.qr` | QR code generated (needs scan) | `_handle_session_qr()` — sets account Inactive |
 | `session.authenticated` | Session authenticated successfully | `_handle_session_authenticated()` — sets account Active |
 | `session.disconnected` | Session disconnected | `_handle_session_status()` — sets account Inactive |
+| `session.reconnect_loop` | Session stuck in reconnect loop | `_handle_session_reconnect_loop()` — logs error with recovery suggestion |
+| `group.join` | Participant(s) joined a group | `_handle_group_membership()` — logs join event |
+| `group.leave` | Participant(s) left a group | `_handle_group_membership()` — logs leave event |
+| `group.update` | Group metadata changed (subject, description, etc.) | `_handle_group_update()` — logs changes |
+| `call.received` | Incoming voice/video call | `_handle_call_received()` — logs call event |
+| `status.received` | Contact posted a status/story | `_handle_status_received()` — logs status event |
+
+> **Note**: `test_webhook()` whitelisted method (`openwa_bridge.whatsapp_account.test_webhook`) sends a test webhook delivery — callable from the WhatsApp Account form to verify webhook configuration.
 
 ### Webhook Payload Structure
 
@@ -429,6 +559,7 @@ OpenWA sends webhooks to Frappe for incoming messages and status changes.
     "to": "967777713637@c.us",
     "body": "Hello!",
     "type": "text",
+    "kind": "individual",
     "id": "true_967777715787@c.us_3EB0...",
     "timestamp": 1719312000,
     "chatId": "967777715787@c.us",
@@ -438,6 +569,16 @@ OpenWA sends webhooks to Frappe for incoming messages and status changes.
   }
 }
 ```
+
+**`kind` field** (v0.10.9+): Discriminator for message origin:
+| Value | Description |
+|---|---|
+| `individual` | Direct message (1:1 chat) |
+| `group` | Group message |
+| `channel` | Channel message |
+| `status` | Status/story message |
+| `broadcast` | Broadcast list message |
+| `unknown` | Unrecognized origin |
 
 ### HMAC Verification
 
@@ -703,3 +844,801 @@ Send a sticker message by URL or base64.
 **Args**: `{ account_name: string, chat_id: string, url?: string, base64?: string }`
 
 **Returns**: `{ status: "ok", messageId: "..." }`
+
+---
+
+### edit_message
+
+Edit an already-sent message body.
+
+**Method**: `openwa_bridge.whatsapp_account.edit_message`
+
+**Args**: `{ account_name: string, chat_id: string, message_id: string, body: string }`
+
+**Returns**: `{ status: "ok", result: {...} }`
+
+---
+
+### post_status_text
+
+Post a text status/story.
+
+**Method**: `openwa_bridge.whatsapp_account.post_status_text`
+
+**Args**: `{ account_name: string, text: string, background_color?: string, font?: string }`
+
+**Returns**: `{ status: "ok", result: {...} }`
+
+---
+
+### post_status_image
+
+Post an image status/story.
+
+**Method**: `openwa_bridge.whatsapp_account.post_status_image`
+
+**Args**: `{ account_name: string, url?: string, base64?: string, caption?: string }`
+
+**Returns**: `{ status: "ok", result: {...} }`
+
+---
+
+### post_status_video
+
+Post a video status/story.
+
+**Method**: `openwa_bridge.whatsapp_account.post_status_video`
+
+**Args**: `{ account_name: string, url?: string, base64?: string, caption?: string }`
+
+**Returns**: `{ status: "ok", result: {...} }`
+
+---
+
+### get_statuses
+
+List all contact statuses (stories).
+
+**Method**: `openwa_bridge.whatsapp_account.get_statuses`
+
+**Args**: `{ account_name: string }`
+
+**Returns**: `{ statuses: [...] }`
+
+---
+
+### reject_call
+
+Reject an incoming voice/video call.
+
+**Method**: `openwa_bridge.whatsapp_account.reject_call`
+
+**Args**: `{ account_name: string, call_id: string }`
+
+**Returns**: `{ status: "ok", result: {...} }`
+
+---
+
+### mark_chat_read
+
+Mark all messages in a chat as read.
+
+**Method**: `openwa_bridge.whatsapp_account.mark_chat_read`
+
+**Args**: `{ account_name: string, chat_id: string }`
+
+**Returns**: `{ status: "ok", result: {...} }`
+
+---
+
+### mark_chat_unread
+
+Mark a chat as unread.
+
+**Method**: `openwa_bridge.whatsapp_account.mark_chat_unread`
+
+**Args**: `{ account_name: string, chat_id: string }`
+
+**Returns**: `{ status: "ok", result: {...} }`
+
+---
+
+### get_chat_history
+
+Retrieve message history for a specific chat.
+
+**Method**: `openwa_bridge.whatsapp_account.get_chat_history`
+
+**Args**: `{ account_name: string, chat_id: string, limit?: number }`
+
+**Returns**: `{ messages: [...] }`
+
+---
+
+### search_messages
+
+Search messages by query string.
+
+**Method**: `openwa_bridge.whatsapp_account.search_messages`
+
+**Args**: `{ account_name: string, query: string, limit?: number }`
+
+**Returns**: `{ messages: [...] }`
+
+---
+
+### list_groups
+
+List all groups the session is part of.
+
+**Method**: `openwa_bridge.whatsapp_account.list_groups`
+
+**Args**: `{ account_name: string }`
+
+**Returns**: `{ groups: [...] }`
+
+---
+
+### create_group
+
+Create a new WhatsApp group.
+
+**Method**: `openwa_bridge.whatsapp_account.create_group`
+
+**Args**: `{ account_name: string, name: string, participants: string }`
+
+- `participants`: comma-separated phone numbers or JIDs
+
+**Returns**: `{ status: "ok", groupId: "..." }`
+
+---
+
+### add_group_participants
+
+Add participants to a group.
+
+**Method**: `openwa_bridge.whatsapp_account.add_group_participants`
+
+**Args**: `{ account_name: string, group_id: string, participants: string }`
+
+**Returns**: `{ status: "ok", result: {...} }`
+
+---
+
+### remove_group_participants
+
+Remove participants from a group.
+
+**Method**: `openwa_bridge.whatsapp_account.remove_group_participants`
+
+**Args**: `{ account_name: string, group_id: string, participants: string }`
+
+**Returns**: `{ status: "ok", result: {...} }`
+
+---
+
+### promote_group_admins
+
+Promote participants to group admin.
+
+**Method**: `openwa_bridge.whatsapp_account.promote_group_admins`
+
+**Args**: `{ account_name: string, group_id: string, participants: string }`
+
+**Returns**: `{ status: "ok", result: {...} }`
+
+---
+
+### demote_group_admins
+
+Demote group admins to regular participants.
+
+**Method**: `openwa_bridge.whatsapp_account.demote_group_admins`
+
+**Args**: `{ account_name: string, group_id: string, participants: string }`
+
+**Returns**: `{ status: "ok", result: {...} }`
+
+---
+
+### set_group_name
+
+Change the group name/subject.
+
+**Method**: `openwa_bridge.whatsapp_account.set_group_name`
+
+**Args**: `{ account_name: string, group_id: string, name: string }`
+
+**Returns**: `{ status: "ok", result: {...} }`
+
+---
+
+### leave_group
+
+Leave a group.
+
+**Method**: `openwa_bridge.whatsapp_account.leave_group`
+
+**Args**: `{ account_name: string, group_id: string }`
+
+**Returns**: `{ status: "ok", result: {...} }`
+
+---
+
+### list_labels
+
+List all labels for the session.
+
+**Method**: `openwa_bridge.whatsapp_account.list_labels`
+
+**Args**: `{ account_name: string }`
+
+**Returns**: `{ labels: [...] }`
+
+---
+
+### add_label_to_chat
+
+Assign a label to a chat.
+
+**Method**: `openwa_bridge.whatsapp_account.add_label_to_chat`
+
+**Args**: `{ account_name: string, label_id: string, chat_id: string }`
+
+**Returns**: `{ status: "ok", result: {...} }`
+
+---
+
+### remove_label_from_chat
+
+Remove a label from a chat.
+
+**Method**: `openwa_bridge.whatsapp_account.remove_label_from_chat`
+
+**Args**: `{ account_name: string, label_id: string, chat_id: string }`
+
+**Returns**: `{ status: "ok", result: {...} }`
+
+---
+
+### send_bulk_with_progress
+
+Send a bulk message and get progress updates.
+
+**Method**: `openwa_bridge.whatsapp_account.send_bulk_with_progress`
+
+**Args**: `{ account_name: string, contacts: string, message: string }`
+
+**Returns**: `{ status: "ok", batchId: "...", sent: 2, failed: 0 }`
+
+---
+
+### set_profile_name
+
+Set the profile push name.
+
+**Method**: `openwa_bridge.whatsapp_account.set_profile_name`
+
+**Args**: `{ account_name: string, name: string }`
+
+**Returns**: `{ status: "ok", result: {...} }`
+
+---
+
+### set_profile_status
+
+Set the profile about/status text.
+
+**Method**: `openwa_bridge.whatsapp_account.set_profile_status`
+
+**Args**: `{ account_name: string, status: string }`
+
+**Returns**: `{ status: "ok", result: {...} }`
+
+---
+
+### set_profile_picture
+
+Set the profile picture by URL or base64.
+
+**Method**: `openwa_bridge.whatsapp_account.set_profile_picture`
+
+**Args**: `{ account_name: string, url?: string, base64?: string }`
+
+**Returns**: `{ status: "ok", result: {...} }`
+
+---
+
+### get_session_stats
+
+Get session-level statistics.
+
+**Method**: `openwa_bridge.whatsapp_account.get_session_stats`
+
+**Args**: `{ account_name: string }`
+
+**Returns**: `{ stats: {...} }`
+
+---
+
+### list_channels
+
+List all WhatsApp channels.
+
+**Method**: `openwa_bridge.whatsapp_account.list_channels`
+
+**Args**: `{ account_name: string }`
+
+**Returns**: `{ channels: [...] }`
+
+---
+
+### get_channel_messages
+
+List messages in a specific channel.
+
+**Method**: `openwa_bridge.whatsapp_account.get_channel_messages`
+
+**Args**: `{ account_name: string, channel_id: string, limit?: number }`
+
+**Returns**: `{ messages: [...] }`
+
+---
+
+### get_contact_statuses
+
+Get all statuses (stories) for a specific contact.
+
+**Method**: `openwa_bridge.whatsapp_account.get_contact_statuses`
+
+**Args**: `{ account_name: string, contact_id: string }`
+
+**Returns**: `{ statuses: [...] }`
+
+---
+
+### get_status_media
+
+Download media for a specific status.
+
+**Method**: `openwa_bridge.whatsapp_account.get_status_media`
+
+**Args**: `{ account_name: string, status_id: string }`
+
+**Returns**: `{ media: {...} }`
+
+---
+
+### subscribe_channel
+
+Subscribe to a WhatsApp channel via invite code.
+
+**Method**: `openwa_bridge.whatsapp_account.subscribe_channel`
+
+**Args**: `{ account_name: string, invite_code: string }`
+
+**Returns**: `{ status: "ok", result: {...} }`
+
+---
+
+### unsubscribe_channel
+
+Unsubscribe from a WhatsApp channel.
+
+**Method**: `openwa_bridge.whatsapp_account.unsubscribe_channel`
+
+**Args**: `{ account_name: string, channel_id: string }`
+
+**Returns**: `{ status: "ok", result: {...} }`
+
+---
+
+### get_message_reactions
+
+Get all reactions for a specific message.
+
+**Method**: `openwa_bridge.whatsapp_account.get_message_reactions`
+
+**Args**: `{ account_name: string, chat_id: string, message_id: string }`
+
+**Returns**: `{ reactions: [...] }`
+
+---
+
+### cancel_batch
+
+Cancel a pending batch send operation.
+
+**Method**: `openwa_bridge.whatsapp_account.cancel_batch`
+
+**Args**: `{ account_name: string, batch_id: string }`
+
+**Returns**: `{ status: "ok", result: {...} }`
+
+---
+
+### get_overview_stats
+
+Get session overview statistics.
+
+**Method**: `openwa_bridge.whatsapp_account.get_overview_stats`
+
+**Args**: `{ account_name: string }`
+
+**Returns**: `{ stats: {...} }`
+
+---
+
+### get_message_stats
+
+Get message statistics for a time period.
+
+**Method**: `openwa_bridge.whatsapp_account.get_message_stats`
+
+**Args**: `{ account_name: string, period?: string }`
+
+- `period`: `1h`, `24h` (default), `7d`, `30d`
+
+**Returns**: `{ stats: {...} }`
+
+---
+
+### get_group
+
+Get group metadata.
+
+**Method**: `openwa_bridge.whatsapp_account.get_group`
+
+**Args**: `{ account_name: string, group_id: string }`
+
+**Returns**: `{ group: {...} }`
+
+---
+
+### join_group_by_code
+
+Join a group via invite link.
+
+**Method**: `openwa_bridge.whatsapp_account.join_group_by_code`
+
+**Args**: `{ account_name: string, invite_code: string }`
+
+**Returns**: `{ result: {...} }`
+
+---
+
+### get_group_settings
+
+Get group settings.
+
+**Method**: `openwa_bridge.whatsapp_account.get_group_settings`
+
+**Args**: `{ account_name: string, group_id: string }`
+
+**Returns**: `{ settings: {...} }`
+
+---
+
+### set_group_settings
+
+Update group settings.
+
+**Method**: `openwa_bridge.whatsapp_account.set_group_settings`
+
+**Args**: `{ account_name: string, group_id: string, settings: object }`
+
+**Returns**: `{ status: "ok" }`
+
+---
+
+### set_group_description
+
+Update group description.
+
+**Method**: `openwa_bridge.whatsapp_account.set_group_description`
+
+**Args**: `{ account_name: string, group_id: string, description: string }`
+
+**Returns**: `{ status: "ok" }`
+
+---
+
+### get_group_invite_code
+
+Get group invite code.
+
+**Method**: `openwa_bridge.whatsapp_account.get_group_invite_code`
+
+**Args**: `{ account_name: string, group_id: string }`
+
+**Returns**: `{ inviteCode: "..." }`
+
+---
+
+### revoke_group_invite_code
+
+Revoke group invite code.
+
+**Method**: `openwa_bridge.whatsapp_account.revoke_group_invite_code`
+
+**Args**: `{ account_name: string, group_id: string }`
+
+**Returns**: `{ status: "ok" }`
+
+---
+
+### list_contacts
+
+List all contacts.
+
+**Method**: `openwa_bridge.whatsapp_account.list_contacts`
+
+**Args**: `{ account_name: string }`
+
+**Returns**: `{ contacts: [...] }`
+
+---
+
+### get_contact
+
+Get contact details.
+
+**Method**: `openwa_bridge.whatsapp_account.get_contact`
+
+**Args**: `{ account_name: string, contact_id: string }`
+
+**Returns**: `{ contact: {...} }`
+
+---
+
+### get_contact_profile_picture
+
+Get contact profile picture.
+
+**Method**: `openwa_bridge.whatsapp_account.get_contact_profile_picture`
+
+**Args**: `{ account_name: string, contact_id: string }`
+
+**Returns**: `{ profilePicture: {...} }`
+
+---
+
+### get_contact_phone
+
+Resolve phone number from JID.
+
+**Method**: `openwa_bridge.whatsapp_account.get_contact_phone`
+
+**Args**: `{ account_name: string, contact_id: string }`
+
+**Returns**: `{ phone: "..." }`
+
+---
+
+### list_profile_pictures
+
+List all profile pictures.
+
+**Method**: `openwa_bridge.whatsapp_account.list_profile_pictures`
+
+**Args**: `{ account_name: string }`
+
+**Returns**: `{ profilePictures: [...] }`
+
+---
+
+### delete_chat
+
+Delete a chat.
+
+**Method**: `openwa_bridge.whatsapp_account.delete_chat`
+
+**Args**: `{ account_name: string, chat_id: string }`
+
+**Returns**: `{ status: "ok" }`
+
+---
+
+### delete_status
+
+Delete a posted status.
+
+**Method**: `openwa_bridge.whatsapp_account.delete_status`
+
+**Args**: `{ account_name: string, status_id: string }`
+
+**Returns**: `{ status: "ok" }`
+
+---
+
+### get_label
+
+Get label details.
+
+**Method**: `openwa_bridge.whatsapp_account.get_label`
+
+**Args**: `{ account_name: string, label_id: string }`
+
+**Returns**: `{ label: {...} }`
+
+---
+
+### get_chat_labels
+
+Get labels for a chat.
+
+**Method**: `openwa_bridge.whatsapp_account.get_chat_labels`
+
+**Args**: `{ account_name: string, chat_id: string }`
+
+**Returns**: `{ labels: [...] }`
+
+---
+
+### get_batch_status
+
+Get batch send status.
+
+**Method**: `openwa_bridge.whatsapp_account.get_batch_status`
+
+**Args**: `{ account_name: string, batch_id: string }`
+
+**Returns**: `{ batchStatus: {...} }`
+
+---
+
+### test_webhook
+
+Test webhook delivery.
+
+**Method**: `openwa_bridge.whatsapp_account.test_webhook`
+
+**Args**: `{ account_name: string, webhook_id: string }`
+
+**Returns**: `{ result: {...} }`
+
+---
+
+## 8. WhatsApp Catalog (Bridge DocType)
+
+The bridge provides a **WhatsApp Catalog Product** DocType that links ERPNext Items
+to WhatsApp for product sharing. Since OpenWA's engine does not support catalog
+operations (neither engine implements create/read/update for WhatsApp Business
+catalog), the bridge always sends products as richly formatted text+image fallback
+messages.
+
+### DocType: WhatsApp Catalog Product
+
+| Field | Type | Source |
+|---|---|---|
+| `product_name` | Data | Auto-fetched from Item, editable |
+| `item_code` | Link → Item | ERPNext Item |
+| `whatsapp_account` | Link → WhatsApp Account | Target account |
+| `is_available` | Check | Default: Yes |
+| `description` | Text Editor | Auto-fetched from Item, editable |
+| `price` | Currency | Auto-fetched from Item rate |
+| `currency` | Link → Currency | Default from system |
+| `image` | Attach Image | Auto-fetched from Item image |
+| `retailer_id` | Data | Optional external ID |
+| `sync_status` | Select | Vestigial — always Synced (stored locally) |
+| `openwa_product_id` | Data | Vestigial — always empty |
+| `last_sync_on` | Datetime | Set when product is created/saved |
+
+### get_catalog_products
+
+List all catalog products for an account.
+
+**Method**: `openwa_bridge.catalog.get_catalog_products`
+
+**Args**: `{ account_name: string }`
+
+**Returns**:
+```json
+{
+  "status": "ok",
+  "products": [
+    { "name": "WCP-0001", "product_name": "Widget", "item_code": "ITEM-001",
+      "price": 29.99, "currency": "USD", "sync_status": "Synced",
+      "is_available": 1, "image": null, "modified": "..." }
+  ]
+}
+```
+
+---
+
+### get_catalog_product
+
+Get a single catalog product.
+
+**Method**: `openwa_bridge.catalog.get_catalog_product`
+
+**Args**: `{ account_name: string, product_name: string }`
+
+**Returns**:
+```json
+{
+  "status": "ok",
+  "product": { "name": "WCP-0001", "product_name": "Widget", ... }
+}
+```
+
+---
+
+### send_product_to_chat
+
+Send a catalog product to a WhatsApp chat as a text+image fallback message.
+
+**Method**: `openwa_bridge.catalog.send_product_to_chat`
+
+**Args**: `{ product_name: string, chat_id: string }`
+
+**Returns**:
+```json
+{
+  "status": "ok",
+  "method": "fallback",
+  "result": { "messageId": "true_967777715787@c.us_3EB0..." }
+}
+```
+
+---
+
+### send_catalog_to_chat
+
+Send the full catalog summary to a WhatsApp chat as a text message listing
+available products.
+
+**Method**: `openwa_bridge.catalog.send_catalog_to_chat`
+
+**Args**: `{ account_name: string, chat_id: string }`
+
+**Returns**:
+```json
+{
+  "status": "ok",
+  "method": "fallback",
+  "result": { "messageId": "true_967777715787@c.us_3EB0..." }
+}
+```
+
+---
+
+### send_product_to_customer
+
+Send a catalog product to a Customer's WhatsApp number. Looks up the
+Customer's primary Contact, resolves the phone number to a chat ID, and
+sends the product as a text+image fallback message.
+
+**Method**: `openwa_bridge.catalog.send_product_to_customer`
+
+**Args**: `{ product_name: string, customer: string }`
+
+**Raises**: If no Contact or no phone number is found for the Customer.
+
+**Returns**:
+```json
+{
+  "status": "ok",
+  "method": "fallback",
+  "result": { "messageId": "true_967777715787@c.us_3EB0..." }
+}
+```
+
+---
+
+### send_product_to_chat_direct
+
+Send a specific catalog product to a chat by product name (account-qualified).
+
+**Method**: `openwa_bridge.catalog.send_product_to_chat_direct`
+
+**Args**: `{ account_name: string, chat_id: string, product_name: string }`
+
+**Returns**:
+```json
+{
+  "status": "ok",
+  "method": "fallback",
+  "result": { "messageId": "true_967777715787@c.us_3EB0..." }
+}
+```

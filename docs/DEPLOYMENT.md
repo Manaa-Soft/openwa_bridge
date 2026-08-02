@@ -144,6 +144,34 @@ QUEUE_ENABLED=true
 # =============================================================================
 MEDIA_DOWNLOAD_ENABLED=false
 STORE_EPHEMERAL_MESSAGES=false
+
+# =============================================================================
+# v0.10.9+ FEATURES
+# =============================================================================
+# Typing indicator: auto-simulates typing before sending (anti-ban).
+# Bridge also sends its own typing indicator before non-template/non-reaction
+# messages. Disable one or the other to avoid redundancy.
+SIMULATE_TYPING=true
+
+# LID (Linked Identity) phone resolution: resolves @lid JIDs to phone numbers.
+RESOLVE_LID_TO_PHONE=true
+
+# Channel support: enables WhatsApp Channels API endpoints.
+CHANNELS_ENABLED=true
+
+# Status (Stories) support: enables status/story webhook events.
+STATUS_ENABLED=true
+
+# =============================================================================
+# v0.12.x FEATURES (OpenWA 0.12.0+)
+# =============================================================================
+# Pin the WhatsApp Web locale so the onboarding-modal auto-dismissal detector
+# matches. PUPPETEER_ARGS REPLACES the default flag list — repeat existing flags.
+# PUPPETEER_ARGS=--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu,--lang=en-US
+#
+# Accept additional "Continue" button labels for a localised onboarding modal
+# (comma-separated). Only needed if your WhatsApp Web renders non-English.
+# WWEBJS_ONBOARDING_CONTINUE_LABELS=Continuer,Continuar
 ```
 
 > **Key settings explained:**
@@ -155,6 +183,7 @@ STORE_EPHEMERAL_MESSAGES=false
 >   - `minio` = MinIO service hostname (if used for file storage)
 > - `REDIS_PORT=6385` — use 6385 when ERPNext shares the server (see [Redis Isolation](#redis-isolation-erpnext--openwa-on-same-server)); use 6379 if OpenWA is alone
 > - `AUTO_START_SESSIONS=true` — auto-reconnects WhatsApp on OpenWA restart
+> - `SIMULATE_TYPING=true` — OpenWA built-in typing simulation (anti-ban). Bridge also has its own auto-typing before sends — see [Typing Indicator Redundancy](#typing-indicator-redundancy) below
 
 **Important**: If `~/OpenWA/data/.env.generated` exists, delete it -- it overrides your `.env`:
 
@@ -231,7 +260,7 @@ Get the API key from the OpenWA dashboard (localhost:2886).
 
 Via dashboard or API:
 - URL: `https://your-site.local/api/method/openwa_bridge.inbound.receive_openwa_message`
-- Events: message.received, message.ack, message.failed, session.status
+- Events: message.received, message.sent, message.ack, message.failed, message.revoked, message.reaction, message.edited, session.status, session.qr, session.authenticated, session.disconnected, session.reconnect_loop, group.join, group.leave, group.update, call.received, status.received
 
 ### 7. Configure Frappe
 
@@ -344,6 +373,8 @@ REDIS_URL=redis://:your-redis-password-here@127.0.0.1:6385
 | `send-template` returns 404 | Template deleted when session recreated | Bridge auto-recovers: looks up by name, re-creates if missing |
 | Template not found in error logs | Stale `openwa_template_id` after session recreate | Re-save template in Frappe to re-sync, or let outbox auto-recover |
 | Messages stuck as Pending | Session dead or API key wrong | Check `curl http://localhost:2785/api/sessions`, verify session ID matches Frappe |
+| Session shows "Action Required" (0.12.0+) | WhatsApp "What's new" onboarding modal not dismissed | Acknowledge the modal once in a browser signed in as that account, then use the **Recover** button (stop→start, no QR rescan) |
+| Sends return 409 with a live engine | Session in reconnect backoff (`disconnected` + engine loaded) | Do nothing — the gateway reconnects automatically. `start` answers 400 during backoff |
 
 ### systemd Boot Chain
 
@@ -420,6 +451,35 @@ sudo systemctl restart openwa
 
 ---
 
+## Typing Indicator Redundancy
+
+OpenWA v0.10.9+ has a built-in `SIMULATE_TYPING=true` env var that automatically simulates typing before every message send (anti-ban). The bridge also sends its own typing indicator via `POST /chats/typing` before each non-template, non-reaction message.
+
+**This means typing indicators may fire twice.** Choose one approach:
+
+- **Keep OpenWA's `SIMULATE_TYPING=true`** (recommended): Simpler, built-in anti-ban logic. Disable bridge's auto-typing by setting `openwa_auto_typing=0` in OpenWA Bridge Settings.
+- **Disable OpenWA's `SIMULATE_TYPING=false`**: Use bridge's auto-typing only. Set `SIMULATE_TYPING=false` in OpenWA's `.env`. The bridge sends a "typing" indicator for 3 seconds, then a "paused" indicator, then sends the message.
+
+Both approaches produce the same result — the recipient sees "typing..." before the message arrives.
+
+---
+
+## OpenWA 0.12.x Behaviour (bridge support)
+
+The bridge is aware of the OpenWA 0.12.x session-lifecycle changes:
+
+| Feature | What changed | Bridge behaviour |
+|---|---|---|
+| `engineLoaded` (0.12.1) | Session payload reports whether the gateway holds a live engine | Health check only restarts `disconnected` sessions **without** a live engine. A reconnecting session (engine loaded) is left alone — `start` would answer 400 there. |
+| `action_required` status (0.12.0) | New status when the "What's new" onboarding modal needs a human; sends return 409 until cleared | Health check auto-runs **stop→start** once (no QR rescan). If still stuck, the account shows "Action Required" with `lastError` and a **Recover** button. Acknowledging the modal once in a browser signed in as that account clears it permanently. |
+| `POST /sessions/:id/logout` (0.12.0) | New endpoint that unlinks the device from the WhatsApp account | New **Unlink** button on the WhatsApp Account page. `200` → device removed from Linked Devices, credentials wiped (fresh QR scan required). `502` `SESSION_LOGOUT_INCOMPLETE` → session stopped locally, retry after starting. |
+| `force-kill` returns `400` (0.12.0) | Breaking: force-kill with no live engine now answers 400 instead of 200 | Health check no longer force-kills `failed` sessions (evicted by design) — it deletes and recreates them directly. |
+| `409 SESSION_NAME_TEARDOWN_PENDING` (0.12.0) | Retryable 409 on `start`/`delete` while a prior logout owns cleanup | Bridge retries briefly before treating it as a failure. |
+
+**Note:** upgrade OpenWA to **0.12.1+** so `engineLoaded` is present. On 0.12.0 (field absent) the bridge falls back to the pre-0.12 behaviour for `disconnected` sessions.
+
+---
+
 ## Testing Checklist
 
 ### Basic Message Flow
@@ -464,6 +524,12 @@ sudo systemctl restart openwa
 - [ ] Verify Communication record created
 - [ ] Verify new contact/lead created for unknown numbers
 - [ ] Send reaction -> verify reaction recorded
+
+### OpenWA 0.12.x
+- [ ] Reconnecting session (`disconnected` + engine loaded) is NOT restarted by the health check
+- [ ] `action_required` session auto-recovers via stop→start; if stuck, account shows "Action Required" + Recover button
+- [ ] Unlink button removes the device from the account's Linked Devices (fresh QR required to reconnect)
+- [ ] Unlink while not started returns a clear "not started" error
 
 ---
 

@@ -35,9 +35,11 @@ OpenWA Bridge connects the [frappe\_whatsapp](https://github.com/Shridar2101/fra
 - **Bulk messaging** -- send text to multiple contacts via OpenWA's send-bulk endpoint
 - **Message forwarding** -- forward messages to other chats
 - **Message deletion** -- delete for self or revoke (delete for everyone)
+- **Message editing** -- edit sent message text via `POST /messages/edit`
 - **@mention support** -- auto-extracts `@NNNN@c.us` JIDs from text messages
 - **Contact management** -- check WhatsApp number, block/unblock contacts
-- **Typing indicators** -- send typing/recording/paused states to chats
+- **Typing indicators** -- auto-send typing indicator before each message (non-blocking)
+- **Note**: OpenWA v0.10.9+ has built-in `SIMULATE_TYPING=true` (anti-ban). To avoid duplicate typing indicators, set `SIMULATE_TYPING=false` in OpenWA `.env` when using the bridge's indicator, or disable the bridge's indicator by commenting out the `_send_typing_indicator` call in `whatsapp_message.py`.
 - **Pairing code authentication** -- link via phone number (alternative to QR scan)
 
 ### Inbound Messages (WhatsApp -> Desk)
@@ -49,8 +51,55 @@ OpenWA Bridge connects the [frappe\_whatsapp](https://github.com/Shridar2101/fra
 - **Profile auto-creation** for new contacts
 - **Group message support** with author extraction
 - **@lid JID handling** -- supports WhatsApp LID-format sender IDs
+- **Message edit tracking** -- `message.edited` webhook updates WhatsApp Message body
 - **Reaction logging** -- inbound reactions recorded in logs
-- **Extended webhook events** -- `message.sent`, `message.revoked`, `message.reaction`, `session.qr`, `session.authenticated`, `session.disconnected`
+- **Extended webhook events** -- `message.sent`, `message.revoked`, `message.reaction`, `message.edited`, `session.qr`, `session.authenticated`, `session.disconnected`, `session.reconnect_loop`, `group.join`, `group.leave`, `group.update`, `call.received`
+
+### Status/Stories
+
+- **Post text status** -- share text updates as WhatsApp status
+- **Post image status** -- share images as WhatsApp status
+- **Post video status** -- share videos as WhatsApp status
+- **Read statuses** -- list all visible status updates
+- **Custom styling** -- custom background colors and font styles
+
+### Group Management
+
+- **List groups** -- enumerate all groups the session belongs to
+- **Create groups** -- create new WhatsApp groups with participants
+- **Add/remove participants** -- manage group membership
+- **Promote/demote admins** -- manage group admin roles
+- **Set group name** -- update group subject
+- **Leave groups** -- exit a WhatsApp group
+
+### WhatsApp Business Labels
+
+- **List labels** -- enumerate all WhatsApp Business labels
+- **Add label to chat** -- tag chats with labels
+- **Remove label from chat** -- untag chats from labels
+
+### Chat Management
+
+- **Mark chat as read/unread** -- update chat read status
+- **Chat history** -- fetch live chat history from WhatsApp client
+- **Full-text search** -- search messages across all sessions
+- **Batch messaging** -- async batch with progress tracking and cancellation
+
+### Profile Management
+
+- **Set display name** -- update WhatsApp profile name
+- **Set about text** -- update WhatsApp status/about
+- **Set profile picture** -- update WhatsApp profile photo
+
+### Call Handling
+
+- **Incoming call logging** -- log call.received webhook events
+- **Call rejection** -- reject incoming WhatsApp calls
+
+### Channels/Newsletters
+
+- **List channels** -- enumerate subscribed WhatsApp Channels
+- **Channel messages** -- fetch messages from a WhatsApp Channel
 
 ### Notification System
 

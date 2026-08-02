@@ -10,6 +10,14 @@
 **Fix applied**: Detailed error logging captures full request/response bodies.
 **Next step**: Test after session restart, check Error Log for "OpenWA API Error" entry.
 
+### 2. Typing indicator redundancy
+
+**Status**: By design — configurable
+**Description**: OpenWA v0.10.9+ has built-in `SIMULATE_TYPING=true` (anti-ban). Bridge also sends its own typing indicator before non-template/non-reaction messages via `_send_typing_indicator()`. This causes double typing indicators.
+**Fix**: Disable one or the other:
+- Keep OpenWA's `SIMULATE_TYPING=true`, disable bridge's auto-typing: set `openwa_auto_typing=0` in OpenWA Bridge Settings
+- Or set `SIMULATE_TYPING=false` in OpenWA `.env` and keep bridge's auto-typing
+
 ---
 
 ## Resolved Issues
@@ -41,63 +49,70 @@
 **Fix**: Removed `depends_on` from Section Break, added to individual fields.
 **File**: `fixtures/custom_field.json`
 
-### 6. API timeout during setup (read timeout=15)
+### 6. frappe.db.get_value() TypeError on every inbound message
+**Symptom**: `TypeError: Database.get_value() got an unexpected keyword argument 'fields'` on every `message.sent` webhook, causing 500 errors on status updates.
+**Root cause**: Three calls in `inbound.py` used `frappe.db.get_value(doctype, filters=..., fields=["name"], pluck="name")` with `fields=` keyword. `frappe.db.get_value()` does not accept `fields=` — it uses a positional `fieldname` parameter.
+**Fix applied**: Changed all 3 calls to use positional `fieldname` parameter: `frappe.db.get_value(doctype, filters, "name", pluck="name")`.
+**File**: `inbound.py`
+**Commit**: `a14c6cd`
+
+### 7. API timeout during setup (read timeout=15)
 **Fix**: Increased `openwa_api` timeout to 30s, `_start_session` to 60s. Added connectivity check.
 **Files**: `utils.py`, `whatsapp_account.py`
 
-### 7. Deleting WhatsApp Account doesn't delete OpenWA session
+### 8. Deleting WhatsApp Account doesn't delete OpenWA session
 **Fix**: `on_trash` doc_events hook calls `DELETE /api/sessions/:id`.
 **File**: `whatsapp_account.py`, `hooks.py`
 
-### 8. Sessions don't reconnect after VM restart
+### 9. Sessions don't reconnect after VM restart
 **Fix**: `tasks.py` with `hourly()` and `daily()` scheduler hooks restart disconnected sessions. Pre-send check in `whatsapp_message.py` auto-restarts before every send.
 **Files**: `tasks.py`, `hooks.py`, `whatsapp_message.py`
 
-### 9. jinja `doc.items` AttributeError
+### 10. jinja `doc.items` AttributeError
 **Fix**: Use `frappe.get_doc()` to get proper Document object, not `as_dict()`.
 **File**: `whatsapp_notification.py` → `_resolve_document()`
 
-### 10. 409 Conflict on Template Sync
+### 11. 409 Conflict on Template Sync
 **Fix**: Stale ID recovery — 404 → clear ID → find by name → POST fresh.
 **File**: `whatsapp_templates.py` → `_sync_to_openwa()`
 
-### 11. `content_type` AttributeError
+### 12. `content_type` AttributeError
 **Fix**: Hardcode `"text"` instead of `self.content_type` in WhatsApp Message creation.
 **File**: `whatsapp_notification.py` → `_send_openwa_template()`, `_send_openwa_text()`
 
-### 12. `@lid` JID Format Not Handled
+### 13. `@lid` JID Format Not Handled
 **Fix**: Added `@lid` to `strip_jid_suffix()` suffix list.
 **File**: `utils.py` → `strip_jid_suffix()`
 
-### 13. frappe.cache() kwarg
+### 14. frappe.cache() kwarg
 **Fix**: Use `frappe.cache().set_value()` with `expires_in_sec=` (not Redis native `set()` with `ex=`).
 **File**: `inbound.py`
 
-### 14. frappe.throw() kwarg
+### 15. frappe.throw() kwarg
 **Fix**: Remove `statusCode` kwarg (not supported). Inbound webhook now always returns 200.
 **File**: `inbound.py`
 
-### 15. Sample Values Auto-fill Removed
+### 16. Sample Values Auto-fill Removed
 **Fix**: Removed `_SAMPLEDefaults` mixin. Values now read from live doc at send time.
 **File**: `whatsapp_templates.py`
 
-### 16. Error log flood from HMAC verification
+### 17. Error log flood from HMAC verification
 **Fix**: "Missing HMAC signature" changed from `frappe.log_error()` to `frappe.logger().info()`. Catch-all handler now includes traceback. Success confirmation logged after doc insert.
 **File**: `inbound.py`
 
-### 17. use_json_request_body causing 417
+### 18. use_json_request_body causing 417
 **Fix**: Removed `use_json_request_body = True` from hooks.py — Frappe middleware was rejecting webhook payloads.
 **File**: `hooks.py`
 
-### 18. frappe.request.get_data(as_bytes=False) invalid kwarg
+### 19. frappe.request.get_data(as_bytes=False) invalid kwarg
 **Fix**: Changed to `get_data()` without kwargs — `as_bytes` not supported in this Frappe version.
 **File**: `inbound.py`
 
-### 19. HMAC verification too strict
+### 20. HMAC verification too strict
 **Fix**: When secret is configured but OpenWA sends no signature, processes the message with a warning log instead of rejecting. Prevents drops when HMAC isn't enabled on the OpenWA side.
 **File**: `inbound.py`
 
-### 20. Webhook secret not synced to OpenWA
+### 21. Webhook secret not synced to OpenWA
 **Fix**: `on_update` hook auto-syncs webhook secret — lists webhooks, finds by URL match, updates via PUT or creates via POST.
 **File**: `whatsapp_account.py` → `on_account_update()`
 

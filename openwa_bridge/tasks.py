@@ -49,20 +49,103 @@ def _check_session_status(base_url: str, session_id: str, api_key: str) -> dict 
 
 
 def _start_session(base_url: str, session_id: str, api_key: str) -> bool:
-    """POST /api/sessions/:id/start and return True on success."""
+    """
+    Start an OpenWA session.
+    
+    Retries session teardown conflicts briefly before reporting failure.
+    
+    Returns:
+    	bool: `true` if the session starts successfully or is already started, `false` otherwise.
+    """
+    for _ in range(4):
+        try:
+            resp = _http_session.post(
+                f"{base_url.rstrip('/')}/api/sessions/{session_id}/start",
+                headers={"X-API-Key": api_key},
+                timeout=60,
+            )
+            if resp.status_code == 409:
+                time.sleep(2)
+                continue
+            return resp.status_code in (200, 201, 400)  # 400 = already started
+        except Exception:
+            return False
+    return False
+
+
+def _stop_session(base_url: str, session_id: str, api_key: str) -> bool:
+    """Stop an OpenWA session.
+    
+    Parameters:
+        base_url (str): Base URL of the OpenWA server.
+        session_id (str): Identifier of the session to stop.
+        api_key (str): OpenWA API key.
+    
+    Returns:
+        bool: `True` if the session stops successfully or is already stopped, `False` otherwise.
+    """
     try:
         resp = _http_session.post(
-            f"{base_url.rstrip('/')}/api/sessions/{session_id}/start",
+            f"{base_url.rstrip('/')}/api/sessions/{session_id}/stop",
             headers={"X-API-Key": api_key},
             timeout=60,
         )
-        return resp.status_code in (200, 201, 400)  # 400 = already started
+        return resp.status_code in (200, 204, 400)  # 400 = already stopped
     except Exception:
         return False
 
 
+def _delete_session(base_url: str, session_id: str, api_key: str) -> None:
+    """DELETE /api/sessions/:id.
+
+    A 409 ``SESSION_NAME_TEARDOWN_PENDING`` means a prior logout still owns
+    destructive cleanup for the name — retry briefly before giving up.
+    """
+    for attempt in range(3):
+        try:
+            resp = _http_session.delete(
+                f"{base_url.rstrip('/')}/api/sessions/{session_id}",
+                headers={"X-API-Key": api_key},
+                timeout=15,
+            )
+            if resp.status_code == 409:
+                time.sleep(3)
+                continue
+            return
+        except Exception:
+            return
+
+
+def _poll_status(
+    base_url: str,
+    session_id: str,
+    api_key: str,
+    targets: tuple[str, ...],
+    fallback: str,
+    timeout_s: int = 15,
+) -> str:
+    """Poll session status once per second until a target status or timeout.
+
+    Returns the last observed status.
+    """
+    for _ in range(timeout_s):
+        time.sleep(1)
+        session = _check_session_status(base_url, session_id, api_key)
+        if session and not session.get("_deleted"):
+            fallback = session.get("status", fallback)
+            if fallback in targets:
+                break
+    return fallback
+
+
 def _set_account_status(account_name: str, openwa_status: str) -> None:
-    """Update the WhatsApp Account status field based on OpenWA session status."""
+    """
+    Update the WhatsApp Account status to reflect the OpenWA session state.
+    
+    Parameters:
+    	account_name (str): Name of the WhatsApp Account to update.
+    	openwa_status (str): Current OpenWA session status.
+    """
     status_map = {
         "ready": "Active",
         "disconnected": "Inactive",
@@ -71,6 +154,7 @@ def _set_account_status(account_name: str, openwa_status: str) -> None:
         "initializing": "Inactive",
         "qr_ready": "Inactive",
         "authenticating": "Inactive",
+        "action_required": "Inactive",
     }
     frappe_status = status_map.get(openwa_status, "Inactive")
     try:
@@ -101,7 +185,9 @@ def hourly() -> None:
 
 
 def _run_health_check() -> None:
-    """Check all OpenWA sessions and restart any that are disconnected."""
+    """
+    Check all configured OpenWA sessions, recover sessions that require restarting, and synchronize account statuses.
+    """
     accounts = _get_openwa_accounts()
     if not accounts:
         return
@@ -158,6 +244,12 @@ def _run_health_check() -> None:
 
         status = session.get("status", "unknown")
         phone = session.get("phone")
+        # OpenWA 0.12.1+: whether the gateway holds a live engine. It
+        # disambiguates "disconnected" — an engine still registered while a
+        # reconnect backs off (start answers 400) vs a genuinely stopped
+        # session that needs a start. Falls back to the old behaviour when the
+        # field is absent (gateway < 0.12.1).
+        engine_loaded = session.get("engineLoaded")
 
         # 2. If ready AND connected to WhatsApp (phone set), sync status
         if status == "ready" and phone:
@@ -177,113 +269,115 @@ def _run_health_check() -> None:
                 f"OpenWA health check: session '{session_id}' on "
                 f"'{account_name}' is ready but not linked to WhatsApp — restarting"
             )
-            started = _start_session(base_url, session_id, api_key)
-            if started:
-                for _ in range(15):
-                    time.sleep(1)
-                    session = _check_session_status(base_url, session_id, api_key)
-                    if session and not session.get("_deleted"):
-                        status = session.get("status", status)
-                        if status == "ready":
-                            break
+            if _start_session(base_url, session_id, api_key):
+                status = _poll_status(base_url, session_id, api_key, ("ready",), status)
             else:
                 frappe.logger().warning(
                     f"OpenWA health check: failed to restart session "
                     f"'{session_id}' on '{account_name}'"
                 )
 
-        # 4. If disconnected/created, attempt restart
-        elif status in ("disconnected", "created"):
+        # 4. Disconnected with NO live engine — stopped, needs a start.
+        #    A disconnected session that still has a live engine is in
+        #    automatic reconnect backoff and must be left alone.
+        elif status == "disconnected" and not engine_loaded:
             frappe.logger().info(
                 f"OpenWA health check: session '{session_id}' on "
-                f"'{account_name}' is {status} — attempting restart"
+                f"'{account_name}' is disconnected (no live engine) — restarting"
             )
-            started = _start_session(base_url, session_id, api_key)
-            if started:
-                for _ in range(15):
-                    time.sleep(1)
-                    session = _check_session_status(base_url, session_id, api_key)
-                    if session and not session.get("_deleted"):
-                        status = session.get("status", status)
-                        if status == "ready":
-                            break
+            if _start_session(base_url, session_id, api_key):
+                status = _poll_status(base_url, session_id, api_key, ("ready",), status)
             else:
                 frappe.logger().warning(
                     f"OpenWA health check: failed to restart session "
                     f"'{session_id}' on '{account_name}'"
                 )
 
-        # 5. Failed session — force-kill, then delete+recreate as last resort
+        # 5. Freshly created session — start it
+        elif status == "created":
+            frappe.logger().info(
+                f"OpenWA health check: session '{session_id}' on "
+                f"'{account_name}' is created — starting"
+            )
+            if _start_session(base_url, session_id, api_key):
+                status = _poll_status(base_url, session_id, api_key, ("ready",), status)
+            else:
+                frappe.logger().warning(
+                    f"OpenWA health check: failed to start session "
+                    f"'{session_id}' on '{account_name}'"
+                )
+
+        # 6. action_required — the "What's new" onboarding modal needs a human.
+        #    Auto stop→start once to re-drive the engine from stored
+        #    credentials (no QR rescan). If it is still action_required, surface
+        #    lastError so an operator can acknowledge the modal manually.
+        elif status == "action_required":
+            frappe.logger().info(
+                f"OpenWA health check: session '{session_id}' on "
+                f"'{account_name}' is action_required — attempting stop→start"
+            )
+            _stop_session(base_url, session_id, api_key)
+            time.sleep(2)
+            if _start_session(base_url, session_id, api_key):
+                status = _poll_status(base_url, session_id, api_key, ("ready",), status)
+            if status == "action_required":
+                last_error = session.get("lastError") or ""
+                frappe.logger().warning(
+                    f"OpenWA health check: session '{session_id}' on "
+                    f"'{account_name}' still action_required after stop→start — "
+                    f"an operator must acknowledge the WhatsApp onboarding modal"
+                )
+                frappe.log_error(
+                    title=f"OpenWA: Session action_required on {account_name}",
+                    message=(
+                        f"Session {session_id} needs an operator: "
+                        f"{last_error or 'WhatsApp onboarding modal not dismissed'}. "
+                        "Acknowledge the 'What's new' modal in a browser signed in "
+                        "as that account, then the session will be restarted."
+                    ),
+                )
+
+        # 7. Failed session — the engine is evicted by design in OpenWA 0.12.0+
+        #    (force-kill answers 400 with no live engine), so delete and
+        #    recreate directly.
         elif status == "failed":
             frappe.logger().info(
                 f"OpenWA health check: session '{session_id}' on "
-                f"'{account_name}' is failed — attempting recovery"
+                f"'{account_name}' is failed — recreating session"
             )
-            # Step 1: Try force-kill (keeps session data, no QR rescan)
+            _delete_session(base_url, session_id, api_key)
+
+            # Create new session with same name
+            session_name = account_name.strip().lower().replace(" ", "-")
+            import re as _re
+            session_name = _re.sub(r"[^a-z0-9-]", "-", session_name)
+            session_name = _re.sub(r"-+", "-", session_name).strip("-")
+            if len(session_name) < 3:
+                session_name = (session_name + "---")[:3]
+
             try:
-                _http_session.post(
-                    f"{base_url.rstrip('/')}/api/sessions/{session_id}/force-kill",
-                    headers={"X-API-Key": api_key},
-                    timeout=30,
+                resp = _http_session.post(
+                    f"{base_url.rstrip('/')}/api/sessions",
+                    json={"name": session_name},
+                    headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+                    timeout=15,
                 )
-                time.sleep(2)
-                _start_session(base_url, session_id, api_key)
-                time.sleep(3)
-                session = _check_session_status(base_url, session_id, api_key)
-                if session and not session.get("_deleted"):
-                    status = session.get("status", status)
-            except Exception:
-                pass
-
-            # Step 2: If still failed — delete and recreate
-            if status == "failed":
-                frappe.logger().info(
-                    f"OpenWA health check: force-kill didn't help for "
-                    f"'{session_id}' on '{account_name}' — recreating session"
+                if resp.status_code in (200, 201):
+                    new_data = resp.json()
+                    new_id = new_data.get("id")
+                    if new_id:
+                        frappe.db.set_value(
+                            "WhatsApp Account", account_name,
+                            "openwa_session_id", new_id,
+                        )
+                        session_id = new_id
+                        _start_session(base_url, session_id, api_key)
+                        status = _poll_status(base_url, session_id, api_key, ("ready",), status)
+            except Exception as exc:
+                frappe.logger().warning(
+                    f"OpenWA health check: failed to recreate session "
+                    f"for '{account_name}': {exc}"
                 )
-                try:
-                    _http_session.delete(
-                        f"{base_url.rstrip('/')}/api/sessions/{session_id}",
-                        headers={"X-API-Key": api_key},
-                        timeout=15,
-                    )
-                except Exception:
-                    pass
-
-                # Create new session with same name
-                session_name = account_name.strip().lower().replace(" ", "-")
-                import re as _re
-                session_name = _re.sub(r"[^a-z0-9-]", "-", session_name)
-                session_name = _re.sub(r"-+", "-", session_name).strip("-")
-                if len(session_name) < 3:
-                    session_name = (session_name + "---")[:3]
-
-                try:
-                    resp = _http_session.post(
-                        f"{base_url.rstrip('/')}/api/sessions",
-                        json={"name": session_name},
-                        headers={"X-API-Key": api_key, "Content-Type": "application/json"},
-                        timeout=15,
-                    )
-                    if resp.status_code in (200, 201):
-                        new_data = resp.json()
-                        new_id = new_data.get("id")
-                        if new_id:
-                            frappe.db.set_value(
-                                "WhatsApp Account", account_name,
-                                "openwa_session_id", new_id,
-                            )
-                            session_id = new_id
-                            _start_session(base_url, session_id, api_key)
-                            time.sleep(3)
-                            session = _check_session_status(base_url, session_id, api_key)
-                            if session and not session.get("_deleted"):
-                                status = session.get("status", status)
-                except Exception as exc:
-                    frappe.logger().warning(
-                        f"OpenWA health check: failed to recreate session "
-                        f"for '{account_name}': {exc}"
-                    )
 
         _set_account_status(account_name, status)
 

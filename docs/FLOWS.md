@@ -264,8 +264,26 @@ receive_openwa_message()
         ├─ "session.authenticated" → _handle_session_authenticated()
         │    └─ Set WhatsApp Account status to Active
         │
-        └─ "session.disconnected" → _handle_session_status()
-             └─ Set WhatsApp Account status to Inactive
+         └─ "session.disconnected" → _handle_session_status()
+              └─ Set WhatsApp Account status to Inactive
+         │
+         ├─ "message.edited" → _handle_message_edited()
+         │    └─ Update WhatsApp Message message field with edited text
+         │
+         ├─ "session.reconnect_loop" → _handle_session_reconnect_loop()
+         │    └─ Log error with recovery suggestion
+         │
+         ├─ "group.join" / "group.leave" → _handle_group_membership()
+         │    └─ Log join/leave event with group ID and participants
+         │
+         ├─ "group.update" → _handle_group_update()
+         │    └─ Log group metadata changes (subject, description, etc.)
+         │
+         ├─ "call.received" → _handle_call_received()
+         │    └─ Log incoming voice/video call event
+         │
+         └─ "status.received" → _handle_status_received()
+              └─ Log contact status/story event
   │
   ▼
   Return {"status": "ok"} (200)
@@ -513,14 +531,16 @@ doc_events["on_update"] → on_account_update(doc, method)
        │    │    │
        │    │    └─ Found → PUT /webhooks/:id { secret: <new-secret> }
        │    │
-        │    └─ Not found → POST /webhooks {
-        │         url: frappe_url,
-        │         events: ["message.received", "message.sent", "message.ack",
-        │                  "message.failed", "message.revoked", "message.reaction",
-        │                  "session.status", "session.qr", "session.authenticated",
-        │                  "session.disconnected"],
-        │         secret: <new-secret>
-        │       }
+         │    └─ Not found → POST /webhooks {
+         │         url: frappe_url,
+         │         events: ["message.received", "message.sent", "message.ack",
+         │                  "message.failed", "message.revoked", "message.reaction",
+         │                  "message.edited", "session.status", "session.qr",
+         │                  "session.authenticated", "session.disconnected",
+         │                  "session.reconnect_loop", "group.join", "group.leave",
+         │                  "group.update", "call.received", "status.received"],
+         │         secret: <new-secret>
+         │       }
         │
         └─ On error → frappe.log_error() (best-effort, doesn't block save)
 ```
@@ -563,8 +583,185 @@ Check frappe.has_permission()
        ├─ request_pairing_code(account, phone)
        │    └─ POST /pairing-code { phoneNumber } → { pairingCode: "ABCD1234" }
        │
-       └─ send_sticker(account, chat_id, url/base64)
-            └─ POST /messages/send-sticker { chatId, url/base64 }
+        ├─ send_sticker(account, chat_id, url/base64)
+        │    └─ POST /messages/send-sticker { chatId, url/base64 }
+        │
+        ├─ edit_message(account, chat_id, message_id, body)
+        │    └─ POST /messages/edit { chatId, messageId, body }
+        │
+        ├─ post_status_text(account, text, background_color, font)
+        │    └─ POST /statuses { text, background_color, font }
+        │
+        ├─ post_status_image(account, url/base64, caption)
+        │    └─ POST /statuses { url/base64, caption, type: "image" }
+        │
+        ├─ post_status_video(account, url/base64, caption)
+        │    └─ POST /statuses { url/base64, caption, type: "video" }
+        │
+        ├─ get_statuses(account)
+        │    └─ GET /statuses → { statuses: [...] }
+        │
+        ├─ reject_call(account, call_id)
+        │    └─ POST /calls/:callId/reject → { status: "ok" }
+        │
+        ├─ mark_chat_read(account, chat_id)
+        │    └─ POST /chats/:chatId/read → { status: "ok" }
+        │
+        ├─ mark_chat_unread(account, chat_id)
+        │    └─ POST /chats/:chatId/unread → { status: "ok" }
+        │
+        ├─ get_chat_history(account, chat_id, limit)
+        │    └─ GET /chats/:chatId/messages?limit=N → { messages: [...] }
+        │
+        ├─ search_messages(account, query, limit)
+        │    └─ GET /messages/search?q=query&limit=N → { messages: [...] }
+        │
+        ├─ list_groups(account)
+        │    └─ GET /groups → { groups: [...] }
+        │
+        ├─ create_group(account, name, participants)
+        │    └─ POST /groups { name, participants } → { groupId }
+        │
+        ├─ add_group_participants(account, group_id, participants)
+        │    └─ POST /groups/:id/participants { participants } → { status }
+        │
+        ├─ remove_group_participants(account, group_id, participants)
+        │    └─ DELETE /groups/:id/participants { participants } → { status }
+        │
+        ├─ promote_group_admins(account, group_id, participants)
+        │    └─ POST /groups/:id/admins { participants } → { status }
+        │
+        ├─ demote_group_admins(account, group_id, participants)
+        │    └─ DELETE /groups/:id/admins { participants } → { status }
+        │
+        ├─ set_group_name(account, group_id, name)
+        │    └─ PUT /groups/:id/subject { name } → { status }
+        │
+        ├─ leave_group(account, group_id)
+        │    └─ DELETE /groups/:id → { status }
+        │
+        ├─ list_labels(account)
+        │    └─ GET /labels → { labels: [...] }
+        │
+        ├─ add_label_to_chat(account, label_id, chat_id)
+        │    └─ POST /labels/:id/chats/:chatId → { status }
+        │
+        ├─ remove_label_from_chat(account, label_id, chat_id)
+        │    └─ DELETE /labels/:id/chats/:chatId → { status }
+        │
+        ├─ send_bulk_with_progress(account, contacts, message)
+        │    └─ POST /messages/send-bulk { chatIds, text } → { batchId, sent, failed }
+        │
+        ├─ set_profile_name(account, name)
+        │    └─ PUT /profile/name { name } → { status }
+        │
+        ├─ set_profile_status(account, status)
+        │    └─ PUT /profile/status { status } → { status }
+        │
+        ├─ set_profile_picture(account, url/base64)
+        │    └─ PUT /profile/picture { url/base64 } → { status }
+        │
+        ├─ get_session_stats(account)
+        │    └─ GET /stats/overview → { stats }
+        │
+        ├─ list_channels(account)
+        │    └─ GET /channels → { channels: [...] }
+        │
+        ├─ get_channel_messages(account, channel_id, limit)
+        │    └─ GET /channels/:id/messages?limit=N → { messages: [...] }
+        │
+        ├─ get_contact_statuses(account, contact_id)
+        │    └─ GET /contacts/:id/statuses → { statuses: [...] }
+        │
+        ├─ get_status_media(account, status_id)
+        │    └─ GET /statuses/:id/media → { media }
+        │
+        ├─ subscribe_channel(account, invite_code)
+        │    └─ POST /channels/subscribe { inviteCode } → { status }
+        │
+        ├─ unsubscribe_channel(account, channel_id)
+        │    └─ DELETE /channels/:id → { status }
+        │
+        ├─ get_message_reactions(account, chat_id, message_id)
+        │    └─ GET /messages/:id/reactions → { reactions: [...] }
+        │
+        ├─ cancel_batch(account, batch_id)
+        │    └─ DELETE /messages/batch/:id → { status }
+        │
+        ├─ get_overview_stats(account)
+        │    └─ GET /stats/overview → { stats }
+        │
+        ├─ get_message_stats(account, period)
+        │    └─ GET /stats/messages?period=24h → { stats }
+        │
+        ├─ get_group(account, group_id)
+        │    └─ GET /groups/:groupId → { group }
+        │
+        ├─ join_group_by_code(account, invite_code)
+        │    └─ POST /groups/join { inviteCode } → { result }
+        │
+        ├─ get_group_settings(account, group_id)
+        │    └─ GET /groups/:groupId/settings → { settings }
+        │
+        ├─ set_group_settings(account, group_id, settings)
+        │    └─ PUT /groups/:groupId/settings { settings } → { status }
+        │
+        ├─ set_group_description(account, group_id, description)
+        │    └─ PUT /groups/:groupId/description { description } → { status }
+        │
+        ├─ get_group_invite_code(account, group_id)
+        │    └─ GET /groups/:groupId/invite-code → { inviteCode }
+        │
+        ├─ revoke_group_invite_code(account, group_id)
+        │    └─ POST /groups/:groupId/invite-code/revoke → { status }
+        │
+        ├─ list_contacts(account)
+        │    └─ GET /contacts → { contacts: [...] }
+        │
+        ├─ get_contact(account, contact_id)
+        │    └─ GET /contacts/:contactId → { contact }
+        │
+        ├─ get_contact_profile_picture(account, contact_id)
+        │    └─ GET /contacts/:contactId/profile-picture → { profilePicture }
+        │
+        ├─ get_contact_phone(account, contact_id)
+        │    └─ GET /contacts/:contactId/phone → { phone }
+        │
+        ├─ list_profile_pictures(account)
+        │    └─ GET /contacts/profile-pictures → { profilePictures: [...] }
+        │
+        ├─ delete_chat(account, chat_id)
+        │    └─ POST /chats/delete { chatId } → { status }
+        │
+        ├─ delete_status(account, status_id)
+        │    └─ DELETE /status/:statusId → { status }
+        │
+        ├─ get_label(account, label_id)
+        │    └─ GET /labels/:labelId → { label }
+        │
+        ├─ get_chat_labels(account, chat_id)
+        │    └─ GET /labels/chat/:chatId → { labels: [...] }
+        │
+        ├─ get_batch_status(account, batch_id)
+        │    └─ GET /messages/batch/:batchId → { batchStatus }
+        │
+        ├─ test_webhook(account, webhook_id)
+        │    └─ POST /webhooks/:webhookId/test → { result }
+        │
+        ├─ get_catalog(account)
+        │    └─ GET /catalog → 501 Not Implemented
+        │
+        ├─ get_catalog_products(account)
+        │    └─ GET /catalog/products → 501 Not Implemented
+        │
+        ├─ get_catalog_product(account, product_id)
+        │    └─ GET /catalog/products/:productId → 501 Not Implemented
+        │
+        ├─ send_product_message(account, chat_id, product_id)
+        │    └─ POST /messages/send-product → 501 Not Implemented
+        │
+        └─ send_catalog_message(account, chat_id, catalog_id)
+             └─ POST /messages/send-catalog → 501 Not Implemented
 ```
 
 ## Flow 13: Outbox Cleanup (Daily Scheduler)
@@ -581,3 +778,25 @@ tasks.cleanup_old_outbox()
   └─ DELETE OpenWA Outbox WHERE status='Failed' AND creation < (now - 30 days)
        └─ Removes old failed entries
 ```
+
+---
+
+## Flow 14: WhatsApp Catalog Product (Desk to Chat)
+
+```
+User creates WhatsApp Catalog Product (linked to ERPNext Item)
+  └→ _auto_fetch_item_fields() populates name, desc, price, image from Item
+       └→ Editable overrides for WhatsApp-specific presentation
+  └→ Send to Chat button
+       └→ send_product_to_chat(product_name, chat_id)
+            └→ _send_fallback_product_message(account, chat_id, product)
+                 └→ POST /messages/send-text
+                      { chatId, text: "*Product Name*\n\ndesc\n\n*Price:* USD 29.99",
+                        mediaUrl: ".../image.png" }
+```
+
+### Key Points
+- **OpenWA does not support catalog** — neither engine implements WhatsApp Business catalog operations (create/read/update). Catalog endpoints always return 501.
+- **All products are sent as fallback** — richly formatted text+image messages with product name, description, price, availability, and image
+- **Item auto-fetch** — name, description, image, and valuation_rate are pulled from the linked Item
+- **All fields are editable** — WhatsApp-specific overrides don't affect the original Item

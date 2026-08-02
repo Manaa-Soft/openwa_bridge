@@ -513,3 +513,137 @@ Comprehensive code review identified additional issues. Each fix is scoped to mi
 **Total functions affected**: 12 (out of 50+ in the codebase)
 **Breaking changes**: Fix #11 (settings must be re-entered in OpenWA Bridge Settings after migration)
 **Safe to deploy**: Yes — all fixes are scoped and backward-compatible
+
+---
+
+## OpenWA v0.10.6/v0.10.9+ Feature Integration
+
+All OpenWA v0.10.6 through v0.10.10 features have been integrated into the bridge.
+
+**Status**: Complete
+**Commits**: `b3e29c7` (v0.10.6), `fb205e6` (v0.10.9+)
+
+### New Webhook Handlers (7 added)
+
+- [x] `message.edited` → `_handle_message_edited()` — updates message body
+- [x] `session.reconnect_loop` → `_handle_session_reconnect_loop()` — logs error with recovery suggestion
+- [x] `group.join` / `group.leave` → `_handle_group_membership()` — logs join/leave events
+- [x] `group.update` → `_handle_group_update()` — logs group metadata changes
+- [x] `call.received` → `_handle_call_received()` — logs incoming call events
+- [x] `status.received` → `_handle_status_received()` — logs contact status/story events
+
+Total webhook events: **17** (up from 10)
+
+### New Whitelisted Methods (9 added)
+
+- [x] `get_contact_statuses()` — get statuses for a contact
+- [x] `get_status_media()` — download status media
+- [x] `subscribe_channel()` — subscribe to a WhatsApp channel
+- [x] `unsubscribe_channel()` — unsubscribe from a channel
+- [x] `get_message_reactions()` — get reactions for a message
+- [x] `cancel_batch()` — cancel a pending batch send
+- [x] `get_overview_stats()` — session overview statistics
+- [x] `get_message_stats()` — message statistics for a time period
+- [x] `get_channel_messages()` — list channel messages
+
+### Additional Whitelisted Methods (23 added)
+
+- [x] `get_group()` — get group metadata
+- [x] `join_group_by_code()` — join group via invite link
+- [x] `get_group_settings()` — get group settings
+- [x] `set_group_settings()` — update group settings
+- [x] `set_group_description()` — update group description
+- [x] `get_group_invite_code()` — get group invite code
+- [x] `revoke_group_invite_code()` — revoke group invite code
+- [x] `list_contacts()` — list all contacts
+- [x] `get_contact()` — get contact details
+- [x] `get_contact_profile_picture()` — get contact profile picture
+- [x] `get_contact_phone()` — resolve phone from JID
+- [x] `list_profile_pictures()` — list all profile pictures
+- [x] `delete_chat()` — delete a chat
+- [x] `delete_status()` — delete a posted status
+- [x] `get_label()` — get label details
+- [x] `get_chat_labels()` — get labels for a chat
+- [x] `get_batch_status()` — get batch send status
+- [x] `test_webhook()` — test webhook delivery
+- [x] `get_catalog()` — get catalog (stub, returns 501)
+- [x] `get_catalog_products()` — get catalog products (stub, returns 501)
+- [x] `get_catalog_product()` — get catalog product (stub, returns 501)
+- [x] `send_product_message()` — send product message (stub, returns 501)
+- [x] `send_catalog_message()` — send catalog message (stub, returns 501)
+
+Total whitelisted methods: **67** (up from 44)
+
+### Typing Indicator
+
+- [x] `_send_typing_indicator()` helper in `whatsapp_message.py`
+- [x] Auto-sends typing indicator before non-template/non-reaction sends
+- [x] Documented redundancy with OpenWA's `SIMULATE_TYPING=true`
+
+### Message Editing
+
+- [x] `edit` content_type support in `_send_via_openwa()`
+- [x] `edit_message()` whitelisted method
+- [x] `_handle_message_edited()` inbound handler
+
+### Kind Field
+
+- [x] `kind` field logged in inbound message handler
+- [x] Supports `individual`, `group`, `channel`, `status`, `broadcast`, `unknown`
+
+### Other Features
+
+- [x] `_DEFAULT_WEBHOOK_EVENTS` updated to 17 events
+- [x] 25 additional whitelisted methods (status, call, chat, search, groups, labels, batch, profile, stats, channels)
+- [x] Test coverage: 30 new tests across 3 files
+
+---
+
+## WhatsApp Catalog Product Integration
+
+**Status**: Complete
+**Commit**: (pending)
+
+### New DocType
+
+- [x] **WhatsApp Catalog Product** — links ERPNext Items to WhatsApp catalog
+- [x] Auto-fetches Item name, description, image, and price
+- [x] Editable overrides for WhatsApp-specific presentation
+
+### Whitelisted Methods (5 added)
+
+- [x] `get_catalog_products(account_name)` — list all catalog products
+- [x] `get_catalog_product(account_name, product_name)` — get single product
+- [x] `send_product_to_chat(product_name, chat_id)` — send to chat (fallback text+image)
+- [x] `send_product_to_customer(product_name, customer)` — lookup Customer Contact, resolve phone, send
+- [x] `send_catalog_to_chat(account_name, chat_id)` — send catalog summary (fallback text)
+- [x] `send_product_to_chat_direct(account_name, chat_id, product_name)` — account-qualified send
+
+### Sync Removed
+
+OpenWA neither implements nor will implement WhatsApp Business catalog create/update
+operations. The sync-to-OpenWA feature (`sync_catalog_products`, `sync_single_product`,
+`get_openwa_catalog_info`, `_build_product_payload`, `_call_openwa`) has been removed.
+All products are stored locally and sent as fallback text+image messages.
+
+### Tests
+
+- [x] `test_send_product_to_chat` — always uses fallback
+- [x] `test_send_product_to_customer` — resolves Contact, sends to phone
+- [x] `test_send_fallback_product_message` — formatted text + image
+- [x] `test_send_catalog_summary` — with and without products
+- [x] `test_get_catalog_products` — list endpoint
+
+### Files Changed
+
+| File | Change |
+|---|---|
+| `whatsapp_catalog_product.json` | New DocType definition (12 fields) |
+| `whatsapp_catalog_product.py` | DocType controller (sync removed, send simplified) |
+| `whatsapp_catalog_product.js` | Client-side auto-fetch + Send button only |
+| `catalog.py` | 5 whitelisted methods, no OpenWA catalog calls |
+| `API_REFERENCE.md` | Updated catalog section (5 methods, no sync) |
+| `ARCHITECTURE.md` | Updated catalog module section |
+| `FLOWS.md` | Flow 14: WhatsApp Catalog Product (simplified) |
+| `IMPROVEMENTS.md` | This section |
+| `test_catalog.py` | 5 test classes, no sync tests |

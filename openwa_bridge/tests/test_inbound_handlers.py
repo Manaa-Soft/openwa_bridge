@@ -87,6 +87,22 @@ class TestHandleSessionStatus(IntegrationTestCase):
         )
 
     @patch("openwa_bridge.inbound.frappe")
+    def test_action_required_sets_inactive_and_logs(self, mock_frappe):
+        """action_required (OpenWA 0.12.0+) should set Inactive and log."""
+        mock_frappe.db.get_value.return_value = "Test Account"
+        mock_frappe.db.set_value.return_value = None
+        mock_frappe.db.count.return_value = 0
+
+        self.handler(
+            make_session_status_data("action_required"), "session-001"
+        )
+
+        mock_frappe.db.set_value.assert_called_once_with(
+            "WhatsApp Account", "Test Account", "status", "Inactive"
+        )
+        mock_frappe.log_error.assert_called_once()
+
+    @patch("openwa_bridge.inbound.frappe")
     def test_unknown_status_noop(self, mock_frappe):
         """Unknown status should not update anything."""
         self.handler(make_session_status_data("connecting"), "session-001")
@@ -334,6 +350,221 @@ class TestHandleSessionAuthenticated(IntegrationTestCase):
         mock_frappe.db.get_value.return_value = None
         self.handler("unknown-session")
         mock_frappe.db.set_value.assert_not_called()
+
+
+class TestHandleMessageEdited(IntegrationTestCase):
+    """Test _handle_message_edited handler."""
+
+    def setUp(self):
+        super().setUp()
+        from openwa_bridge.inbound import _handle_message_edited
+        self.handler = _handle_message_edited
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_updates_message_body(self, mock_frappe):
+        """Should update WhatsApp Message body when message is edited."""
+        mock_frappe.db.get_value.side_effect = [
+            "MSG-001",  # message lookup by message_id
+            "Original text",  # current message body
+        ]
+        self.handler({"messageId": "msg-001", "body": "Edited text"})
+        mock_frappe.db.set_value.assert_called_once_with(
+            "WhatsApp Message", "MSG-001", "message", "Edited text"
+        )
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_same_body_noop(self, mock_frappe):
+        """Should not update when body hasn't changed."""
+        mock_frappe.db.get_value.side_effect = [
+            "MSG-001",
+            "Same text",
+        ]
+        self.handler({"messageId": "msg-001", "body": "Same text"})
+        mock_frappe.db.set_value.assert_not_called()
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_missing_message_id_noop(self, mock_frappe):
+        """Missing messageId should not crash."""
+        self.handler({"body": "Edited text"})
+        mock_frappe.db.get_value.assert_not_called()
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_missing_body_noop(self, mock_frappe):
+        """Missing body should not crash."""
+        self.handler({"messageId": "msg-001"})
+        mock_frappe.db.get_value.assert_not_called()
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_unknown_message_noop(self, mock_frappe):
+        """Unknown message_id should not crash."""
+        mock_frappe.db.get_value.return_value = None
+        self.handler({"messageId": "unknown", "body": "text"})
+        mock_frappe.db.set_value.assert_not_called()
+
+
+class TestHandleSessionReconnectLoop(IntegrationTestCase):
+    """Test _handle_session_reconnect_loop handler."""
+
+    def setUp(self):
+        super().setUp()
+        from openwa_bridge.inbound import _handle_session_reconnect_loop
+        self.handler = _handle_session_reconnect_loop
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_logs_error_for_known_account(self, mock_frappe):
+        """Should log error when session is stuck in reconnect loop."""
+        mock_frappe.db.get_value.return_value = "Test Account"
+        self.handler({}, "session-001")
+        mock_frappe.log_error.assert_called_once()
+        self.assertIn("Reconnect Loop", mock_frappe.log_error.call_args.kwargs.get("title", ""))
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_unknown_session_noop(self, mock_frappe):
+        """Unknown session_id should not crash."""
+        mock_frappe.db.get_value.return_value = None
+        self.handler({}, "unknown-session")
+        mock_frappe.log_error.assert_not_called()
+
+
+class TestHandleGroupMembership(IntegrationTestCase):
+    """Test _handle_group_membership handler."""
+
+    def setUp(self):
+        super().setUp()
+        from openwa_bridge.inbound import _handle_group_membership
+        self.handler = _handle_group_membership
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_logs_join_event(self, mock_frappe):
+        """Should log group.join event."""
+        self.handler(
+            {"groupId": "group-001", "participantIds": ["user-001"], "actorId": "user-001"},
+            "session-001",
+            "group.join",
+        )
+        mock_frappe.logger.return_value.info.assert_called_once()
+        self.assertIn("group.join", mock_frappe.logger.return_value.info.call_args[0][0])
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_logs_leave_event(self, mock_frappe):
+        """Should log group.leave event."""
+        self.handler(
+            {"groupId": "group-001", "participantIds": ["user-002"]},
+            "session-001",
+            "group.leave",
+        )
+        mock_frappe.logger.return_value.info.assert_called_once()
+        self.assertIn("group.leave", mock_frappe.logger.return_value.info.call_args[0][0])
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_missing_group_id_noop(self, mock_frappe):
+        """Missing groupId should not crash."""
+        self.handler({"participantIds": ["user-001"]}, "session-001", "group.join")
+        mock_frappe.logger.return_value.info.assert_not_called()
+
+
+class TestHandleGroupUpdate(IntegrationTestCase):
+    """Test _handle_group_update handler."""
+
+    def setUp(self):
+        super().setUp()
+        from openwa_bridge.inbound import _handle_group_update
+        self.handler = _handle_group_update
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_logs_changes(self, mock_frappe):
+        """Should log group metadata changes."""
+        self.handler(
+            {"groupId": "group-001", "changes": {"subject": "New Name"}},
+            "session-001",
+        )
+        mock_frappe.logger.return_value.info.assert_called_once()
+        self.assertIn("group-001", mock_frappe.logger.return_value.info.call_args[0][0])
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_missing_group_id_noop(self, mock_frappe):
+        """Missing groupId should not crash."""
+        self.handler({"changes": {"subject": "New Name"}}, "session-001")
+        mock_frappe.logger.return_value.info.assert_not_called()
+
+
+class TestHandleCallReceived(IntegrationTestCase):
+    """Test _handle_call_received handler."""
+
+    def setUp(self):
+        super().setUp()
+        from openwa_bridge.inbound import _handle_call_received
+        self.handler = _handle_call_received
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_logs_voice_call(self, mock_frappe):
+        """Should log incoming voice call."""
+        self.handler(
+            {"callId": "call-001", "from": "1234567890@c.us", "isVideo": False, "isGroup": False},
+            "session-001",
+        )
+        mock_frappe.logger.return_value.info.assert_called_once()
+        info_msg = mock_frappe.logger.return_value.info.call_args[0][0]
+        self.assertIn("call-001", info_msg)
+        self.assertIn("video=False", info_msg)
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_logs_video_call(self, mock_frappe):
+        """Should log incoming video call."""
+        self.handler(
+            {"callId": "call-002", "from": "0987654321@c.us", "isVideo": True, "isGroup": True},
+            "session-001",
+        )
+        mock_frappe.logger.return_value.info.assert_called_once()
+        info_msg = mock_frappe.logger.return_value.info.call_args[0][0]
+        self.assertIn("video=True", info_msg)
+        self.assertIn("group=True", info_msg)
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_empty_data_logs_anyway(self, mock_frappe):
+        """Should still log even with empty event data."""
+        self.handler({}, "session-001")
+        mock_frappe.logger.return_value.info.assert_called_once()
+
+
+class TestHandleStatusReceived(IntegrationTestCase):
+    """Test _handle_status_received handler."""
+
+    def setUp(self):
+        super().setUp()
+        from openwa_bridge.inbound import _handle_status_received
+        self.handler = _handle_status_received
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_logs_image_status(self, mock_frappe):
+        """Should log image status with contact and type."""
+        self.handler(
+            {"contact": "1234567890@c.us", "type": "image", "hasMedia": True, "caption": "Check this out"},
+            "session-001",
+        )
+        mock_frappe.logger.return_value.info.assert_called_once()
+        info_msg = mock_frappe.logger.return_value.info.call_args[0][0]
+        self.assertIn("status.received", info_msg)
+        self.assertIn("1234567890@c.us", info_msg)
+        self.assertIn("image", info_msg)
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_logs_text_status(self, mock_frappe):
+        """Should log text status."""
+        self.handler(
+            {"contact": "0987654321@c.us", "type": "text", "hasMedia": False},
+            "session-001",
+        )
+        mock_frappe.logger.return_value.info.assert_called_once()
+        info_msg = mock_frappe.logger.return_value.info.call_args[0][0]
+        self.assertIn("text", info_msg)
+        self.assertIn("hasMedia=False", info_msg)
+
+    @patch("openwa_bridge.inbound.frappe")
+    def test_empty_data_logs_anyway(self, mock_frappe):
+        """Should still log even with empty event data."""
+        self.handler({}, "session-001")
+        mock_frappe.logger.return_value.info.assert_called_once()
 
 
 class TestCreateCommunication(IntegrationTestCase):
