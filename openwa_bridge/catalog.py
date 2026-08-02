@@ -14,6 +14,15 @@ import frappe
 
 
 def _get_account(account_name: str) -> dict:
+    """
+    Load a WhatsApp account configured for OpenWA operations.
+    
+    Parameters:
+    	account_name (str): Name of the WhatsApp account to load.
+    
+    Returns:
+    	dict: The configured WhatsApp account document.
+    """
     doc = frappe.get_doc("WhatsApp Account", account_name)
     if not doc.openwa_enabled:
         frappe.throw("OpenWA is not enabled on this account.")
@@ -24,7 +33,16 @@ def _get_account(account_name: str) -> dict:
 
 def _send_fallback_product_message(account: dict, chat_id: str,
                                     product) -> dict:
-    """Send product details as an image with caption, falling back to text-only."""
+    """Send product details with an image when available, or as text otherwise.
+                                    
+                                    Parameters:
+                                        account (dict): WhatsApp account configuration.
+                                        chat_id (str): Recipient's WhatsApp chat identifier.
+                                        product: Product record containing its details and optional image.
+                                    
+                                    Returns:
+                                        dict: The send status, fallback method, and OpenWA API result.
+                                    """
     import base64
     import os
 
@@ -74,7 +92,16 @@ def _send_fallback_product_message(account: dict, chat_id: str,
 
 
 def _send_catalog_summary(account, chat_id: str, account_name: str):
-    """Send a summary of available products as a text message."""
+    """
+    Send a text summary of the available catalog products.
+    
+    Parameters:
+        chat_id (str): WhatsApp chat identifier.
+        account_name (str): WhatsApp account whose available products are summarized.
+    
+    Returns:
+        dict: Result containing the send status, fallback method, and API response.
+    """
     from openwa_bridge.utils import openwa_api
 
     products = frappe.get_all(
@@ -105,7 +132,15 @@ def _send_catalog_summary(account, chat_id: str, account_name: str):
 
 @frappe.whitelist()
 def send_product_to_chat(product_name: str, chat_id: str) -> dict:
-    """Send a WhatsApp Catalog Product to a specific chat as a fallback text+image message."""
+    """Send a catalog product to a WhatsApp chat.
+    
+    Parameters:
+    	product_name (str): The catalog product to send.
+    	chat_id (str): The recipient's WhatsApp chat identifier.
+    
+    Returns:
+    	dict: The message response from WhatsApp.
+    """
     if not frappe.has_permission("WhatsApp Catalog Product", "read"):
         frappe.throw("Insufficient permissions.", frappe.PermissionError)
     product = frappe.get_doc("WhatsApp Catalog Product", product_name)
@@ -115,7 +150,15 @@ def send_product_to_chat(product_name: str, chat_id: str) -> dict:
 
 @frappe.whitelist()
 def get_catalog_products(account_name: str) -> dict:
-    """List all WhatsApp Catalog Products for a given account."""
+    """
+    List catalog products configured for a WhatsApp account.
+    
+    Parameters:
+        account_name (str): The WhatsApp account whose catalog products to retrieve.
+    
+    Returns:
+        dict: A status and the matching catalog products, ordered by most recent modification.
+    """
     if not frappe.has_permission("WhatsApp Catalog Product", "read"):
         frappe.throw("Insufficient permissions.", frappe.PermissionError)
 
@@ -131,7 +174,20 @@ def get_catalog_products(account_name: str) -> dict:
 
 @frappe.whitelist()
 def get_catalog_product(account_name: str, product_name: str) -> dict:
-    """Get a single WhatsApp Catalog Product by name."""
+    """
+    Retrieve a WhatsApp catalog product for an account.
+    
+    Parameters:
+        account_name (str): WhatsApp account associated with the product.
+        product_name (str): Name of the catalog product to retrieve.
+    
+    Returns:
+        dict: A response containing the status and product details.
+    
+    Raises:
+        frappe.PermissionError: If the caller lacks read permission.
+        frappe.ValidationError: If the product belongs to a different account.
+    """
     if not frappe.has_permission("WhatsApp Catalog Product", "read"):
         frappe.throw("Insufficient permissions.", frappe.PermissionError)
 
@@ -154,11 +210,19 @@ def send_catalog_to_chat(account_name: str, chat_id: str) -> dict:
 
 @frappe.whitelist()
 def send_product_to_customer(product_name: str, customer: str) -> dict:
-    """Send a WhatsApp Catalog Product to a Customer's WhatsApp number.
-
-    Looks up the Customer's primary Contact, resolves the phone number
-    to a WhatsApp chat ID, and sends the product as a fallback text+image
-    message.
+    """
+    Send a catalog product to a customer's WhatsApp contact.
+    
+    Parameters:
+        product_name (str): The catalog product to send.
+        customer (str): The customer whose contact should receive the product.
+    
+    Returns:
+        dict: The response from sending the product message.
+    
+    Raises:
+        frappe.PermissionError: If the caller lacks read permission for catalog products.
+        frappe.ValidationError: If the customer has no contact or phone number.
     """
     if not frappe.has_permission("WhatsApp Catalog Product", "read"):
         frappe.throw("Insufficient permissions.", frappe.PermissionError)
@@ -192,7 +256,21 @@ def send_product_to_customer(product_name: str, customer: str) -> dict:
 @frappe.whitelist()
 def send_product_to_chat_direct(account_name: str, chat_id: str,
                                  product_name: str) -> dict:
-    """Send a specific catalog product to a chat by product name."""
+    """
+                                 Send a catalog product to a chat using the specified WhatsApp account.
+                                 
+                                 Parameters:
+                                     account_name (str): WhatsApp account that must own the product.
+                                     chat_id (str): Identifier of the destination chat.
+                                     product_name (str): Name of the catalog product to send.
+                                 
+                                 Returns:
+                                     dict: Result of sending the product message.
+                                 
+                                 Raises:
+                                     frappe.PermissionError: If the caller lacks read permission for catalog products.
+                                     frappe.ValidationError: If the product does not belong to the specified account.
+                                 """
     if not frappe.has_permission("WhatsApp Catalog Product", "read"):
         frappe.throw("Insufficient permissions.", frappe.PermissionError)
 

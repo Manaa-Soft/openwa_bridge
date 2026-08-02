@@ -6,9 +6,15 @@ from frappe.model.document import Document
 
 class WhatsAppCatalogProduct(Document):
     def validate(self) -> None:
+        """Populate missing product fields from the linked item before validation completes."""
         self._auto_fetch_item_fields()
 
     def _auto_fetch_item_fields(self) -> None:
+        """
+        Populate missing product fields from the linked Item and applicable selling settings.
+        
+        Fields populated may include the product name, description, image, price, currency, unit of measure, and selling price list.
+        """
         if not self.item_code:
             return
         item = frappe.db.get_value(

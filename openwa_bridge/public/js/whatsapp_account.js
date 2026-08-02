@@ -123,6 +123,10 @@ function _add_disconnect_button(frm) {
     );
 }
 
+/**
+ * Add a button that confirms and starts WhatsApp session reconnection.
+ * @param {object} frm - The WhatsApp account form.
+ */
 function _add_reconnect_button(frm) {
     frm.add_custom_button(
         __("Reconnect"),
@@ -136,6 +140,10 @@ function _add_reconnect_button(frm) {
     );
 }
 
+/**
+ * Add a button that restarts the WhatsApp session using its stored login.
+ * @param {Object} frm - The WhatsApp account form.
+ */
 function _add_recover_button(frm) {
     frm.add_custom_button(
         __("Recover"),
@@ -172,6 +180,9 @@ function _add_recover_button(frm) {
     );
 }
 
+/**
+ * Adds a button that unlinks the connected device while preserving the OpenWA session.
+ */
 function _add_unlink_button(frm) {
     frm.add_custom_button(
         __("Unlink"),
@@ -217,6 +228,10 @@ function _add_unlink_button(frm) {
     );
 }
 
+/**
+ * Add a button for permanently deleting the OpenWA session.
+ * @param {Object} frm - The WhatsApp Account form.
+ */
 function _add_delete_session_button(frm) {
     frm.add_custom_button(
         __("Delete Session"),

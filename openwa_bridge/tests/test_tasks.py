@@ -18,6 +18,15 @@ class _Acct:
 
 
 def _make_session(**kwargs) -> dict:
+    """
+    Create a session-status dictionary with default ready status and phone number.
+    
+    Parameters:
+        kwargs: Session fields that override the default values.
+    
+    Returns:
+        dict: The resulting session-status dictionary.
+    """
     data = {"status": "ready", "phone": "1234567890"}
     data.update(kwargs)
     return data
