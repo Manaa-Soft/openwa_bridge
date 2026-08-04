@@ -94,6 +94,10 @@ doctype_js = {
 before_install = "openwa_bridge.install.before_install"
 after_install = "openwa_bridge.install.after_install"
 
+# Runs after every `bench migrate` — seeds/backfills Desktop Icon rows for the
+# fork's Desktop Icons desk page (see install.after_migrate).
+after_migrate = "openwa_bridge.install.after_migrate"
+
 # Uninstallation
 # ------------
 
