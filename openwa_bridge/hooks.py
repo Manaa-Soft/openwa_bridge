@@ -30,7 +30,7 @@ add_to_apps_screen = [
 
 # include js, css files in header of desk.html
 # app_include_css = "/assets/openwa_bridge/css/openwa_bridge.css"
-# app_include_js = "/assets/openwa_bridge/js/openwa_bridge.js"
+app_include_js = "/assets/openwa_bridge/js/openwa_bridge.js"
 
 # include js, css files in header of web template
 # web_include_css = "/assets/openwa_bridge/css/openwa_bridge.css"
