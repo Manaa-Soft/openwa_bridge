@@ -252,6 +252,39 @@ def openwa_to_frappe_vars(text: str) -> str:
 # ------------------------------------------------------------------
 
 
+def render_doc_as_pdf(
+    doctype: str, name: str, print_format: str = "Standard",
+    letterhead: str | None = None,
+) -> bytes | None:
+    """Render a Frappe document as raw PDF bytes via a print format.
+
+    1. Try Chrome PDF generation (matches ``render_doc_as_image``).
+    2. Fall back to wkhtmltopdf on failure.
+    3. Returns PDF bytes, or ``None`` on failure.
+    """
+    try:
+        for generator in ("chrome", "wkhtmltopdf"):
+            try:
+                pdf_bytes = frappe.get_print(
+                    doctype, name, print_format, as_pdf=True,
+                    no_letterhead=0 if letterhead else 1,
+                    letterhead=letterhead,
+                    pdf_generator=generator,
+                )
+                if pdf_bytes:
+                    return pdf_bytes
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    frappe.log_error(
+        title="OpenWA: PDF render failed",
+        message=f"Failed to render {doctype} {name} as PDF (print_format={print_format})",
+    )
+    return None
+
+
 def render_doc_as_image(
     doctype: str, name: str, print_format: str = "Standard",
     letterhead: str | None = None,

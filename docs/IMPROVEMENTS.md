@@ -689,6 +689,20 @@ All products are stored locally and sent as fallback text+image messages.
       to `{link}` (mirrors existing sticker pattern).
 - [x] Clear error when neither `link` nor `base64` is supplied.
 
+### Send-as-PDF
+
+- [x] `render_doc_as_pdf()` helper in `utils.py` — Chrome render, falls back to
+      wkhtmltopdf; returns bytes or `None`.
+- [x] Whitelisted `send_document_pdf()` — creates a WhatsApp Message
+      (`content_type="document"`, `openwa_send_pdf=1`, reference fields, optional
+      print format / filename / caption) from the "Send To Whatsapp" dialog.
+- [x] Send-time rendering in `_send_via_openwa()` — document + `openwa_send_pdf`
+      renders the reference doc, base64-encodes it, POSTs `send-document` with
+      `mimetype: application/pdf` and filename (default `<reference_name>.pdf`).
+- [x] PDF regenerated on every outbox attempt (nothing large stored on the doc).
+- [x] `openwa_send_pdf` / `openwa_print_format` / `openwa_pdf_filename` custom fields.
+- [x] Unit tests — PDF send path, render-failure retry, method defaults.
+
 ### Media reply workaround
 
 - [x] `POST /messages/reply` is text-only (OpenWA). Media replies now: send media

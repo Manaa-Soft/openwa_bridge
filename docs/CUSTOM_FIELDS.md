@@ -150,6 +150,9 @@ Values are read at send time using `doc.get_formatted(field_name)` for live data
 | `openwa_include_letterhead` | `whatsapp_notification.py:134` | Toggle: include/exclude letterhead from image |
 | `openwa_letterhead` | `whatsapp_notification.py:135` | Which Letter Head doc to pass to `frappe.get_print()` |
 | `openwa_send_type` | `whatsapp_notification.py:106` | Routing decision in `notify()` |
+| `openwa_send_pdf` | `whatsapp_message.py` | Gate for send-time PDF rendering in media branch of `_send_via_openwa()` |
+| `openwa_print_format` | `whatsapp_message.py` | Print Format used by `render_doc_as_pdf()` at send time |
+| `openwa_pdf_filename` | `whatsapp_message.py` | Delivered filename (defaults to `<reference_name>.pdf`) |
 | `on_account_trash` | `whatsapp_account.py` | Delete OpenWA session when WhatsApp Account is deleted |
 | `setup_openwa_session` | `whatsapp_account.py` | One-click: create session, start, fetch QR |
 | `get_openwa_qr` | `whatsapp_account.py` | Fetch QR code for existing session |
@@ -204,5 +207,18 @@ Added to the `WhatsApp Message` DocType via `fixtures/custom_field.json`.
 |---|---|---|---|
 | `openwa_reactions` | JSON | OpenWA Reactions | Reactions received on this message — JSON array of `{emoji, sender, timestamp}`. Advance-only dedupe per (emoji, sender). |
 | `openwa_scheduled_at` | Datetime | OpenWA Scheduled At | Send this message at the given time. OpenWA has no delayed send, so the bridge holds the outbox entry in Pending until this time. |
+| `openwa_send_pdf` | Check | Send as PDF | Render the linked reference document as a PDF and send it via OpenWA `send-document`. PDF is regenerated at send time in the outbox worker. |
+| `openwa_print_format` | Link (Print Format) | Print Format | Print Format used to render the PDF. Default: `Standard`. |
+| `openwa_pdf_filename` | Data | PDF Filename | Delivered filename. Default: `<reference_name>.pdf`. |
+
+### Send-as-PDF Flow
+
+1. "Send To Whatsapp" dialog (in the vendored `frappe_whatsapp` app) calls `openwa_bridge.whatsapp_message.send_document_pdf` with `to`, `reference_doctype`, `reference_name`, and optional `print_format`, `filename`, `caption`.
+2. A WhatsApp Message is created with `content_type="document"`, `openwa_send_pdf=1` and the reference fields — no base64 is stored on the doc.
+3. The outbox worker calls `_send_via_openwa()`, which renders the PDF at send time via `render_doc_as_pdf()` (Chrome, falling back to wkhtmltopdf), base64-encodes it, and POSTs to `send-document` with `mimetype: application/pdf`.
+4. Rendering happens on every attempt, so retries/backoff stay safe and the delivered PDF is always current.
+5. If rendering fails, the send raises and the outbox retries with backoff.
+
+> **Note**: `frappe.get_print()` cannot render draft documents unless **Allow Print for Draft** is enabled in Print Settings.
 
 ---

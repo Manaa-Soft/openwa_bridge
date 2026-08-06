@@ -381,5 +381,36 @@
         "label":  "OpenWA Scheduled At",
         "insert_after":  "openwa_reactions",
         "description":  "Send this message at the given time (OpenWA has no delayed send; the bridge holds it in the outbox until then)"
+    },
+    {
+        "name":  "WhatsApp Message-openwa_send_pdf",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Message",
+        "fieldname":  "openwa_send_pdf",
+        "fieldtype":  "Check",
+        "label":  "Send as PDF",
+        "insert_after":  "openwa_scheduled_at",
+        "description":  "Render the linked reference document as a PDF and send it as a WhatsApp document"
+    },
+    {
+        "name":  "WhatsApp Message-openwa_print_format",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Message",
+        "fieldname":  "openwa_print_format",
+        "fieldtype":  "Link",
+        "options":  "Print Format",
+        "label":  "Print Format",
+        "insert_after":  "openwa_send_pdf",
+        "description":  "Print Format used to render the PDF (default: Standard)"
+    },
+    {
+        "name":  "WhatsApp Message-openwa_pdf_filename",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Message",
+        "fieldname":  "openwa_pdf_filename",
+        "fieldtype":  "Data",
+        "label":  "PDF Filename",
+        "insert_after":  "openwa_print_format",
+        "description":  "Filename delivered to the recipient (default: <reference_name>.pdf)"
     }
 ]

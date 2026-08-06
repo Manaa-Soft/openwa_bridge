@@ -1,6 +1,7 @@
 """Unit tests for outbound message routing and outbox processing."""
 from __future__ import annotations
 
+import base64
 import json
 from unittest.mock import patch, MagicMock, PropertyMock
 
@@ -65,6 +66,145 @@ class TestSendViaOpenwa(IntegrationTestCase):
         mock_session.post.assert_called_once()
         call_args = mock_session.post.call_args
         self.assertIn("send-template", call_args[0][0])
+
+    @patch("openwa_bridge.whatsapp_message._send_typing_indicator")
+    @patch("openwa_bridge.whatsapp_message.render_doc_as_pdf", return_value=b"%PDF-1.4 fake pdf bytes")
+    @patch("openwa_bridge.whatsapp_message._http_session")
+    def test_send_document_as_pdf(self, mock_session, mock_render, mock_typing):
+        """Document + openwa_send_pdf should POST base64 PDF to send-document."""
+        mock_session.post.return_value = mock_openwa_api("POST", 200, {"messageId": "doc-123"})
+
+        mock_account = MagicMock()
+        mock_account.get.return_value = "http://localhost:2785"
+        mock_account.openwa_session_id = "session-001"
+        mock_account.get_password.return_value = "api-key-123"
+
+        instance = self.msg_class.__new__(self.msg_class)
+        instance.name = "MSG-003"
+        instance.to = "1234567890"
+        instance.template = None
+        instance.body_param = None
+        instance.template_parameters = None
+        instance.content_type = "document"
+        instance.message = "Invoice attached"
+        instance.is_reply = False
+        instance.reply_to_message_id = None
+        instance.openwa_send_pdf = 1
+        instance.reference_doctype = "Sales Invoice"
+        instance.reference_name = "ACC-SINV-001"
+        instance.openwa_print_format = "Standard"
+        instance.openwa_pdf_filename = ""
+
+        with patch.object(self.msg_class, "_ensure_session_ready", return_value=None):
+            instance._send_via_openwa(mock_account, {})
+
+        mock_render.assert_called_once_with("Sales Invoice", "ACC-SINV-001", "Standard")
+
+        document_call = None
+        for call in mock_session.post.call_args_list:
+            if "send-document" in call[0][0]:
+                document_call = call
+        self.assertIsNotNone(document_call, "Expected a send-document call")
+
+        payload = document_call[1]["json"]
+        self.assertEqual(payload["mimetype"], "application/pdf")
+        self.assertEqual(payload["filename"], "ACC-SINV-001.pdf")
+        self.assertEqual(
+            payload["base64"],
+            base64.b64encode(b"%PDF-1.4 fake pdf bytes").decode(),
+        )
+        self.assertEqual(payload["caption"], "Invoice attached")
+
+    @patch("openwa_bridge.whatsapp_message._send_typing_indicator")
+    @patch("openwa_bridge.whatsapp_message.render_doc_as_pdf", return_value=None)
+    @patch("openwa_bridge.whatsapp_message._http_session")
+    def test_send_document_pdf_render_failure(self, mock_session, mock_render, mock_typing):
+        """Render failure should raise so the outbox retries."""
+        mock_account = MagicMock()
+        mock_account.get.return_value = "http://localhost:2785"
+        mock_account.openwa_session_id = "session-001"
+        mock_account.get_password.return_value = "api-key-123"
+
+        instance = self.msg_class.__new__(self.msg_class)
+        instance.name = "MSG-004"
+        instance.to = "1234567890"
+        instance.template = None
+        instance.body_param = None
+        instance.template_parameters = None
+        instance.content_type = "document"
+        instance.message = ""
+        instance.is_reply = False
+        instance.reply_to_message_id = None
+        instance.openwa_send_pdf = 1
+        instance.reference_doctype = "Sales Invoice"
+        instance.reference_name = "ACC-SINV-001"
+        instance.openwa_print_format = "Standard"
+        instance.openwa_pdf_filename = ""
+
+        with patch.object(self.msg_class, "_ensure_session_ready", return_value=None):
+            with self.assertRaises(frappe.ValidationError):
+                instance._send_via_openwa(mock_account, {})
+
+
+class TestSendDocumentPdf(IntegrationTestCase):
+    """Test the send_document_pdf whitelisted method."""
+
+    def test_creates_whatsapp_message_with_pdf_fields(self):
+        from openwa_bridge.whatsapp_message import send_document_pdf
+
+        mock_doc = MagicMock()
+        mock_doc.name = "MSG-PDF-001"
+        doc_spec = {}
+
+        def _fake_get_doc(spec):
+            for k, v in spec.items():
+                mock_doc.__setattr__(k, v)
+            doc_spec.update(spec)
+            return mock_doc
+
+        with patch("openwa_bridge.whatsapp_message.frappe") as mock_frappe:
+            mock_frappe.get_doc.side_effect = _fake_get_doc
+            result = send_document_pdf(
+                to="967777713637",
+                reference_doctype="Sales Invoice",
+                reference_name="ACC-SINV-2026-00047",
+                print_format="Invoice Format",
+                filename="my-invoice.pdf",
+                caption="Please find your invoice",
+            )
+
+        self.assertEqual(result, "MSG-PDF-001")
+        self.assertEqual(doc_spec["doctype"], "WhatsApp Message")
+        self.assertEqual(doc_spec["content_type"], "document")
+        self.assertEqual(doc_spec["message"], "Please find your invoice")
+        self.assertEqual(doc_spec["openwa_send_pdf"], 1)
+        self.assertEqual(doc_spec["openwa_print_format"], "Invoice Format")
+        self.assertEqual(doc_spec["openwa_pdf_filename"], "my-invoice.pdf")
+        mock_doc.save.assert_called_once()
+
+    def test_defaults_print_format_and_filename(self):
+        from openwa_bridge.whatsapp_message import send_document_pdf
+
+        mock_doc = MagicMock()
+        mock_doc.name = "MSG-PDF-002"
+        doc_spec = {}
+
+        def _fake_get_doc(spec):
+            for k, v in spec.items():
+                mock_doc.__setattr__(k, v)
+            doc_spec.update(spec)
+            return mock_doc
+
+        with patch("openwa_bridge.whatsapp_message.frappe") as mock_frappe:
+            mock_frappe.get_doc.side_effect = _fake_get_doc
+            send_document_pdf(
+                to="967777713637",
+                reference_doctype="Sales Invoice",
+                reference_name="ACC-SINV-2026-00047",
+            )
+
+        self.assertEqual(doc_spec["openwa_print_format"], "Standard")
+        self.assertEqual(doc_spec["openwa_pdf_filename"], "ACC-SINV-2026-00047.pdf")
 
 
 class TestOutboxProcessing(IntegrationTestCase):

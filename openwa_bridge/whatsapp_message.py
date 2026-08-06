@@ -10,7 +10,7 @@ from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message i
     WhatsAppMessage,
 )
 from frappe_whatsapp.utils import format_number
-from openwa_bridge.utils import openwa_api, frappe_to_openwa_vars, get_api_key, _http_session
+from openwa_bridge.utils import openwa_api, frappe_to_openwa_vars, get_api_key, _http_session, render_doc_as_pdf
 
 
 def _send_typing_indicator(base_url: str, session_id: str, api_key: str, chat_id: str, state: str = "typing") -> None:
@@ -341,6 +341,34 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             b64 = media.get("base64", "")
             mimetype = media.get("mimetype", "")
             filename = media.get("filename", "")
+
+            # Send-as-PDF: render the linked reference document at send time.
+            # No base64 is stored on the doc — regenerated on every attempt so
+            # retries/backoff stay safe and the PDF is always current.
+            if (
+                self.content_type == "document"
+                and not link
+                and not b64
+                and getattr(self, "openwa_send_pdf", 0)
+                and self.reference_doctype
+                and self.reference_name
+            ):
+                pdf_bytes = render_doc_as_pdf(
+                    self.reference_doctype,
+                    self.reference_name,
+                    self.openwa_print_format or "Standard",
+                )
+                if not pdf_bytes:
+                    frappe.throw(
+                        f"Failed to render {self.reference_doctype} "
+                        f"{self.reference_name} as PDF. Check the Print Format and "
+                        "that 'Allow Print for Draft' is enabled for draft documents."
+                    )
+                import base64 as _b64
+                b64 = _b64.b64encode(pdf_bytes).decode()
+                mimetype = "application/pdf"
+                filename = self.openwa_pdf_filename or f"{self.reference_name}.pdf"
+
             if not link and not b64:
                 frappe.throw(
                     "OpenWA media messages require a URL in the message field: "
@@ -690,3 +718,50 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             body_text = body_text.replace(f"{{{{{i}}}}}", str(val))
 
         return body_text
+
+
+@frappe.whitelist()
+def send_document_pdf(
+    to: str,
+    reference_doctype: str,
+    reference_name: str,
+    print_format: str | None = None,
+    filename: str | None = None,
+    caption: str | None = None,
+) -> str:
+    """Create a WhatsApp Message that sends the reference document as a PDF.
+
+    The PDF is rendered at send time (in the outbox worker) from
+    ``reference_doctype`` / ``reference_name`` using ``openwa_print_format``,
+    so nothing large is stored on the WhatsApp Message doc and retries
+    regenerate a current copy.
+
+    Args:
+        to: Recipient phone number (any format — normalized to ``<num>@c.us``).
+        reference_doctype: DocType of the document to render (e.g. "Sales Invoice").
+        reference_name: Name of the document to render.
+        print_format: Print Format name (default "Standard").
+        filename: Delivered filename (default ``<reference_name>.pdf``).
+        caption: Optional caption text (default "").
+
+    Returns:
+        str: The created WhatsApp Message name.
+
+    Raises:
+        frappe.ValidationError: If the document cannot be created.
+    """
+    doc = frappe.get_doc({
+        "doctype": "WhatsApp Message",
+        "to": to,
+        "type": "Outgoing",
+        "message_type": "Manual",
+        "reference_doctype": reference_doctype,
+        "reference_name": reference_name,
+        "content_type": "document",
+        "message": caption or "",
+        "openwa_send_pdf": 1,
+        "openwa_print_format": print_format or "Standard",
+        "openwa_pdf_filename": filename or f"{reference_name}.pdf",
+    })
+    doc.save(ignore_permissions=True)
+    return doc.name

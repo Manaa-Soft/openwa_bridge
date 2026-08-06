@@ -688,6 +688,30 @@ Image / video / audio / document sends now accept a base64 payload in addition t
 - `filename` optional (used by `send-document`).
 - Caption still sent for non-audio media.
 
+### Send-as-PDF
+
+Send the currently-open document as a PDF via OpenWA `send-document`.
+
+**Whitelisted method**: `openwa_bridge.whatsapp_message.send_document_pdf`
+
+**Args**: `{ to: string, reference_doctype: string, reference_name: string, print_format?: string, filename?: string, caption?: string }`
+
+- `to`: recipient phone number (any format — normalized to `<num>@c.us`).
+- `print_format`: Print Format name (default `Standard`).
+- `filename`: delivered filename (default `<reference_name>.pdf`).
+- `caption`: optional caption text (default empty).
+
+**Returns**: `string` — the created WhatsApp Message name.
+
+Called from the "Send To Whatsapp" dialog in the vendored `frappe_whatsapp` app when
+"Send as PDF" is checked. Creates a WhatsApp Message (`content_type="document"`,
+`openwa_send_pdf=1`) referencing the document; the outbox worker then renders the
+PDF at send time via `render_doc_as_pdf()` (Chrome, falling back to wkhtmltopdf),
+base64-encodes it, and POSTs `send-document` with `mimetype: application/pdf`.
+Rendering on every attempt keeps retries safe and the delivered PDF always current.
+
+> **Note**: draft documents require **Allow Print for Draft** in Print Settings.
+
 ### Media reply workaround
 
 OpenWA `POST /messages/reply` is text-only. When a media message is sent with
