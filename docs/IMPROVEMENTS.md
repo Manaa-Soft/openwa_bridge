@@ -647,3 +647,58 @@ All products are stored locally and sent as fallback text+image messages.
 | `FLOWS.md` | Flow 14: WhatsApp Catalog Product (simplified) |
 | `IMPROVEMENTS.md` | This section |
 | `test_catalog.py` | 5 test classes, no sync tests |
+
+---
+
+## Tier 2 Improvements
+
+**Branch**: `feature/improvements`
+**Status**: Complete
+
+### Inbound event persistence
+
+- [x] New `OpenWA Event Log` DocType (`openwa_event_log`) — persisted webhook events.
+- [x] Rewrote `_handle_group_membership`, `_handle_group_update`, `_handle_call_received`,
+      `_handle_status_received` to insert Event Log rows (best-effort, never breaks webhook).
+- [x] `_log_event()` helper resolves account from `openwa_session_id`.
+
+### Reactions persistence
+
+- [x] `message.reaction` events stored on WhatsApp Message in `openwa_reactions` JSON
+      field as `[{emoji, sender, timestamp}]`.
+- [x] Advance-only dedupe per (emoji, sender); sender normalized via `strip_jid_suffix`.
+- [x] Custom field `WhatsApp Message-openwa_reactions` (insert_after `product_catalog_json`).
+
+### Webhook DLQ replay
+
+- [x] `check_webhook_delivery_failures()` in `tasks.py` — reads delivery-failures
+      (limit 50/session), writes `webhook.delivery_failure` rows, replays via `replay_webhooks`.
+- [x] Dedupe by idempotency key (`_known_delivery_failure_keys`).
+- [x] Wired into `daily()`; 403 (non-ADMIN key) skipped silently.
+
+### Scheduled send
+
+- [x] `scheduled_at` (Datetime) on OpenWA Outbox — held in Pending until due.
+- [x] `openwa_scheduled_at` custom field on WhatsApp Message, propagated in `after_insert`.
+- [x] Processor gates: `_process_outbox_entry_inner` skips future-scheduled entries
+      without bumping attempts; `process_pending_outbox` only picks due entries.
+
+### Base64 media outbound
+
+- [x] image/video/audio/document sends accept `{base64, mimetype, filename}` in addition
+      to `{link}` (mirrors existing sticker pattern).
+- [x] Clear error when neither `link` nor `base64` is supplied.
+
+### Media reply workaround
+
+- [x] `POST /messages/reply` is text-only (OpenWA). Media replies now: send media
+      unquoted, then send a **text** reply quoting the returned media `messageId`.
+- [x] Reply branch narrowed to text content type; media+reply falls through to media send
+      then fires the follow-up quoted reply.
+
+### Docs updated
+
+- [x] `API_REFERENCE.md` — Tier 2 section.
+- [x] `KNOWN_ISSUES.md` — media-reply limitation + workaround, DLQ role note.
+- [x] `CUSTOM_FIELDS.md` — outbox `scheduled_at`, WhatsApp Message custom fields.
+- [x] `IMPROVEMENTS.md` — this section.

@@ -647,11 +647,86 @@ One-click setup: create session in OpenWA, start it, fetch QR code.
 **Returns**:
 ```json
 {
-  "qr_code": "data:image/png;base64,...",
-  "status": "qr_ready",
-  "session_id": "uuid"
+  "status": "ok",
+  "method": "fallback",
+  "result": { "messageId": "true_967777715787@c.us_3EB0..." }
 }
 ```
+
+---
+
+## Tier 2 Improvements (bridge-side)
+
+### Scheduled send
+
+OpenWA has no delayed send, so scheduling is implemented in the bridge:
+
+- Set `openwa_scheduled_at` (Datetime) on a **WhatsApp Message**.
+- `after_insert` propagates it to the **OpenWA Outbox** entry's `scheduled_at` and
+  does **not** enqueue it for immediate send.
+- The outbox processor (`_process_outbox_entry_inner`) skips Pending entries with
+  `scheduled_at > now` **without** bumping `attempts`.
+- The scheduler safety-net (`process_pending_outbox`) only picks up Pending entries
+  whose `scheduled_at` is null or `<= now`.
+
+### Base64 media outbound
+
+Image / video / audio / document sends now accept a base64 payload in addition to a URL link:
+
+```json
+{
+  "image": {
+    "base64": "<base64-encoded bytes>",
+    "mimetype": "image/jpeg",
+    "filename": "photo.jpg"
+  }
+}
+```
+
+- `link` → sent as `url` (existing behavior).
+- `base64` → sent as `base64` + `mimetype` (mirrors the sticker pattern).
+- `filename` optional (used by `send-document`).
+- Caption still sent for non-audio media.
+
+### Media reply workaround
+
+OpenWA `POST /messages/reply` is text-only. When a media message is sent with
+`is_reply` + `reply_to_message_id`:
+
+1. Media is sent unquoted via `send-{type}`.
+2. A **text** reply is sent quoting the returned media `messageId`.
+
+### Inbound event persistence (`OpenWA Event Log`)
+
+Non-message webhook events are now persisted instead of only logged:
+
+| event_type | Source webhook |
+|---|---|
+| `group.join` / `group.leave` / `group.update` | group webhooks |
+| `call.received` | incoming call |
+| `status.received` | contact status/story |
+| `message.reaction` | reaction on a message |
+| `webhook.delivery_failure` | DLQ check (`check_webhook_delivery_failures`) |
+
+Each row: `whatsapp_account`, `session_id`, `timestamp`, `summary`, `payload`
+(Code field), `related_group`, `related_contact`. Inserts are best-effort and never
+break webhook processing.
+
+### Reactions persistence
+
+`message.reaction` events are stored on the WhatsApp Message doc in the
+`openwa_reactions` JSON field as `[{emoji, sender, timestamp}]` (advance-only dedupe
+per emoji+sender).
+
+### Webhook DLQ replay
+
+`daily()` now calls `check_webhook_delivery_failures()` which:
+1. Reads `GET /api/webhooks/delivery-failures` (limit 50 per session).
+2. Writes `webhook.delivery_failure` rows to the Event Log (deduped by idempotency key).
+3. Replays the affected account via `replay_webhooks(account_name)` to backfill
+   missed inbound messages.
+
+403 from the DLQ endpoint (non-ADMIN key) is expected and skipped silently.
 
 Or on error:
 ```json

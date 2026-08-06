@@ -176,6 +176,7 @@ def daily() -> None:
     Registered via ``scheduler_events`` in ``hooks.py``.
     """
     _run_health_check()
+    check_webhook_delivery_failures()
 
 
 def hourly() -> None:
@@ -426,6 +427,11 @@ def _process_outbox_entry_inner(outbox_name: str) -> None:  # noqa: C901
 
     # Guard: respect backoff window
     if outbox.next_retry_at and outbox.next_retry_at > datetime.now():
+        return
+
+    # Guard: respect scheduled send time — hold in Pending until due.
+    # The entry will be picked up again by the scheduler safety-net.
+    if outbox.scheduled_at and outbox.scheduled_at > datetime.now():
         return
 
     # Load linked docs (account must be loaded first for settings checks)
@@ -846,6 +852,7 @@ def process_pending_outbox() -> None:
             ["status", "=", "Pending"],
             ["attempts", "<", max_attempts],
             ["next_retry_at", "is", "not set"],
+            ["scheduled_at", "is", "not set"],
         ],
         fields=["name"],
         order_by="priority DESC, creation ASC",
@@ -859,9 +866,23 @@ def process_pending_outbox() -> None:
             ["status", "=", "Pending"],
             ["attempts", "<", max_attempts],
             ["next_retry_at", "<=", now],
+            ["scheduled_at", "is", "not set"],
         ],
         fields=["name"],
         order_by="priority DESC, next_retry_at ASC",
+        limit=batch_size,
+    )
+
+    # Pick up scheduled entries whose time has arrived (no retry backoff set)
+    due_scheduled = frappe.get_all(
+        "OpenWA Outbox",
+        filters=[
+            ["status", "=", "Pending"],
+            ["attempts", "<", max_attempts],
+            ["scheduled_at", "<=", now],
+        ],
+        fields=["name"],
+        order_by="priority DESC, scheduled_at ASC",
         limit=batch_size,
     )
 
@@ -891,7 +912,7 @@ def process_pending_outbox() -> None:
     if stuck_sending:
         frappe.db.commit()
 
-    candidates = list({e.name for e in entries} | {e.name for e in retry_entries})
+    candidates = list({e.name for e in entries} | {e.name for e in retry_entries} | {e.name for e in due_scheduled})
 
     for name in candidates:
         frappe.enqueue(
@@ -1289,6 +1310,125 @@ def replay_webhooks(account_name: str, since: str | None = None, chat_id: str | 
         "skipped": skipped,
         "errors": errors[:10],
     }
+
+
+def check_webhook_delivery_failures() -> None:
+    """Surface OpenWA webhook delivery failures (dead-letter log) as Event Log
+    records and attempt an automatic replay of the lost events.
+
+    OpenWA keeps a per-session dead-letter trail of webhook deliveries that
+    exhausted every retry (receiver outage, over-budget payload, SSRF-blocked
+    URL).  It is readable via ``GET /api/webhooks/delivery-failures`` but only
+    with an **ADMIN**-role API key.
+
+    For each account, this daily job:
+      1. Reads the dead-letter rows for the session.
+      2. Writes one ``webhook.delivery_failure`` row to the OpenWA Event Log.
+      3. Replays the lost inbound messages via ``replay_webhooks`` so missed
+         ``message.received`` events are backfilled into Frappe.
+
+    If the account key is not ADMIN the read fails (403) and is silently
+    skipped — nothing else is affected.
+    """
+    accounts = _get_openwa_accounts()
+    if not accounts:
+        return
+
+    for acct in accounts:
+        account_name = acct.name
+        base_url = (acct.openwa_base_url or "").strip("/")
+        session_id = acct.openwa_session_id
+        if not base_url or not session_id:
+            continue
+
+        try:
+            doc = get_cached_account(account_name)
+            api_key = doc.get_password("openwa_api_key")
+        except Exception:
+            continue
+        if not api_key:
+            continue
+
+        failures = []
+        try:
+            resp = _http_session.get(
+                f"{base_url}/api/webhooks/delivery-failures",
+                params={"sessionId": session_id, "limit": 50},
+                headers={"X-API-Key": api_key},
+                timeout=20,
+            )
+            if resp.status_code == 200:
+                failures = resp.json() or []
+            # 403 = non-ADMIN key, 401 = bad key — both are expected for
+            # accounts not provisioned for dead-letter reads.
+        except Exception as exc:
+            frappe.log_error(
+                title="OpenWA: Webhook delivery-failure check failed",
+                message=f"Account {account_name}: {exc}",
+            )
+            continue
+
+        if not failures:
+            continue
+
+        seen = _known_delivery_failure_keys(session_id)
+        new_failures = [f for f in failures if f.get("idempotencyKey") not in seen]
+
+        for f in new_failures:
+            try:
+                doc = frappe.get_doc({
+                    "doctype": "OpenWA Event Log",
+                    "event_type": "webhook.delivery_failure",
+                    "whatsapp_account": account_name,
+                    "session_id": session_id,
+                    "timestamp": frappe.utils.now(),
+                    "summary": (
+                        f"{f.get('event', '')} to {f.get('url', '')[:80]} "
+                        f"(attempts={f.get('attempts', 0)}, "
+                        f"status={f.get('lastStatusCode', 'network error')})"
+                    ),
+                    "payload": json.dumps(f, default=str)[:20000],
+                })
+                doc.insert(ignore_permissions=True)
+            except Exception:
+                continue
+        frappe.db.commit()
+
+        if new_failures:
+            frappe.logger().warning(
+                f"OpenWA delivery failures for {account_name}: "
+                f"{len(new_failures)} new dead-lettered event(s) surfaced. "
+                f"Replaying inbound messages."
+            )
+            try:
+                replay_webhooks(account_name)
+            except Exception as exc:
+                frappe.log_error(
+                    title="OpenWA: Webhook replay after delivery failure",
+                    message=f"Account {account_name}: {exc}",
+                )
+
+
+def _known_delivery_failure_keys(session_id: str) -> set[str]:
+    """Return idempotency keys already recorded in the Event Log for a session."""
+    keys = frappe.get_all(
+        "OpenWA Event Log",
+        filters={
+            "event_type": "webhook.delivery_failure",
+            "session_id": session_id,
+        },
+        fields=["payload"],
+        limit_page_length=0,
+    )
+    result = set()
+    for row in keys:
+        try:
+            data = json.loads(row.get("payload") or "{}")
+            if data.get("idempotencyKey"):
+                result.add(data["idempotencyKey"])
+        except Exception:
+            continue
+    return result
 
 
 def get_account_password(doc: "WhatsAppAccount") -> str:  # noqa: F821

@@ -172,6 +172,7 @@ Created by `openwa_bridge/openwa_bridge/doctype/openwa_outbox/`.
 | `max_attempts` | Int | Maximum retries (default: 5) |
 | `next_retry_at` | Datetime | When to retry (exponential backoff) |
 | `last_error` | Long Text | Last failure reason |
+| `scheduled_at` | Datetime | Hold in Pending until this time (empty = send immediately) |
 
 ### Status Flow
 
@@ -192,3 +193,16 @@ Pending → Failed  (after max_attempts exhausted)
 | 3 | 120s | 3m30s |
 | 4 | 300s | 8m30s |
 | 5 | Failed | — |
+
+---
+
+## WhatsApp Message Custom Fields
+
+Added to the `WhatsApp Message` DocType via `fixtures/custom_field.json`.
+
+| Field Name | Fieldtype | Label | Description |
+|---|---|---|---|
+| `openwa_reactions` | JSON | OpenWA Reactions | Reactions received on this message — JSON array of `{emoji, sender, timestamp}`. Advance-only dedupe per (emoji, sender). |
+| `openwa_scheduled_at` | Datetime | OpenWA Scheduled At | Send this message at the given time. OpenWA has no delayed send, so the bridge holds the outbox entry in Pending until this time. |
+
+---

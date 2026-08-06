@@ -18,6 +18,20 @@
 - Keep OpenWA's `SIMULATE_TYPING=true`, disable bridge's auto-typing: set `openwa_auto_typing=0` in OpenWA Bridge Settings
 - Or set `SIMULATE_TYPING=false` in OpenWA `.env` and keep bridge's auto-typing
 
+### 3. Media replies not natively supported (workaround active)
+
+**Status**: Workaround implemented
+**Description**: OpenWA `POST /messages/reply` is **text-only** — `ReplyMessageDto` = `chatId + quotedMessageId + text`. The send routes (`send-image`, `send-video`, `send-audio`, `send-document`) accept **no** quote parameter.
+**Workaround**: When a media message is sent with `is_reply`:
+1. Send the media unquoted via `send-{type}` (with `link` or `base64` payload).
+2. Follow up with a **text** reply quoting the just-sent media `messageId`.
+Both messages are delivered; the WhatsApp Message doc tracks the media messageId. A failure of the follow-up reply is logged (`OpenWA Media-Reply Workaround Failed`) but does not fail the send.
+
+### 4. Webhook DLQ requires ADMIN role
+
+**Status**: By design — handled
+**Description**: OpenWA `GET /api/webhooks/delivery-failures` only works with an ADMIN-role API key. Non-ADMIN keys get 403 (expected — skipped silently). The bridge reconciles missed inbound via `replay_webhooks()` instead.
+
 ---
 
 ## Resolved Issues

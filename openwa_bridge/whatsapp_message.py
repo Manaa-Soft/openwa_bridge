@@ -4,6 +4,7 @@ from __future__ import annotations
 import frappe
 import json
 import time
+from datetime import datetime
 
 from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message import (
     WhatsAppMessage,
@@ -74,8 +75,14 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             "content_type": self.content_type,
             "status": "Pending",
             "max_attempts": 5,
+            "scheduled_at": getattr(self, "openwa_scheduled_at", None) or None,
         })
         outbox.insert(ignore_permissions=True)
+
+        # Scheduled messages are held in Pending until scheduled_at — do not
+        # enqueue them now; the scheduler safety-net picks them up when due.
+        if outbox.scheduled_at and outbox.scheduled_at > datetime.now():
+            return
 
         try:
             frappe.enqueue(
@@ -302,12 +309,7 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     timeout=30,
                 )
 
-        elif self.is_reply and self.reply_to_message_id:
-            if self.content_type != "text":
-                frappe.throw(
-                    "OpenWA bridge does not support media replies. "
-                    "Send the media and reply separately, or use a Meta account."
-                )
+        elif self.is_reply and self.reply_to_message_id and self.content_type == "text":
             resp = _http_session.post(
                 f"{base_url}/api/sessions/{session_id}/messages/reply",
                 json={
@@ -334,8 +336,27 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             )
 
         elif self.content_type in ("image", "video", "audio", "document"):
-            link = meta_payload.get(self.content_type, {}).get("link", "")
-            payload: dict = {"chatId": chat_id, "url": link}
+            media = meta_payload.get(self.content_type, {}) or {}
+            link = media.get("link", "")
+            b64 = media.get("base64", "")
+            mimetype = media.get("mimetype", "")
+            filename = media.get("filename", "")
+            if not link and not b64:
+                frappe.throw(
+                    "OpenWA media messages require a URL in the message field: "
+                    f'{{"{self.content_type}": {{"link": "https://..."}}}} '
+                    'or a base64 payload: '
+                    f'{{"{self.content_type}": {{"base64": "...", "mimetype": "image/jpeg"}}}}'
+                )
+            payload: dict = {"chatId": chat_id}
+            if link:
+                payload["url"] = link
+            if b64:
+                payload["base64"] = b64
+            if mimetype:
+                payload["mimetype"] = mimetype
+            if filename:
+                payload["filename"] = filename
             if self.content_type != "audio":
                 payload["caption"] = self.message
             endpoint = f"send-{self.content_type}"
@@ -345,6 +366,34 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 headers=headers,
                 timeout=60,
             )
+
+            # OpenWA limitation: POST /messages/reply is text-only. Media replies
+            # are sent unquoted; when a reply is requested, follow up with a *text*
+            # reply that quotes the just-sent media messageId (option B workaround).
+            if self.is_reply and self.reply_to_message_id and resp.status_code < 400:
+                try:
+                    media_id = resp.json().get("messageId")
+                except Exception:
+                    media_id = None
+                if media_id:
+                    reply_resp = _http_session.post(
+                        f"{base_url}/api/sessions/{session_id}/messages/reply",
+                        json={
+                            "chatId": chat_id,
+                            "quotedMessageId": media_id,
+                            "text": self.message,
+                        },
+                        headers=headers,
+                        timeout=30,
+                    )
+                    if reply_resp.status_code >= 400:
+                        frappe.log_error(
+                            title="OpenWA Media-Reply Workaround Failed",
+                            message=(
+                                f"Media sent (id {media_id}) but the quoted text "
+                                f"reply failed: {reply_resp.status_code} {reply_resp.text}"
+                            ),
+                        )
 
         elif self.content_type == "reaction":
             resp = _http_session.post(

@@ -361,5 +361,25 @@
         "property_type":  "Data",
         "value":  "eval:!doc.openwa_enabled",
         "doctype_or_field":  "Field"
+    },
+    {
+        "name":  "WhatsApp Message-openwa_reactions",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Message",
+        "fieldname":  "openwa_reactions",
+        "fieldtype":  "JSON",
+        "label":  "OpenWA Reactions",
+        "insert_after":  "product_catalog_json",
+        "description":  "Reactions received on this message (JSON array of {emoji, sender, timestamp})"
+    },
+    {
+        "name":  "WhatsApp Message-openwa_scheduled_at",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Message",
+        "fieldname":  "openwa_scheduled_at",
+        "fieldtype":  "Datetime",
+        "label":  "OpenWA Scheduled At",
+        "insert_after":  "openwa_reactions",
+        "description":  "Send this message at the given time (OpenWA has no delayed send; the bridge holds it in the outbox until then)"
     }
 ]
