@@ -412,5 +412,36 @@
         "label":  "PDF Filename",
         "insert_after":  "openwa_print_format",
         "description":  "Filename delivered to the recipient (default: <reference_name>.pdf)"
+    },
+    {
+        "name":  "WhatsApp Message-openwa_letterhead",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Message",
+        "fieldname":  "openwa_letterhead",
+        "fieldtype":  "Link",
+        "options":  "Letter Head",
+        "label":  "Letterhead",
+        "insert_after":  "openwa_pdf_filename",
+        "description":  "Letterhead used to render the PDF (default: document letter_head, else the default Letter Head)"
+    },
+    {
+        "name":  "WhatsApp Message-openwa_language",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Message",
+        "fieldname":  "openwa_language",
+        "fieldtype":  "Data",
+        "label":  "Print Language",
+        "insert_after":  "openwa_letterhead",
+        "description":  "Language code used to render the PDF (default: doc language, else print format default, else system)"
+    },
+    {
+        "name":  "WhatsApp Message-openwa_print_settings",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Message",
+        "fieldname":  "openwa_print_settings",
+        "fieldtype":  "JSON",
+        "label":  "Print Settings",
+        "insert_after":  "openwa_language",
+        "description":  "Dynamic print settings (e.g. compact_item_print) applied when rendering the PDF"
     }
 ]

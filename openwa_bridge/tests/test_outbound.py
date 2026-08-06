@@ -98,7 +98,14 @@ class TestSendViaOpenwa(IntegrationTestCase):
         with patch.object(self.msg_class, "_ensure_session_ready", return_value=None):
             instance._send_via_openwa(mock_account, {})
 
-        mock_render.assert_called_once_with("Sales Invoice", "ACC-SINV-001", "Standard")
+        mock_render.assert_called_once_with(
+            "Sales Invoice",
+            "ACC-SINV-001",
+            "Standard",
+            letterhead=None,
+            language=None,
+            settings={},
+        )
 
         document_call = None
         for call in mock_session.post.call_args_list:
@@ -114,6 +121,63 @@ class TestSendViaOpenwa(IntegrationTestCase):
             base64.b64encode(b"%PDF-1.4 fake pdf bytes").decode(),
         )
         self.assertEqual(payload["caption"], "Invoice attached")
+
+    @patch("openwa_bridge.whatsapp_message._send_typing_indicator")
+    @patch("openwa_bridge.whatsapp_message.render_doc_as_pdf", return_value=b"%PDF-1.4 fake pdf bytes")
+    @patch("openwa_bridge.whatsapp_message._http_session")
+    def test_send_document_pdf_forwards_print_options(self, mock_session, mock_render, mock_typing):
+        """Letterhead, language and dynamic settings should be forwarded to render_doc_as_pdf."""
+        mock_session.post.return_value = mock_openwa_api("POST", 200, {"messageId": "doc-456"})
+
+        mock_account = MagicMock()
+        mock_account.get.return_value = "http://localhost:2785"
+        mock_account.openwa_session_id = "session-001"
+        mock_account.get_password.return_value = "api-key-123"
+
+        instance = self.msg_class.__new__(self.msg_class)
+        instance.name = "MSG-005"
+        instance.to = "1234567890"
+        instance.template = None
+        instance.body_param = None
+        instance.template_parameters = None
+        instance.content_type = "document"
+        instance.message = ""
+        instance.is_reply = False
+        instance.reply_to_message_id = None
+        instance.openwa_send_pdf = 1
+        instance.reference_doctype = "Sales Invoice"
+        instance.reference_name = "ACC-SINV-001"
+        instance.openwa_print_format = "Invoice Format"
+        instance.openwa_pdf_filename = ""
+        instance.openwa_letterhead = "Letter Head - ACME"
+        instance.openwa_language = "de"
+        instance.openwa_print_settings = '{"compact_item_print": 1}'
+
+        with patch.object(self.msg_class, "_ensure_session_ready", return_value=None):
+            instance._send_via_openwa(mock_account, {})
+
+        mock_render.assert_called_once_with(
+            "Sales Invoice",
+            "ACC-SINV-001",
+            "Invoice Format",
+            letterhead="Letter Head - ACME",
+            language="de",
+            settings={"compact_item_print": 1},
+        )
+
+    def test_get_pdf_settings_parses_json(self):
+        """_get_pdf_settings should parse the stored JSON into a dict."""
+        instance = self.msg_class.__new__(self.msg_class)
+        instance.openwa_print_settings = '{"compact_item_print": 1}'
+        self.assertEqual(instance._get_pdf_settings(), {"compact_item_print": 1})
+
+    def test_get_pdf_settings_handles_missing_or_invalid(self):
+        """_get_pdf_settings should degrade gracefully."""
+        instance = self.msg_class.__new__(self.msg_class)
+        instance.openwa_print_settings = None
+        self.assertEqual(instance._get_pdf_settings(), {})
+        instance.openwa_print_settings = "not json"
+        self.assertEqual(instance._get_pdf_settings(), {})
 
     @patch("openwa_bridge.whatsapp_message._send_typing_indicator")
     @patch("openwa_bridge.whatsapp_message.render_doc_as_pdf", return_value=None)
@@ -205,6 +269,64 @@ class TestSendDocumentPdf(IntegrationTestCase):
 
         self.assertEqual(doc_spec["openwa_print_format"], "Standard")
         self.assertEqual(doc_spec["openwa_pdf_filename"], "ACC-SINV-2026-00047.pdf")
+
+    def test_stores_print_options_on_message(self):
+        """Letterhead, language and settings should be stored on the WhatsApp Message."""
+        from openwa_bridge.whatsapp_message import send_document_pdf
+
+        mock_doc = MagicMock()
+        mock_doc.name = "MSG-PDF-003"
+        doc_spec = {}
+
+        def _fake_get_doc(spec):
+            for k, v in spec.items():
+                mock_doc.__setattr__(k, v)
+            doc_spec.update(spec)
+            return mock_doc
+
+        with patch("openwa_bridge.whatsapp_message.frappe") as mock_frappe:
+            mock_frappe.get_doc.side_effect = _fake_get_doc
+            send_document_pdf(
+                to="967777713637",
+                reference_doctype="Sales Invoice",
+                reference_name="ACC-SINV-2026-00047",
+                print_format="Invoice Format",
+                filename="my-invoice.pdf",
+                caption="Please find your invoice",
+                letterhead="Letter Head - ACME",
+                language="de",
+                settings='{"compact_item_print": 1}',
+            )
+
+        self.assertEqual(doc_spec["openwa_letterhead"], "Letter Head - ACME")
+        self.assertEqual(doc_spec["openwa_language"], "de")
+        self.assertEqual(doc_spec["openwa_print_settings"], '{"compact_item_print": 1}')
+
+    def test_print_options_default_to_none(self):
+        """Without print options they should be stored as None."""
+        from openwa_bridge.whatsapp_message import send_document_pdf
+
+        mock_doc = MagicMock()
+        mock_doc.name = "MSG-PDF-004"
+        doc_spec = {}
+
+        def _fake_get_doc(spec):
+            for k, v in spec.items():
+                mock_doc.__setattr__(k, v)
+            doc_spec.update(spec)
+            return mock_doc
+
+        with patch("openwa_bridge.whatsapp_message.frappe") as mock_frappe:
+            mock_frappe.get_doc.side_effect = _fake_get_doc
+            send_document_pdf(
+                to="967777713637",
+                reference_doctype="Sales Invoice",
+                reference_name="ACC-SINV-2026-00047",
+            )
+
+        self.assertIsNone(doc_spec["openwa_letterhead"])
+        self.assertIsNone(doc_spec["openwa_language"])
+        self.assertIsNone(doc_spec["openwa_print_settings"])
 
 
 class TestOutboxProcessing(IntegrationTestCase):

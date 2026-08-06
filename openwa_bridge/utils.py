@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hmac
 import hashlib
+import json
 import re
 from datetime import datetime, timedelta
 
@@ -252,35 +253,92 @@ def openwa_to_frappe_vars(text: str) -> str:
 # ------------------------------------------------------------------
 
 
+def _resolve_letterhead(letterhead: str | None = None, doc=None) -> str | None:
+    """Resolve the letterhead to use for a print render.
+
+    Priority: explicit ``letterhead`` arg, then the document's own
+    ``letter_head`` field, then the site's default DocType letterhead
+    (matches the behaviour of the Frappe print page).
+    """
+    if letterhead:
+        return letterhead
+    if doc and doc.get("letter_head"):
+        return doc.get("letter_head")
+    try:
+        default = frappe.db.get_value(
+            "Letter Head",
+            {"disabled": 0, "is_default": 1, "letter_head_for": "DocType"},
+            "name",
+        )
+        if not default:
+            default = frappe.db.get_value(
+                "Letter Head", {"disabled": 0, "is_default": 1}, "name"
+            )
+        return default or None
+    except Exception:
+        return None
+
+
 def render_doc_as_pdf(
     doctype: str, name: str, print_format: str = "Standard",
     letterhead: str | None = None,
+    language: str | None = None,
+    settings: dict | None = None,
 ) -> bytes | None:
     """Render a Frappe document as raw PDF bytes via a print format.
 
     1. Try Chrome PDF generation (matches ``render_doc_as_image``).
     2. Fall back to wkhtmltopdf on failure.
     3. Returns PDF bytes, or ``None`` on failure.
+
+    ``language`` is applied via ``frappe.translate.print_language``.
+    ``settings`` (dynamic print settings such as ``compact_item_print``)
+    are injected into ``frappe.local.form_dict`` so the printview renderer
+    consumes them (same mechanism as ``get_html_and_style``).
     """
+    from frappe.translate import print_language
+
+    doc = None
     try:
-        for generator in ("chrome", "wkhtmltopdf"):
-            try:
-                pdf_bytes = frappe.get_print(
-                    doctype, name, print_format, as_pdf=True,
-                    no_letterhead=0 if letterhead else 1,
-                    letterhead=letterhead,
-                    pdf_generator=generator,
-                )
-                if pdf_bytes:
-                    return pdf_bytes
-            except Exception:
-                continue
+        doc = frappe.get_doc(doctype, name)
     except Exception:
         pass
+    letterhead = _resolve_letterhead(letterhead, doc)
+
+    # Pre-set settings into form_dict — frappe.get_print deep-copies form_dict
+    # at entry (print_utils.py) so printview.py:64 reads them, then restores it.
+    prev_settings = frappe.local.form_dict.get("settings")
+    if settings:
+        frappe.local.form_dict["settings"] = json.dumps(settings)
+    try:
+        with print_language(language):
+            for generator in ("chrome", "wkhtmltopdf"):
+                try:
+                    pdf_bytes = frappe.get_print(
+                        doctype, name, print_format, as_pdf=True,
+                        no_letterhead=0 if letterhead else 1,
+                        letterhead=letterhead,
+                        pdf_generator=generator,
+                    )
+                    if pdf_bytes:
+                        return pdf_bytes
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    finally:
+        if prev_settings is None:
+            frappe.local.form_dict.pop("settings", None)
+        else:
+            frappe.local.form_dict["settings"] = prev_settings
 
     frappe.log_error(
         title="OpenWA: PDF render failed",
-        message=f"Failed to render {doctype} {name} as PDF (print_format={print_format})",
+        message=(
+            f"Failed to render {doctype} {name} as PDF "
+            f"(print_format={print_format}, letterhead={letterhead}, "
+            f"language={language}, settings={settings})"
+        ),
     )
     return None
 

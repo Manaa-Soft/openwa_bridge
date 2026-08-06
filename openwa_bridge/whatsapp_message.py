@@ -209,6 +209,17 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             "WhatsApp Account form."
         )
 
+    def _get_pdf_settings(self) -> dict:
+        """Return the stored dynamic print settings (e.g. ``compact_item_print``) as a dict."""
+        raw = getattr(self, "openwa_print_settings", None)
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+            return parsed if isinstance(parsed, dict) else {}
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
     def _send_via_openwa(self, account: "WhatsAppAccount", meta_payload: dict) -> None:  # noqa: F821
         """
         Translate and send the message through the OpenWA Gateway.
@@ -357,6 +368,9 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     self.reference_doctype,
                     self.reference_name,
                     self.openwa_print_format or "Standard",
+                    letterhead=getattr(self, "openwa_letterhead", None) or None,
+                    language=getattr(self, "openwa_language", None) or None,
+                    settings=self._get_pdf_settings(),
                 )
                 if not pdf_bytes:
                     frappe.throw(
@@ -728,6 +742,9 @@ def send_document_pdf(
     print_format: str | None = None,
     filename: str | None = None,
     caption: str | None = None,
+    letterhead: str | None = None,
+    language: str | None = None,
+    settings: str | None = None,
 ) -> str:
     """Create a WhatsApp Message that sends the reference document as a PDF.
 
@@ -743,6 +760,9 @@ def send_document_pdf(
         print_format: Print Format name (default "Standard").
         filename: Delivered filename (default ``<reference_name>.pdf``).
         caption: Optional caption text (default "").
+        letterhead: Letter Head name (default: resolved at render time).
+        language: Print language code (default: resolved at render time).
+        settings: JSON string of dynamic print settings (e.g. ``{"compact_item_print": 1}``).
 
     Returns:
         str: The created WhatsApp Message name.
@@ -762,6 +782,9 @@ def send_document_pdf(
         "openwa_send_pdf": 1,
         "openwa_print_format": print_format or "Standard",
         "openwa_pdf_filename": filename or f"{reference_name}.pdf",
+        "openwa_letterhead": letterhead or None,
+        "openwa_language": language or None,
+        "openwa_print_settings": settings or None,
     })
     doc.save(ignore_permissions=True)
     return doc.name
