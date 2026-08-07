@@ -622,3 +622,46 @@ class TestTypingInSendFlow(IntegrationTestCase):
             instance._send_via_openwa(mock_account, {})
 
         mock_typing.assert_not_called()
+
+
+class TestReferencePreservation(IntegrationTestCase):
+    """Test that explicitly set references survive CRM's validate doc_events hook."""
+
+    def setUp(self):
+        super().setUp()
+        from openwa_bridge.whatsapp_message import OverrideWhatsAppMessage
+        self.msg_class = OverrideWhatsAppMessage
+
+    def test_explicit_reference_restored_after_clobber(self):
+        """Outgoing message with an explicit reference keeps it after validate."""
+        instance = self.msg_class.__new__(self.msg_class)
+        instance.reference_doctype = "CRM Deal"
+        instance.reference_name = "DEAL-0001"
+
+        instance.before_validate()
+
+        # CRM's crm.api.whatsapp.validate clobbers reference during validate
+        instance.reference_doctype = "CRM Lead"
+        instance.reference_name = "LEAD-0001"
+
+        instance.before_save()
+
+        self.assertEqual(instance.reference_doctype, "CRM Deal")
+        self.assertEqual(instance.reference_name, "DEAL-0001")
+
+    def test_empty_reference_allows_crm_auto_link(self):
+        """Incoming message with no reference keeps CRM's auto-link."""
+        instance = self.msg_class.__new__(self.msg_class)
+        instance.reference_doctype = None
+        instance.reference_name = None
+
+        instance.before_validate()
+
+        # CRM auto-links incoming messages from the sender number
+        instance.reference_doctype = "CRM Lead"
+        instance.reference_name = "LEAD-0001"
+
+        instance.before_save()
+
+        self.assertEqual(instance.reference_doctype, "CRM Lead")
+        self.assertEqual(instance.reference_name, "LEAD-0001")

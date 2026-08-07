@@ -702,6 +702,10 @@ All products are stored locally and sent as fallback text+image messages.
 - [x] PDF regenerated on every outbox attempt (nothing large stored on the doc).
 - [x] `openwa_send_pdf` / `openwa_print_format` / `openwa_pdf_filename` custom fields.
 - [x] Unit tests — PDF send path, render-failure retry, method defaults.
+- [x] **Reference preserved from CRM validate hook** — `OverrideWhatsAppMessage` captures
+      `reference_doctype`/`reference_name` in `before_validate()` and restores them in
+      `before_save()`, so the CRM app's number-based auto-link can't clobber an explicitly
+      set reference. Incoming messages (no reference) still auto-link. See `KNOWN_ISSUES.md`.
 
 ### Media reply workaround
 

@@ -34,6 +34,30 @@ def _send_typing_indicator(base_url: str, session_id: str, api_key: str, chat_id
 class OverrideWhatsAppMessage(WhatsAppMessage):
     """Intercepts all outbound messages and routes OpenWA-enabled accounts through the gateway."""
 
+    def before_validate(self) -> None:
+        """Capture the caller-set reference before downstream validate hooks can overwrite it.
+
+        The CRM app registers a ``doc_events`` validate hook
+        (``crm.api.whatsapp.validate``) that resolves the recipient's number to a
+        Contact/Lead/Deal and overwrites ``reference_doctype``/``reference_name`` on
+        every save — including outgoing messages whose reference was set explicitly
+        (``send_document_pdf``, template sends, the WhatsApp dialog). We snapshot the
+        reference here (``before_validate`` runs before ``validate``) so
+        :meth:`before_save` can restore it.
+        """
+        self._explicit_reference = (self.reference_doctype, self.reference_name)
+
+    def before_save(self) -> None:
+        """Restore the explicitly set reference that CRM's validate hook clobbered.
+
+        Runs in the ``before_save`` phase, which is strictly after ``validate``.
+        Messages with no reference (e.g. incoming webhook messages) are left alone so
+        CRM's auto-linking from the sender's number still applies.
+        """
+        explicit = getattr(self, "_explicit_reference", (None, None))
+        if explicit != (None, None):
+            self.reference_doctype, self.reference_name = explicit
+
     def notify(self, data: dict) -> None:
         """Intercept before Meta API call. ``data`` is the fully-built Meta payload."""
         account = frappe.get_doc("WhatsApp Account", self.whatsapp_account)

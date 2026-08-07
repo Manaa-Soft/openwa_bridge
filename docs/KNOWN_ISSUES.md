@@ -36,6 +36,13 @@ Both messages are delivered; the WhatsApp Message doc tracks the media messageId
 
 ## Resolved Issues
 
+### 1. Reference fields clobbered by CRM validate hook
+**Symptom**: `send_document_pdf` (and template/dialog sends) produced WhatsApp Messages with `reference_doctype`/`reference_name` null or pointing at a different Contact/Lead/Deal, so the send-time PDF render failed ("Failed to render ...") and the message appeared in the wrong CRM thread.
+**Root cause**: The CRM app registers a `doc_events` **validate** hook (`crm.api.whatsapp.validate`) that resolves the recipient's number to a Contact/Lead/Deal and unconditionally overwrites `reference_doctype`/`reference_name` on every save — even when the caller set them explicitly.
+**Fix applied**: `OverrideWhatsAppMessage` captures the reference in `before_validate()` and restores it in `before_save()` (the save phases are strictly ordered: `before_validate` → `validate` → `before_save`). Messages with no reference (incoming webhook messages) are left alone, so CRM's auto-link from the sender number is preserved.
+**File**: `whatsapp_message.py` → `OverrideWhatsAppMessage.before_validate()` / `before_save()`
+**Tests**: `tests/test_outbound.py` → `TestReferencePreservation`
+
 ### 2. Messages marked Sent when session disconnected
 **Symptom**: Outbox entries marked as "Sent" even when the WhatsApp session was manually disconnected or unreachable.
 **Root cause**: OpenWA engine accepts messages even when disconnected — `ready` status means engine alive, NOT WhatsApp linked. The 500 false-positive code also assumed delivery on any HTTP 500.
