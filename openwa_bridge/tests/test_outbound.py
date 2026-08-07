@@ -330,7 +330,7 @@ class TestSendDocumentPdf(IntegrationTestCase):
 
 
 class TestPrintFormatValidation(IntegrationTestCase):
-    """Test _validate_print_format_for_doctype guard."""
+    """Test _validate_print_format_for_doctype guard (doctype-agnostic)."""
 
     def test_standard_passes(self):
         """Standard/None should resolve to Standard without a DB lookup."""
@@ -382,6 +382,29 @@ class TestPrintFormatValidation(IntegrationTestCase):
                 "CRM Deal", "SALES INVOICE Qualification"
             )
         mock_frappe.throw.assert_called_once()
+
+    @patch("openwa_bridge.utils.frappe")
+    def test_any_doctype_pair_rejected(self, mock_frappe):
+        """The guard applies to every doctype, not just CRM Deal.
+
+        Uses an unrelated pair (a ToDo doctype printing with a format built
+        for Note) to prove the check is fully generic."""
+        from openwa_bridge.utils import _validate_print_format_for_doctype
+
+        mock_frappe.db.get_value.return_value = "Note"
+
+        def _throw(msg, exc=None):
+            raise exc or Exception(msg)
+
+        mock_frappe.throw.side_effect = _throw
+        mock_frappe.ValidationError = ValueError
+
+        with self.assertRaises(ValueError):
+            _validate_print_format_for_doctype("ToDo", "Note Header")
+        mock_frappe.throw.assert_called_once()
+        mock_frappe.db.get_value.assert_called_once_with(
+            "Print Format", "Note Header", "doc_type"
+        )
 
 
 class TestOutboxProcessing(IntegrationTestCase):
