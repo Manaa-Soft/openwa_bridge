@@ -280,14 +280,44 @@ def _resolve_letterhead(letterhead: str | None = None, doc=None) -> str | None:
 
 
 def _validate_print_format_for_doctype(doctype: str, print_format: str | None) -> str:
-    """Return the effective print format name (unchanged).
+    """Return the effective print format for a doctype, refusing mismatches.
 
-    Kept as a no-op resolver for full print-page parity: like Frappe's desk
-    print page, any named print format is rendered as-is regardless of the
-    doctype being printed. Each doctype renders with whatever default format
-    the print page resolves.
+    Frappe's renderers happily apply *any* named Print Format to *any*
+    document (printview's ``get_print_format_doc`` only checks that the
+    Print Format row exists). That lets a Sales Invoice format render
+    against a CRM Deal and embed Jinja errors for fields that doctype
+    does not have (``no such element … object['company']``) without ever
+    raising.
+
+    This guard refuses that up-front so the bridge never sends a broken PDF:
+    only formats whose ``doc_type`` matches the doctype (or generic formats
+    with no ``doc_type``, plus "Standard") are accepted. Anything else raises
+    so the message fails with a clear reason.
+
+    Args:
+        doctype: The DocType being printed.
+        print_format: Print Format name (None/"Standard" allowed).
+
+    Returns:
+        The validated print format name.
+
+    Raises:
+        frappe.ValidationError: If the format belongs to a different doctype.
     """
-    return (print_format or "Standard").strip() or "Standard"
+    pf = (print_format or "Standard").strip() or "Standard"
+    if pf == "Standard":
+        return "Standard"
+
+    pf_doctype = frappe.db.get_value("Print Format", pf, "doc_type")
+    if pf_doctype and pf_doctype != doctype:
+        frappe.throw(
+            frappe._(
+                "Print Format '{0}' belongs to '{1}' and cannot be used to print "
+                "'{2}'. Pick a print format for '{2}' or use Standard."
+            ).format(pf, pf_doctype, doctype),
+            frappe.ValidationError,
+        )
+    return pf
 
 
 def render_doc_as_pdf(
@@ -307,9 +337,9 @@ def render_doc_as_pdf(
     are injected into ``frappe.local.form_dict`` so the printview renderer
     consumes them (same mechanism as ``get_html_and_style``).
 
-    The print format is passed through unchanged (print-page parity) — the
-    renderer behaves exactly like ``frappe.get_print`` / the desk print page
-    for the given doctype.
+    The print format is validated against ``doctype`` first (see
+    ``_validate_print_format_for_doctype``) so a format built for another
+    doctype can never be rendered into a sent PDF here.
     """
     from frappe.translate import print_language
 

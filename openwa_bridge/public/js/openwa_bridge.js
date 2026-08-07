@@ -331,6 +331,11 @@ function _init_pdf_pane(dialog, frm) {
  * default mirrors print.js set_default_print_format exactly:
  * `_layout_print_format || meta.default_print_format || ""` (falling back to
  * Standard for rendering).
+ *
+ * A default whose `doc_type` belongs to a different doctype (e.g. a Sales
+ * Invoice format configured as the default for CRM Deal) can never render
+ * that document, so it is replaced with Standard and a note is shown —
+ * mirroring how Frappe degrades a missing/unusable format to Standard.
  * @param {object} dialog - The open dialog.
  * @param {object} state - PDF pane state.
  * @returns {Promise} Resolves when all defaults are applied.
@@ -342,8 +347,33 @@ function _set_defaults(dialog, state) {
     tasks.push(state.filename_ctl.set_value(`${frm.docname}.pdf`));
 
     const pf = frm._layout_print_format || frm.meta.default_print_format || "Standard";
+    const pf_task =
+        pf === "Standard"
+            ? Promise.resolve(pf)
+            : frappe.db
+                  .get_value("Print Format", pf, "doc_type")
+                  .then(({ message }) => {
+                      const pf_doctype = message?.doc_type || null;
+                      if (pf_doctype && pf_doctype !== frm.doctype) {
+                          state.$status
+                              .removeClass("error")
+                              .html(
+                                  __(
+                                      "Default print format '{0}' is for '{1}' and cannot be used for '{2}'; using Standard.",
+                                      [pf, pf_doctype, frm.doctype]
+                                  )
+                              );
+                          return "Standard";
+                      }
+                      return pf;
+                  });
+
     tasks.push(
-        state.pf_ctl.set_value(pf).then(() => _apply_print_format_defaults(state))
+        pf_task.then((resolved_pf) =>
+            state.pf_ctl
+                .set_value(resolved_pf)
+                .then(() => _apply_print_format_defaults(state))
+        )
     );
 
     return Promise.all(tasks);
@@ -441,15 +471,19 @@ function _default_letterhead(state) {
 
 /**
  * Render the live preview via get_html_and_style and gate the Send button on
- * a successful render. Uses the exact same args the print page passes, so each
- * doctype renders exactly like Frappe's desk print page (whatever default
- * print format, language and letterhead the print page resolves).
+ * a successful render. Uses the exact same args the print page passes.
+ *
+ * A named print format whose `doc_type` belongs to a different doctype can
+ * never render this document (Frappe embeds Jinja errors in the output rather
+ * than raising), so it is refused up-front with a clear message and Send stays
+ * disabled. Standard and formats matching the current doctype render normally.
  * @param {object} dialog - The open dialog.
  * @param {object} state - PDF pane state.
  */
 function _refresh_preview(dialog, state) {
     if (!state.ready) return;
 
+    const frm = state.frm;
     const pf = state.pf_ctl.get_value() || "Standard";
     const lh = state.lh_ctl.get_value() || "";
     const lang = state.lang_ctl.get_value() || frappe.boot.lang;
@@ -459,6 +493,38 @@ function _refresh_preview(dialog, state) {
     state.$status.removeClass("error").html(__("Rendering preview…"));
     if (state._req) state._req.abort();
 
+    if (pf !== "Standard") {
+        frappe.db
+            .get_value("Print Format", pf, "doc_type")
+            .then(({ message }) => {
+                const pf_doctype = message?.doc_type || null;
+                if (pf_doctype && pf_doctype !== frm.doctype) {
+                    state.$status
+                        .addClass("error")
+                        .html(
+                            __(
+                                "Print Format '{0}' is for '{1}' and cannot be used for '{2}'. Pick a format for '{2}' or Standard.",
+                                [pf, pf_doctype, frm.doctype]
+                            )
+                        );
+                    return;
+                }
+                _request_preview(dialog, state, pf, lh, lang);
+            });
+        return;
+    }
+    _request_preview(dialog, state, pf, lh, lang);
+}
+
+/**
+ * Request the rendered HTML/style for the current settings.
+ * @param {object} dialog - The open dialog.
+ * @param {object} state - PDF pane state.
+ * @param {string} pf - Print Format name.
+ * @param {string} lh - Letter Head name ("" for none).
+ * @param {string} lang - Language code.
+ */
+function _request_preview(dialog, state, pf, lh, lang) {
     state._req = frappe.call({
         method: "frappe.www.printview.get_html_and_style",
         args: {
@@ -473,7 +539,10 @@ function _refresh_preview(dialog, state) {
             if (r.exc || !r.message || !r.message.html) {
                 state.$status
                     .addClass("error")
-                    .html(__("Preview could not be rendered. Send is disabled."));
+                    .html(
+                        _preview_error_text(r) ||
+                            __("Preview could not be rendered. Send is disabled.")
+                    );
                 return;
             }
             const html =
@@ -487,6 +556,35 @@ function _refresh_preview(dialog, state) {
             );
         },
     });
+}
+
+/**
+ * Extract the server's actual error message from a frappe.call response, or
+ * "" when none is available. Surfaces thrown ValidationErrors (e.g. a guard)
+ * instead of a generic "could not render" message.
+ * @param {object} r - frappe.call response.
+ * @returns {string}
+ */
+function _preview_error_text(r) {
+    const messages = r.message?._server_messages || r._server_messages;
+    if (Array.isArray(messages) && messages.length) {
+        for (const msg of messages) {
+            try {
+                const parsed = JSON.parse(msg);
+                if (parsed && parsed.message) return parsed.message;
+            } catch (_) {
+                // not JSON — try the raw string
+            }
+        }
+    }
+    if (r.exc) {
+        const lines = String(r.exc).trim().split("\n");
+        for (let i = lines.length - 1; i >= 0; i--) {
+            const line = lines[i].trim();
+            if (line) return line;
+        }
+    }
+    return "";
 }
 
 /**
