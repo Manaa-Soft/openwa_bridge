@@ -441,18 +441,15 @@ function _default_letterhead(state) {
 
 /**
  * Render the live preview via get_html_and_style and gate the Send button on
- * a successful render. Uses the exact same args the print page passes.
- *
- * Also guards against cross-doctype print formats: a format whose `doc_type`
- * is set and differs from the form's doctype (e.g. a Sales Invoice format on a
- * CRM Deal) can never render — Send stays disabled with a clear message.
+ * a successful render. Uses the exact same args the print page passes, so each
+ * doctype renders exactly like Frappe's desk print page (whatever default
+ * print format, language and letterhead the print page resolves).
  * @param {object} dialog - The open dialog.
  * @param {object} state - PDF pane state.
  */
 function _refresh_preview(dialog, state) {
     if (!state.ready) return;
 
-    const frm = state.frm;
     const pf = state.pf_ctl.get_value() || "Standard";
     const lh = state.lh_ctl.get_value() || "";
     const lang = state.lang_ctl.get_value() || frappe.boot.lang;
@@ -462,38 +459,6 @@ function _refresh_preview(dialog, state) {
     state.$status.removeClass("error").html(__("Rendering preview…"));
     if (state._req) state._req.abort();
 
-    const validate =
-        pf === "Standard"
-            ? Promise.resolve(null)
-            : frappe.db
-                  .get_value("Print Format", pf, "doc_type")
-                  .then(({ message }) => message?.doc_type || null);
-
-    validate.then((doc_type) => {
-        if (doc_type && doc_type !== frm.doctype) {
-            state.$status
-                .addClass("error")
-                .html(
-                    __(
-                        "Print Format '{0}' belongs to '{1}' and cannot be used for '{2}'. Pick a format for '{2}' or Standard.",
-                        [pf, doc_type, frm.doctype]
-                    )
-                );
-            return;
-        }
-        _request_preview(dialog, state, pf, lh, lang);
-    });
-}
-
-/**
- * Request the rendered HTML/style for the current settings.
- * @param {object} dialog - The open dialog.
- * @param {object} state - PDF pane state.
- * @param {string} pf - Print Format name.
- * @param {string} lh - Letter Head name ("" for none).
- * @param {string} lang - Language code.
- */
-function _request_preview(dialog, state, pf, lh, lang) {
     state._req = frappe.call({
         method: "frappe.www.printview.get_html_and_style",
         args: {
