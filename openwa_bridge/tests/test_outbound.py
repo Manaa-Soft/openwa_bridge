@@ -329,6 +329,60 @@ class TestSendDocumentPdf(IntegrationTestCase):
         self.assertIsNone(doc_spec["openwa_print_settings"])
 
 
+class TestPrintFormatValidation(IntegrationTestCase):
+    """Test _validate_print_format_for_doctype guard."""
+
+    def test_standard_passes(self):
+        """Standard/None should resolve to Standard without a DB lookup."""
+        from openwa_bridge.utils import _validate_print_format_for_doctype
+
+        self.assertEqual(_validate_print_format_for_doctype("CRM Deal", "Standard"), "Standard")
+        self.assertEqual(_validate_print_format_for_doctype("CRM Deal", None), "Standard")
+        self.assertEqual(_validate_print_format_for_doctype("CRM Deal", ""), "Standard")
+
+    @patch("openwa_bridge.utils.frappe")
+    def test_matching_doctype_passes(self, mock_frappe):
+        """A format whose doc_type matches the doctype should be accepted."""
+        from openwa_bridge.utils import _validate_print_format_for_doctype
+
+        mock_frappe.db.get_value.return_value = "Sales Invoice"
+        result = _validate_print_format_for_doctype(
+            "Sales Invoice", "SALES INVOICE Qualification"
+        )
+        self.assertEqual(result, "SALES INVOICE Qualification")
+        mock_frappe.db.get_value.assert_called_once_with(
+            "Print Format", "SALES INVOICE Qualification", "doc_type"
+        )
+
+    @patch("openwa_bridge.utils.frappe")
+    def test_generic_format_passes(self, mock_frappe):
+        """A format with no doc_type is generic and can be used anywhere."""
+        from openwa_bridge.utils import _validate_print_format_for_doctype
+
+        mock_frappe.db.get_value.return_value = None
+        result = _validate_print_format_for_doctype("CRM Deal", "Generic Quote")
+        self.assertEqual(result, "Generic Quote")
+
+    @patch("openwa_bridge.utils.frappe")
+    def test_cross_doctype_format_rejected(self, mock_frappe):
+        """A Sales Invoice format on a CRM Deal must be refused."""
+        from openwa_bridge.utils import _validate_print_format_for_doctype
+
+        mock_frappe.db.get_value.return_value = "Sales Invoice"
+
+        def _throw(msg, exc=None):
+            raise exc or Exception(msg)
+
+        mock_frappe.throw.side_effect = _throw
+        mock_frappe.ValidationError = ValueError
+
+        with self.assertRaises(ValueError):
+            _validate_print_format_for_doctype(
+                "CRM Deal", "SALES INVOICE Qualification"
+            )
+        mock_frappe.throw.assert_called_once()
+
+
 class TestOutboxProcessing(IntegrationTestCase):
     """Test outbox processing logic."""
 

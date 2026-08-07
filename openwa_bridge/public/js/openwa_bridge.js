@@ -327,7 +327,10 @@ function _init_pdf_pane(dialog, frm) {
 
 /**
  * Prefill the PDF controls with the same defaults Frappe's print page uses.
- * Resolves print format → language → letterhead asynchronously.
+ * Resolves print format → language → letterhead asynchronously. The format
+ * default mirrors print.js set_default_print_format exactly:
+ * `_layout_print_format || meta.default_print_format || ""` (falling back to
+ * Standard for rendering).
  * @param {object} dialog - The open dialog.
  * @param {object} state - PDF pane state.
  * @returns {Promise} Resolves when all defaults are applied.
@@ -338,35 +341,64 @@ function _set_defaults(dialog, state) {
 
     tasks.push(state.filename_ctl.set_value(`${frm.docname}.pdf`));
 
-    const pf = frm.meta.default_print_format || "Standard";
+    const pf = frm._layout_print_format || frm.meta.default_print_format || "Standard";
     tasks.push(
         state.pf_ctl.set_value(pf).then(() => _apply_print_format_defaults(state))
-    );
-
-    tasks.push(
-        _resolve_default_letterhead(state).then((lh) => {
-            if (lh) return state.lh_ctl.set_value(lh);
-        })
     );
 
     return Promise.all(tasks);
 }
 
 /**
- * Compute the language default for the current print format (mirrors
- * print.js set_default_print_language) and apply it to the control.
+ * Apply the language + letterhead defaults for the current print format.
+ * Mirrors print.js refresh_print_format: set_default_print_language
+ * (`doc.language || print_format.default_print_language || boot.lang`) and
+ * update_letterhead_for_print_format (a named beta format's embedded
+ * `format_data.letter_head`, else the document/default letterhead).
  * @param {object} state - PDF pane state.
- * @returns {Promise} Resolves once the language control is set.
+ * @returns {Promise} Resolves once the language/letterhead controls are set.
  */
 function _apply_print_format_defaults(state) {
     const frm = state.frm;
     const pf = state.pf_ctl.get_value() || "Standard";
-    if (!pf) return Promise.resolve();
 
-    return frappe.db.get_value("Print Format", pf, "default_print_language").then(({ message }) => {
-        const lang = frm.doc.language || message?.default_print_language || frappe.boot.lang;
-        return state.lang_ctl.set_value(lang);
+    const format_req =
+        pf === "Standard"
+            ? Promise.resolve({})
+            : frappe.db
+                  .get_value(
+                      "Print Format",
+                      pf,
+                      ["default_print_language", "format_data", "doc_type"]
+                  )
+                  .then(({ message }) => message || {});
+
+    return format_req.then((fmt) => {
+        const lang = frm.doc.language || fmt.default_print_language || frappe.boot.lang;
+        return state.lang_ctl.set_value(lang).then(() => _resolve_letterhead(state, fmt));
     });
+}
+
+/**
+ * Resolve the letterhead: a named format's embedded `format_data.letter_head`
+ * wins (print.js update_letterhead_for_print_format), else the document's own
+ * letter_head, else the site's default DocType letterhead.
+ * @param {object} state - PDF pane state.
+ * @param {object} fmt - Print Format doc fields ({format_data}).
+ * @returns {Promise} Resolves once the letterhead control is set.
+ */
+function _resolve_letterhead(state, fmt) {
+    if (fmt && fmt.format_data) {
+        try {
+            const data = JSON.parse(fmt.format_data);
+            if (data && data.letter_head) {
+                return state.lh_ctl.set_value(data.letter_head);
+            }
+        } catch (_) {
+            // malformed format_data — fall through to document/default letterhead
+        }
+    }
+    return _resolve_default_letterhead(state);
 }
 
 /**
@@ -380,27 +412,47 @@ function _resolve_default_letterhead(state) {
     if (frm.doc.letter_head) {
         return frappe.db
             .get_value("Letter Head", { name: frm.doc.letter_head, disabled: 0 }, "name")
-            .then(({ message }) => message?.name || null);
+            .then(({ message }) => {
+                if (!message?.name) return _default_letterhead(state);
+                return state.lh_ctl.set_value(message.name);
+            });
     }
+    return _default_letterhead(state);
+}
+
+/**
+ * Fetch the site's default DocType letterhead and apply it to the control.
+ * @param {object} state - PDF pane state.
+ * @returns {Promise<string|null>}
+ */
+function _default_letterhead(state) {
     return frappe.db
         .get_value("Letter Head", { disabled: 0, is_default: 1, letter_head_for: "DocType" }, "name")
         .then(({ message }) => {
-            if (message?.name) return message.name;
+            if (message?.name) return state.lh_ctl.set_value(message.name);
             return frappe.db
                 .get_value("Letter Head", { disabled: 0, is_default: 1 }, "name")
-                .then((r) => r.message?.name || null);
+                .then((r) => {
+                    if (r.message?.name) return state.lh_ctl.set_value(r.message.name);
+                    return null;
+                });
         });
 }
 
 /**
  * Render the live preview via get_html_and_style and gate the Send button on
  * a successful render. Uses the exact same args the print page passes.
+ *
+ * Also guards against cross-doctype print formats: a format whose `doc_type`
+ * is set and differs from the form's doctype (e.g. a Sales Invoice format on a
+ * CRM Deal) can never render — Send stays disabled with a clear message.
  * @param {object} dialog - The open dialog.
  * @param {object} state - PDF pane state.
  */
 function _refresh_preview(dialog, state) {
     if (!state.ready) return;
 
+    const frm = state.frm;
     const pf = state.pf_ctl.get_value() || "Standard";
     const lh = state.lh_ctl.get_value() || "";
     const lang = state.lang_ctl.get_value() || frappe.boot.lang;
@@ -410,6 +462,38 @@ function _refresh_preview(dialog, state) {
     state.$status.removeClass("error").html(__("Rendering preview…"));
     if (state._req) state._req.abort();
 
+    const validate =
+        pf === "Standard"
+            ? Promise.resolve(null)
+            : frappe.db
+                  .get_value("Print Format", pf, "doc_type")
+                  .then(({ message }) => message?.doc_type || null);
+
+    validate.then((doc_type) => {
+        if (doc_type && doc_type !== frm.doctype) {
+            state.$status
+                .addClass("error")
+                .html(
+                    __(
+                        "Print Format '{0}' belongs to '{1}' and cannot be used for '{2}'. Pick a format for '{2}' or Standard.",
+                        [pf, doc_type, frm.doctype]
+                    )
+                );
+            return;
+        }
+        _request_preview(dialog, state, pf, lh, lang);
+    });
+}
+
+/**
+ * Request the rendered HTML/style for the current settings.
+ * @param {object} dialog - The open dialog.
+ * @param {object} state - PDF pane state.
+ * @param {string} pf - Print Format name.
+ * @param {string} lh - Letter Head name ("" for none).
+ * @param {string} lang - Language code.
+ */
+function _request_preview(dialog, state, pf, lh, lang) {
     state._req = frappe.call({
         method: "frappe.www.printview.get_html_and_style",
         args: {
