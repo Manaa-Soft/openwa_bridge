@@ -137,6 +137,15 @@ Both messages are delivered; the WhatsApp Message doc tracks the media messageId
 **Fix**: `on_update` hook auto-syncs webhook secret — lists webhooks, finds by URL match, updates via PUT or creates via POST.
 **File**: `whatsapp_account.py` → `on_account_update()`
 
+### 22. PDF message invisible in CRM thread
+**Symptom**: A PDF sent from a Sales Invoice (or any non-CRM doctype) rendered fine but never showed up in the CRM Deal/Lead/Contact thread. CRM's thread view only lists messages whose `reference_doctype`/`reference_name` equal the Deal (or the Deal's Lead).
+**Root cause**: `send_document_pdf` linked the message to the sent document only. One reference pair cannot both point at the invoice (for the PDF render) and at the CRM record (for the thread), and re-linking the reference alone would break the render.
+**Fix applied**: Decoupled the two concerns. `send_document_pdf` stores the rendered document in new `openwa_render_doctype`/`openwa_render_name` custom fields, then links `reference_doctype`/`reference_name` to the CRM record matching the recipient number (`crm.integrations.api.get_contact_lead_or_deal_from_number`). `_send_via_openwa()` renders the PDF from the render fields, falling back to the reference. No CRM match (or sending already from a CRM doctype) leaves the reference as the passed document.
+**Note**: Linking is by recipient number — a number matching a different Deal links the message to that Deal.
+**Files**: `whatsapp_message.py` → `send_document_pdf()`, `_resolve_crm_reference()`, `_send_via_openwa()`; `fixtures/custom_field.json`
+**Tests**: `tests/test_outbound.py` → `TestSendDocumentPdf`
+**Deploy**: requires `bench migrate` (creates the two custom fields) + `clear-cache`.
+
 ---
 
 ## Server Environment

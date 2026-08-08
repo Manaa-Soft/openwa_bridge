@@ -706,6 +706,12 @@ All products are stored locally and sent as fallback text+image messages.
       `reference_doctype`/`reference_name` in `before_validate()` and restores them in
       `before_save()`, so the CRM app's number-based auto-link can't clobber an explicitly
       set reference. Incoming messages (no reference) still auto-link. See `KNOWN_ISSUES.md`.
+- [x] **PDF message visible in CRM thread** — `send_document_pdf` stores the rendered
+      document in `openwa_render_doctype`/`openwa_render_name` and links the reference to
+      the CRM record matching the recipient number (via `crm.integrations.api.
+      get_contact_lead_or_deal_from_number`), so the PDF shows in the Deal/Lead/Contact
+      thread while still rendering the source document. No CRM match keeps the reference as
+      the passed document. Requires `bench migrate` for the two new custom fields.
 
 ### Media reply workaround
 

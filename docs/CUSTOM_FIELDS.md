@@ -153,6 +153,8 @@ Values are read at send time using `doc.get_formatted(field_name)` for live data
 | `openwa_send_pdf` | `whatsapp_message.py` | Gate for send-time PDF rendering in media branch of `_send_via_openwa()` |
 | `openwa_print_format` | `whatsapp_message.py` | Print Format used by `render_doc_as_pdf()` at send time |
 | `openwa_pdf_filename` | `whatsapp_message.py` | Delivered filename (defaults to `<reference_name>.pdf`) |
+| `openwa_render_doctype` | `whatsapp_message.py` | DocType rendered as PDF in `_send_via_openwa()` (falls back to `reference_doctype`) |
+| `openwa_render_name` | `whatsapp_message.py` | Name rendered as PDF in `_send_via_openwa()` (falls back to `reference_name`) |
 | `on_account_trash` | `whatsapp_account.py` | Delete OpenWA session when WhatsApp Account is deleted |
 | `setup_openwa_session` | `whatsapp_account.py` | One-click: create session, start, fetch QR |
 | `get_openwa_qr` | `whatsapp_account.py` | Fetch QR code for existing session |
@@ -210,14 +212,17 @@ Added to the `WhatsApp Message` DocType via `fixtures/custom_field.json`.
 | `openwa_send_pdf` | Check | Send as PDF | Render the linked reference document as a PDF and send it via OpenWA `send-document`. PDF is regenerated at send time in the outbox worker. |
 | `openwa_print_format` | Link (Print Format) | Print Format | Print Format used to render the PDF. Default: `Standard`. |
 | `openwa_pdf_filename` | Data | PDF Filename | Delivered filename. Default: `<reference_name>.pdf`. |
+| `openwa_render_doctype` | Data | Render DocType | Read-only. DocType of the document rendered as PDF. Differs from the reference when the reference is a CRM record (Deal/Lead/Contact) and the PDF is another doc (e.g. Sales Invoice). |
+| `openwa_render_name` | Data | Render Name | Read-only. Name of the document rendered as PDF (see `openwa_render_doctype`). |
 
 ### Send-as-PDF Flow
 
 1. "Send To Whatsapp" dialog (in the vendored `frappe_whatsapp` app) calls `openwa_bridge.whatsapp_message.send_document_pdf` with `to`, `reference_doctype`, `reference_name`, and optional `print_format`, `filename`, `caption`.
-2. A WhatsApp Message is created with `content_type="document"`, `openwa_send_pdf=1` and the reference fields — no base64 is stored on the doc.
-3. The outbox worker calls `_send_via_openwa()`, which renders the PDF at send time via `render_doc_as_pdf()` (Chrome, falling back to wkhtmltopdf), base64-encodes it, and POSTs to `send-document` with `mimetype: application/pdf`.
-4. Rendering happens on every attempt, so retries/backoff stay safe and the delivered PDF is always current.
-5. If rendering fails, the send raises and the outbox retries with backoff.
+2. A WhatsApp Message is created with `content_type="document"`, `openwa_send_pdf=1`, the reference fields, and `openwa_render_doctype`/`openwa_render_name` set to the passed document — no base64 is stored on the doc.
+3. When the CRM app is installed and the passed reference is not already a CRM doctype, `_resolve_crm_reference()` links `reference_doctype`/`reference_name` to the CRM record (Contact, or its CRM Lead / CRM Deal) matching the recipient number, so the message shows in the CRM thread.
+4. The outbox worker calls `_send_via_openwa()`, which renders the PDF at send time from the render fields (falling back to the reference for existing messages) via `render_doc_as_pdf()` (Chrome, falling back to wkhtmltopdf), base64-encodes it, and POSTs to `send-document` with `mimetype: application/pdf`.
+5. Rendering happens on every attempt, so retries/backoff stay safe and the delivered PDF is always current.
+6. If rendering fails, the send raises and the outbox retries with backoff.
 
 > **Note**: `frappe.get_print()` cannot render draft documents unless **Allow Print for Draft** is enabled in Print Settings.
 

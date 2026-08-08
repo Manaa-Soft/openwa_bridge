@@ -380,17 +380,22 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             # Send-as-PDF: render the linked reference document at send time.
             # No base64 is stored on the doc — regenerated on every attempt so
             # retries/backoff stay safe and the PDF is always current.
+            # The PDF is rendered from the render fields so the reference can be a
+            # CRM record (Deal/Lead/Contact) while the PDF is another doc (e.g. Sales
+            # Invoice) — see send_document_pdf.
+            render_doctype = getattr(self, "openwa_render_doctype", None) or self.reference_doctype
+            render_name = getattr(self, "openwa_render_name", None) or self.reference_name
             if (
                 self.content_type == "document"
                 and not link
                 and not b64
                 and getattr(self, "openwa_send_pdf", 0)
-                and self.reference_doctype
-                and self.reference_name
+                and render_doctype
+                and render_name
             ):
                 pdf_bytes = render_doc_as_pdf(
-                    self.reference_doctype,
-                    self.reference_name,
+                    render_doctype,
+                    render_name,
                     self.openwa_print_format or "Standard",
                     letterhead=getattr(self, "openwa_letterhead", None) or None,
                     language=getattr(self, "openwa_language", None) or None,
@@ -398,14 +403,14 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 )
                 if not pdf_bytes:
                     frappe.throw(
-                        f"Failed to render {self.reference_doctype} "
-                        f"{self.reference_name} as PDF. Check the Print Format and "
+                        f"Failed to render {render_doctype} "
+                        f"{render_name} as PDF. Check the Print Format and "
                         "that 'Allow Print for Draft' is enabled for draft documents."
                     )
                 import base64 as _b64
                 b64 = _b64.b64encode(pdf_bytes).decode()
                 mimetype = "application/pdf"
-                filename = self.openwa_pdf_filename or f"{self.reference_name}.pdf"
+                filename = self.openwa_pdf_filename or f"{render_name}.pdf"
 
             if not link and not b64:
                 frappe.throw(
@@ -773,9 +778,15 @@ def send_document_pdf(
     """Create a WhatsApp Message that sends the reference document as a PDF.
 
     The PDF is rendered at send time (in the outbox worker) from
-    ``reference_doctype`` / ``reference_name`` using ``openwa_print_format``,
-    so nothing large is stored on the WhatsApp Message doc and retries
-    regenerate a current copy.
+    ``openwa_render_doctype`` / ``openwa_render_name`` (which default to the
+    passed reference) using ``openwa_print_format``, so nothing large is
+    stored on the WhatsApp Message doc and retries regenerate a current copy.
+
+    When the CRM app is installed, the reference is linked to the CRM record
+    that matches the recipient number (Contact, or its CRM Lead / CRM Deal), so
+    the message appears in the CRM thread — while the PDF still renders the
+    passed document. If the number matches no CRM record (or sending already
+    from a CRM doctype), the reference stays the passed document.
 
     Args:
         to: Recipient phone number (any format — normalized to ``<num>@c.us``).
@@ -809,6 +820,38 @@ def send_document_pdf(
         "openwa_letterhead": letterhead or None,
         "openwa_language": language or None,
         "openwa_print_settings": settings or None,
+        "openwa_render_doctype": reference_doctype,
+        "openwa_render_name": reference_name,
     })
+    crm_reference = _resolve_crm_reference(to, reference_doctype)
+    if crm_reference:
+        doc.reference_doctype, doc.reference_name = crm_reference
     doc.save(ignore_permissions=True)
     return doc.name
+
+
+def _resolve_crm_reference(to: str, reference_doctype: str) -> tuple[str, str] | None:
+    """Return the CRM doc (Contact, CRM Lead or CRM Deal) matching ``to``, if any.
+
+    Links an outgoing PDF message to the CRM thread that already exists for the
+    recipient's number. The PDF is rendered from the render fields, so the
+    reference can safely point at the CRM record without losing the source
+    document. Best-effort: any failure leaves the reference untouched.
+    """
+    if reference_doctype in ("CRM Deal", "CRM Lead", "Contact"):
+        return None
+    if "crm" not in frappe.get_installed_apps():
+        return None
+    try:
+        from crm.integrations.api import get_contact_lead_or_deal_from_number
+
+        docname, doctype = get_contact_lead_or_deal_from_number(to)
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(),
+            "OpenWA: failed to resolve CRM reference for send_document_pdf",
+        )
+        return None
+    if docname and doctype:
+        return (doctype, docname)
+    return None

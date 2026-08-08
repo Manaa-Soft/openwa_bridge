@@ -443,5 +443,27 @@
         "label":  "Print Settings",
         "insert_after":  "openwa_language",
         "description":  "Dynamic print settings (e.g. compact_item_print) applied when rendering the PDF"
+    },
+    {
+        "name":  "WhatsApp Message-openwa_render_doctype",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Message",
+        "fieldname":  "openwa_render_doctype",
+        "fieldtype":  "Data",
+        "label":  "Render DocType",
+        "insert_after":  "openwa_print_settings",
+        "read_only":  1,
+        "description":  "Document rendered as PDF. Differs from the reference when the reference is a CRM record (e.g. Deal) and the PDF is another doc (e.g. Sales Invoice)"
+    },
+    {
+        "name":  "WhatsApp Message-openwa_render_name",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Message",
+        "fieldname":  "openwa_render_name",
+        "fieldtype":  "Data",
+        "label":  "Render Name",
+        "insert_after":  "openwa_render_doctype",
+        "read_only":  1,
+        "description":  "Name of the document rendered as PDF (see Render DocType)"
     }
 ]

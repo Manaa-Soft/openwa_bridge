@@ -50,6 +50,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **Uninstall cleanup** — `before_uninstall()` deletes OpenWA sessions and webhooks
 
 ### Fixed
+- **PDF messages invisible in CRM thread** — a PDF sent from a Sales Invoice (or any non-CRM doctype) was linked only to that document, so it never appeared in the CRM Deal/Lead/Contact thread. `send_document_pdf` now links the message to the CRM record matching the recipient number (via `crm.integrations.api.get_contact_lead_or_deal_from_number`) while keeping the rendered document in new `openwa_render_doctype`/`openwa_render_name` fields; `_send_via_openwa()` renders the PDF from those (falling back to the reference for existing messages).
 - **Reference fields clobbered by CRM validate hook** — `send_document_pdf` (and template/dialog sends) had `reference_doctype`/`reference_name` silently overwritten (or nulled) by the CRM app's `doc_events` validate hook, which resolves the recipient's number to a Contact/Lead/Deal. `OverrideWhatsAppMessage` now snapshots the reference in `before_validate()` and restores it in `before_save()`. Incoming messages (no explicit reference) are untouched, so CRM auto-linking still works.
 - **Messages marked Sent when session disconnected** — Added pre-send session check in outbox processor that verifies `status=ready` AND `phone` field is set before attempting to send. Prevents sending to a disconnected engine that accepts messages (201+messageId) but can never deliver them.
 - **500 HTTP false-positive marked messages as Sent** — Removed incorrect assumption that HTTP 500 from OpenWA means "engine delivered before error". OpenWA's `persistSentState` always returns 201+messageId on success (swallows DB errors); `failSend` always throws 500 with NO messageId. ANY 500 now triggers retry with backoff.
@@ -96,6 +97,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **`use_json_request_body = True`** — removed (was causing 417 rejection)
 
 ### Changed
+- **Send-as-PDF dialog preview removed** — the live iframe preview pane and its status line were dropped from the "Send To Whatsapp" dialog. The dialog still verifies the document renders with the chosen Print Format/Language/Letter Head/Print Settings (`get_html_and_style`) before enabling Send; render failures surface as a message instead of inline status text. Errors from cross-doctype print formats are unchanged.
 - **Settings moved to WhatsApp Account** — 7 settings (HMAC strict, API timeout, session start timeout, rate limit, CB threshold, CB cooldown, max outbox attempts) moved from OpenWA Bridge Settings to per-account WhatsApp Account. Each account now has independent config.
 - **WhatsApp Account custom fields** — expanded from 9 to 16 fields (7 new settings in collapsible "Settings" section)
 - **OpenWA Bridge Settings** — reduced from 10 to 3 fields (only idempotency TTL, outbox batch size, media size limit remain global)

@@ -228,6 +228,7 @@ class TestSendDocumentPdf(IntegrationTestCase):
 
         with patch("openwa_bridge.whatsapp_message.frappe") as mock_frappe:
             mock_frappe.get_doc.side_effect = _fake_get_doc
+            mock_frappe.get_installed_apps.return_value = ["frappe_whatsapp"]
             result = send_document_pdf(
                 to="967777713637",
                 reference_doctype="Sales Invoice",
@@ -244,6 +245,8 @@ class TestSendDocumentPdf(IntegrationTestCase):
         self.assertEqual(doc_spec["openwa_send_pdf"], 1)
         self.assertEqual(doc_spec["openwa_print_format"], "Invoice Format")
         self.assertEqual(doc_spec["openwa_pdf_filename"], "my-invoice.pdf")
+        self.assertEqual(doc_spec["openwa_render_doctype"], "Sales Invoice")
+        self.assertEqual(doc_spec["openwa_render_name"], "ACC-SINV-2026-00047")
         mock_doc.save.assert_called_once()
 
     def test_defaults_print_format_and_filename(self):
@@ -261,6 +264,7 @@ class TestSendDocumentPdf(IntegrationTestCase):
 
         with patch("openwa_bridge.whatsapp_message.frappe") as mock_frappe:
             mock_frappe.get_doc.side_effect = _fake_get_doc
+            mock_frappe.get_installed_apps.return_value = ["frappe_whatsapp"]
             send_document_pdf(
                 to="967777713637",
                 reference_doctype="Sales Invoice",
@@ -269,6 +273,10 @@ class TestSendDocumentPdf(IntegrationTestCase):
 
         self.assertEqual(doc_spec["openwa_print_format"], "Standard")
         self.assertEqual(doc_spec["openwa_pdf_filename"], "ACC-SINV-2026-00047.pdf")
+        self.assertEqual(doc_spec["openwa_render_doctype"], "Sales Invoice")
+        self.assertEqual(doc_spec["openwa_render_name"], "ACC-SINV-2026-00047")
+        self.assertEqual(mock_doc.reference_doctype, "Sales Invoice")
+        self.assertEqual(mock_doc.reference_name, "ACC-SINV-2026-00047")
 
     def test_stores_print_options_on_message(self):
         """Letterhead, language and settings should be stored on the WhatsApp Message."""
@@ -286,6 +294,7 @@ class TestSendDocumentPdf(IntegrationTestCase):
 
         with patch("openwa_bridge.whatsapp_message.frappe") as mock_frappe:
             mock_frappe.get_doc.side_effect = _fake_get_doc
+            mock_frappe.get_installed_apps.return_value = ["frappe_whatsapp"]
             send_document_pdf(
                 to="967777713637",
                 reference_doctype="Sales Invoice",
@@ -318,6 +327,7 @@ class TestSendDocumentPdf(IntegrationTestCase):
 
         with patch("openwa_bridge.whatsapp_message.frappe") as mock_frappe:
             mock_frappe.get_doc.side_effect = _fake_get_doc
+            mock_frappe.get_installed_apps.return_value = ["frappe_whatsapp"]
             send_document_pdf(
                 to="967777713637",
                 reference_doctype="Sales Invoice",
@@ -327,6 +337,112 @@ class TestSendDocumentPdf(IntegrationTestCase):
         self.assertIsNone(doc_spec["openwa_letterhead"])
         self.assertIsNone(doc_spec["openwa_language"])
         self.assertIsNone(doc_spec["openwa_print_settings"])
+
+    def test_links_reference_to_crm_deal_when_number_matches(self):
+        """A recipient number matching a CRM Deal should relink the reference.
+
+        The render fields keep the source document so the PDF still renders the
+        invoice, while the reference points at the Deal for the CRM thread.
+        """
+        import sys
+
+        from openwa_bridge.whatsapp_message import send_document_pdf
+
+        mock_doc = MagicMock()
+        mock_doc.name = "MSG-PDF-005"
+        doc_spec = {}
+
+        def _fake_get_doc(spec):
+            for k, v in spec.items():
+                mock_doc.__setattr__(k, v)
+            doc_spec.update(spec)
+            return mock_doc
+
+        fake_crm_api = MagicMock()
+        fake_crm_api.get_contact_lead_or_deal_from_number.return_value = (
+            "CRM-DEAL-2026-00003",
+            "CRM Deal",
+        )
+
+        with patch("openwa_bridge.whatsapp_message.frappe") as mock_frappe:
+            mock_frappe.get_doc.side_effect = _fake_get_doc
+            mock_frappe.get_installed_apps.return_value = ["frappe_whatsapp", "crm"]
+            with patch.dict(
+                sys.modules,
+                {
+                    "crm": MagicMock(),
+                    "crm.integrations": MagicMock(),
+                    "crm.integrations.api": fake_crm_api,
+                },
+            ):
+                send_document_pdf(
+                    to="967777713637",
+                    reference_doctype="Sales Invoice",
+                    reference_name="ACC-SINV-2026-00216",
+                )
+
+        fake_crm_api.get_contact_lead_or_deal_from_number.assert_called_once_with(
+            "967777713637"
+        )
+        self.assertEqual(doc_spec["reference_doctype"], "Sales Invoice")
+        self.assertEqual(doc_spec["reference_name"], "ACC-SINV-2026-00216")
+        self.assertEqual(mock_doc.reference_doctype, "CRM Deal")
+        self.assertEqual(mock_doc.reference_name, "CRM-DEAL-2026-00003")
+        self.assertEqual(mock_doc.openwa_render_doctype, "Sales Invoice")
+        self.assertEqual(mock_doc.openwa_render_name, "ACC-SINV-2026-00216")
+
+    def test_keeps_reference_when_crm_not_installed(self):
+        """Without the CRM app the reference should stay the passed document."""
+        from openwa_bridge.whatsapp_message import send_document_pdf
+
+        mock_doc = MagicMock()
+        mock_doc.name = "MSG-PDF-006"
+
+        def _fake_get_doc(spec):
+            for k, v in spec.items():
+                mock_doc.__setattr__(k, v)
+            return mock_doc
+
+        with patch("openwa_bridge.whatsapp_message.frappe") as mock_frappe:
+            mock_frappe.get_doc.side_effect = _fake_get_doc
+            mock_frappe.get_installed_apps.return_value = ["frappe_whatsapp"]
+            send_document_pdf(
+                to="967777713637",
+                reference_doctype="Sales Invoice",
+                reference_name="ACC-SINV-2026-00216",
+            )
+
+        self.assertEqual(mock_doc.reference_doctype, "Sales Invoice")
+        self.assertEqual(mock_doc.reference_name, "ACC-SINV-2026-00216")
+        self.assertEqual(mock_doc.openwa_render_doctype, "Sales Invoice")
+        self.assertEqual(mock_doc.openwa_render_name, "ACC-SINV-2026-00216")
+
+    def test_sending_from_crm_doctype_keeps_reference(self):
+        """Sending from a Deal form should keep the Deal as the reference."""
+        from openwa_bridge.whatsapp_message import send_document_pdf
+
+        mock_doc = MagicMock()
+        mock_doc.name = "MSG-PDF-007"
+
+        def _fake_get_doc(spec):
+            for k, v in spec.items():
+                mock_doc.__setattr__(k, v)
+            return mock_doc
+
+        with patch("openwa_bridge.whatsapp_message.frappe") as mock_frappe:
+            mock_frappe.get_doc.side_effect = _fake_get_doc
+            mock_frappe.get_installed_apps.return_value = ["frappe_whatsapp", "crm"]
+            send_document_pdf(
+                to="967777713637",
+                reference_doctype="CRM Deal",
+                reference_name="CRM-DEAL-2026-00003",
+            )
+
+        self.assertEqual(mock_doc.reference_doctype, "CRM Deal")
+        self.assertEqual(mock_doc.reference_name, "CRM-DEAL-2026-00003")
+        self.assertEqual(mock_doc.openwa_render_doctype, "CRM Deal")
+        self.assertEqual(mock_doc.openwa_render_name, "CRM-DEAL-2026-00003")
+        mock_frappe.get_installed_apps.assert_not_called()
 
 
 class TestPrintFormatValidation(IntegrationTestCase):
