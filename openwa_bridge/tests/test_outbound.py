@@ -950,17 +950,64 @@ class TestTemplateMessageRendering(IntegrationTestCase):
         )
 
     @patch("openwa_bridge.whatsapp_message.frappe")
-    def test_placeholder_without_variables_falls_back_to_text(self, mock_frappe):
-        """Placeholder body with no vars should degrade to free text instead of failing."""
+    def test_placeholder_uses_fields_from_matching_notification(self, mock_frappe):
+        """Vars should be borrowed from a notification's Fields child table."""
         instance = self._make_instance(template="sales-invoice-en-2-en")
-        mock_tmpl = self._mock_template("Dear {{1}}, invoice {{2}} is ready.", field_names="")
-        mock_frappe.get_doc.return_value = mock_tmpl
+        mock_tmpl = self._mock_template(
+            "Dear {{1}}, invoice {{2}} is ready. Amount: {{3}} {{4}}. Due: {{5}}",
+            field_names="",
+        )
+        mock_invoice = MagicMock()
+        mock_invoice.get_formatted.side_effect = [
+            "Acme Corp",
+            "ACC-SINV-0001",
+            "70.0",
+            "YER",
+            "2026-08-06",
+        ]
+        mock_notif = MagicMock()
+        mock_notif.get.side_effect = lambda key, default=None: {
+            "fields": [
+                MagicMock(field_name="customer_name"),
+                MagicMock(field_name="name"),
+                MagicMock(field_name="grand_total"),
+                MagicMock(field_name="currency"),
+                MagicMock(field_name="due_date"),
+            ],
+        }.get(key, default)
+
+        def _get_doc(doctype, name=None):
+            return {
+                "WhatsApp Templates": mock_tmpl,
+                "WhatsApp Notification": mock_notif,
+                "Sales Invoice": mock_invoice,
+            }[doctype]
+
+        mock_frappe.get_doc.side_effect = _get_doc
+        mock_frappe.get_all.return_value = ["Sales"]
 
         instance.before_save()
 
-        self.assertEqual(instance.use_template, 0)
-        self.assertEqual(instance.message_type, "Manual")
-        self.assertEqual(instance.message, "Dear {{1}}, invoice {{2}} is ready.")
+        self.assertEqual(instance.use_template, 1)
+        self.assertEqual(instance.message_type, "Template")
+        self.assertEqual(
+            json.loads(instance.template_parameters),
+            ["Acme Corp", "ACC-SINV-0001", "70.0", "YER", "2026-08-06"],
+        )
+
+    @patch("openwa_bridge.whatsapp_message.frappe")
+    def test_placeholder_without_variables_blocks_send(self, mock_frappe):
+        """Placeholder body with no variable source should throw, not send literal {{1}}."""
+        instance = self._make_instance(template="sales-invoice-en-2-en")
+        mock_tmpl = self._mock_template("Dear {{1}}, invoice {{2}} is ready.", field_names="")
+        mock_frappe.get_doc.side_effect = lambda doctype, name: {
+            "WhatsApp Templates": mock_tmpl,
+        }.get(doctype, MagicMock())
+        mock_frappe.get_all.return_value = []
+        mock_frappe.throw.side_effect = frappe.ValidationError
+
+        with self.assertRaises(frappe.ValidationError):
+            instance.before_save()
 
     @patch("openwa_bridge.whatsapp_message.frappe")
     def test_render_failure_falls_back_to_raw_body(self, mock_frappe):

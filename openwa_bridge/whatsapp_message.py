@@ -11,6 +11,7 @@ from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message i
     WhatsAppMessage,
 )
 from frappe_whatsapp.utils import format_number
+from frappe.exceptions import ValidationError
 from openwa_bridge.utils import openwa_api, frappe_to_openwa_vars, get_api_key, _http_session, render_doc_as_pdf
 
 _PLACEHOLDER_RE = re.compile(r"\{\{\s*\d+\s*\}\}")
@@ -183,6 +184,10 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                 self.message = _compose_template_text(template_doc, body)
                 self.message_type = "Manual"
                 self.use_template = 0
+        except ValidationError:
+            # A placeholder template with no variable source must abort the send
+            # (never deliver literal {{1}} tokens). Propagate the ValidationError.
+            raise
         except Exception:
             frappe.log_error(
                 title="OpenWA: template body render failed",
@@ -230,22 +235,32 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             self.use_template = 1
             return
 
-        # No variables derivable — deliver the raw body as free text so the send
-        # does not fail. Configure ``field_names`` on the template to populate vars.
-        frappe.log_error(
-            title="OpenWA: template sent without variables",
-            message=(
-                f"Msg {self.name}, Template {self.template}: no variables available. "
-                "Delivering the raw template body as free text. Configure 'field_names' "
-                "on the WhatsApp Templates doc to populate variables."
-            ),
+        # A placeholder template without derivable variables must NOT be sent as
+        # free text — the customer would receive literal "{{1}}" tokens. Refuse
+        # with a clear message instead of silently delivering a broken message.
+        var_count = len(_PLACEHOLDER_RE.findall(body))
+        frappe.throw(
+            frappe._(
+                "Template '{0}' requires {1} variable(s) but none could be "
+                "resolved. Map them under 'Fields' on a WhatsApp Notification "
+                "for '{2}' that uses this template, or set 'Field Names' on the "
+                "WhatsApp Templates doc, then try again."
+            ).format(self.template, var_count, self._source_doctype()),
+            title=frappe._("OpenWA: Template variables missing"),
         )
-        self.message = body
-        self.message_type = "Manual"
-        self.use_template = 0
+
+    def _source_doctype(self) -> str:
+        """Return the doctype the template renders against (source, not CRM relink)."""
+        return getattr(self, "openwa_render_doctype", None) or self.reference_doctype or ""
 
     def _extract_template_params(self, template_doc) -> list:
-        """Explicit variables win; otherwise map ``field_names`` onto the reference doc."""
+        """Explicit variables win; otherwise map fields onto the reference doc.
+
+        Field names come from (in order): the template's ``field_names``, or the
+        ``Fields`` child table of an enabled WhatsApp Notification that uses this
+        template for the source doctype (the user maintains the variable mapping
+        there).
+        """
         if self.template_parameters:
             try:
                 parsed = json.loads(self.template_parameters)
@@ -262,6 +277,8 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
         field_names = []
         if template_doc.get("field_names"):
             field_names = [f.strip() for f in str(template_doc.field_names).split(",") if f.strip()]
+        if not field_names:
+            field_names = self._field_names_from_notification()
         if not field_names:
             return []
 
@@ -280,6 +297,41 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
         if not any(str(p).strip() for p in params):
             return []
         return params
+
+    def _field_names_from_notification(self) -> list:
+        """Borrow the ordered variable mapping from a WhatsApp Notification.
+
+        The user maintains template variables in the notification's ``Fields``
+        child table (``WhatsApp Notification``), so when the template itself has
+        no ``field_names`` we reuse the first enabled notification that uses this
+        template for the source doctype.
+        """
+        doctype = self._source_doctype()
+        if not doctype or not self.template:
+            return []
+        try:
+            names = frappe.get_all(
+                "WhatsApp Notification",
+                filters={
+                    "reference_doctype": doctype,
+                    "template": self.template,
+                    "disabled": 0,
+                },
+                pluck="name",
+                limit_page_length=10,
+            )
+        except Exception:
+            return []
+        for notif_name in names:
+            try:
+                notif = frappe.get_doc("WhatsApp Notification", notif_name)
+            except Exception:
+                continue
+            fields = notif.get("fields") or []
+            field_names = [f.field_name for f in fields if getattr(f, "field_name", None)]
+            if field_names:
+                return field_names
+        return []
 
     def notify(self, data: dict) -> None:
         """Intercept before Meta API call. ``data`` is the fully-built Meta payload."""
