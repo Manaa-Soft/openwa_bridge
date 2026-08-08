@@ -237,13 +237,13 @@ WhatsApp Account doc (Frappe)
 1. **Override, not replace**: We extend parent classes so non-OpenWA accounts continue working via Meta API.
 2. **Message doc as carrier**: Template sends create a WhatsApp Message doc first, which triggers `notify()` → routes to OpenWA. This preserves Frappe's message history.
 3. **use_template flag**: `send-template` vs `send-text` is determined by the `use_template` field (set to 1 by `_send_openwa_template`, not set by `_send_openwa_text`). The `template` field alone is used for dynamic header lookups and should not control the send path.
-4. **Two-step image+text**: When `openwa_dynamic_header` is enabled on a template, the image is sent via `send-image` with the rendered text as caption. The recipient receives one message (image + caption), not two separate messages.
-4. **Live doc values**: Notification parameters are resolved from the actual document at send time (not from pre-filled sample values).
-5. **Graceful degradation**: If OpenWA is down, the error is logged but the doc is still saved. If dynamic image fails, the template text still sends.
-6. **Async outbox**: Outbound messages flow through `OpenWA Outbox` — created in `after_insert()` after the doc is persisted, processed by background workers with exponential backoff retry (30s–1h cap, 5 attempts max).
-7. **Circuit breaker**: After 5 consecutive failures on an account, the circuit opens for 5 minutes (Redis-backed, per-account). Prevents cascade failures when OpenWA is down.
-8. **Lenient HMAC**: When a webhook secret is configured but OpenWA sends no signature header, the message is processed with a warning log instead of rejecting. Prevents drops when HMAC isn't enabled on the OpenWA side.
-9. **Always HTTP 200**: The inbound webhook never throws — all errors return HTTP 200 with an error body to prevent OpenWA retry loops.
+4. **Two-step image+text**: When `openwa_dynamic_header` is enabled on a template, the image is sent via `send-image` with the template's **header + body + footer** (placeholders rendered) as caption. The image+caption is the whole delivery — the recipient receives one message (image + caption), not two. If the image fails, the approved template text is sent as a fallback.
+5. **Live doc values**: Notification parameters are resolved from the actual document at send time (not from pre-filled sample values).
+6. **Graceful degradation**: If OpenWA is down, the error is logged but the doc is still saved. If dynamic image fails, the template text still sends.
+7. **Async outbox**: Outbound messages flow through `OpenWA Outbox` — created in `after_insert()` after the doc is persisted, processed by background workers with exponential backoff retry (30s–1h cap, 5 attempts max).
+8. **Circuit breaker**: After 5 consecutive failures on an account, the circuit opens for 5 minutes (Redis-backed, per-account). Prevents cascade failures when OpenWA is down.
+9. **Lenient HMAC**: When a webhook secret is configured but OpenWA sends no signature header, the message is processed with a warning log instead of rejecting. Prevents drops when HMAC isn't enabled on the OpenWA side.
+10. **Always HTTP 200**: The inbound webhook never throws — all errors return HTTP 200 with an error body to prevent OpenWA retry loops.
 
 ## Outbox Pattern
 
@@ -263,9 +263,10 @@ process_outbox_entry()
   ├─ load WhatsApp Message + Account (first, for settings checks)
   ├─ openwa_enabled still True? attempts < max?
   ├─ circuit breaker open? → fail with cooldown message
-  ├─ _send_dynamic_header_for_outbox() → send image with rendered text as caption
+  ├─ _send_dynamic_header_for_outbox() → send image with caption
+  │    │    (caption = template header/body/footer or composed message)
   │    ├─ image sent? → done (1 message with caption, not 2)
-  │    └─ no image? → fall through
+  │    └─ image failed + not already delivered? → fall through
   ├─ _send_via_openwa()
   │    ├─ use_template=1? → send-template with vars
   │    └─ Otherwise → send-text (plain text or rendered Jinja)

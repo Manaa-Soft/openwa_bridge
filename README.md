@@ -509,10 +509,16 @@ Variables are automatically converted when syncing to OpenWA.
 
 When **Dynamic Header** is checked on a template:
 
-1. The **Header** field is not synced to OpenWA (it remains `null`)
-2. At send time, the notification renders the document using the linked **Print Format**
-3. The PDF is converted to PNG via PyMuPDF
-4. The image is sent as a standalone message before the template text
+1. At send time, the source document is rendered using the linked **Print Format**
+2. The PDF is converted to PNG via PyMuPDF
+3. The image is sent as a **single** WhatsApp message whose caption is the
+   template's **header + body + footer**, with `{{N}}` placeholders filled from
+   the send parameters
+4. The separate template text bubble is **not** sent — the image+caption is the
+   whole delivery, so the recipient never sees the text twice
+
+If the image fails to send, the approved template text is sent instead as a
+fallback.
 
 This is useful for sending branded invoices, receipts, or any document layout as a visual preview.
 
@@ -815,7 +821,7 @@ openwa_bridge/
 | `tasks.py` | `cleanup_old_outbox()` | Daily archival of old outbox entries |
 | `tasks.py` | `process_outbox_entry()` | Process single outbox entry with circuit breaker |
 | `tasks.py` | `_send_outbox_message()` | Send message from outbox (image+caption optimization) |
-| `tasks.py` | `_send_dynamic_header_for_outbox()` | Render and send dynamic header image in background |
+| `tasks.py` | `_send_dynamic_header_for_outbox()` | Render and send dynamic header image (caption = template header/body/footer or message) |
 | `tasks.py` | `_fail_outbox()` | Handle retry with exponential backoff |
 | `tasks.py` | `process_pending_outbox()` | Scheduler safety-net: re-enqueue orphaned entries |
 | `whatsapp_message.py` | `_send_via_openwa()` | Routes outbound messages by content type |

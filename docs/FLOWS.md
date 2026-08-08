@@ -115,10 +115,14 @@ OverrideWhatsAppNotification.send_template_message(doc)
         │    │
         │    ▼
         │  _send_outbox_message():
-        │    ├─ _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
-        │    │    ├─ Template has openwa_dynamic_header? → render doc as PNG → send image
-        │    │    └─ Returns True if sent (done, no separate text send)
-        │    └─ If no image: _send_via_openwa()
+        │    ├─ Dynamic header enabled on template?
+        │    │    ├─ caption = rendered header + body + footer (placeholders filled)
+        │    │    │   (free text / Jinja: caption = composed message)
+        │    │    ├─ _send_dynamic_header_for_outbox(msg, account, caption=caption)
+        │    │    │    ├─ Image sent? → done — image+caption is the ONLY delivery,
+        │    │    │    │    no separate template/text bubble (no duplicate text)
+        │    │    │    └─ Image failed and not already delivered? → fall through
+        │    └─ _send_via_openwa()
         │         ├─ use_template=1 AND template set? → POST /messages/send-template
         │         └─ Otherwise → POST /messages/send-text
         │
@@ -137,10 +141,12 @@ OverrideWhatsAppNotification.send_template_message(doc)
         │    │
         │    ▼
         │  _send_outbox_message():
-        │    ├─ _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
-        │    │    ├─ Template has openwa_dynamic_header? → render doc as PNG → send image with caption
-        │    │    └─ Returns True if sent (done)
-        │    └─ If no image: _send_via_openwa()
+        │    ├─ Dynamic header enabled on template?
+        │    │    ├─ caption = msg.message (rendered Jinja text)
+        │    │    ├─ _send_dynamic_header_for_outbox(msg, account, caption=caption)
+        │    │    │    ├─ Image sent? → done — image+caption is the ONLY delivery
+        │    │    │    └─ Image failed and not already delivered? → fall through
+        │    └─ _send_via_openwa()
         │         └─ use_template NOT set → content_type == "text" → POST /messages/send-text
         │              (sends rendered Jinja text as plain text)
         │
@@ -485,11 +491,12 @@ process_outbox_entry(outbox_name)
   │
   10. _send_outbox_message(msg, account, outbox)
         │
-        ├─ _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
-        │    ├─ msg.template set AND template has openwa_dynamic_header?
-        │    │    → render doc as PNG → send image with rendered text as caption
-        │    ├─ Returns True → done (no separate text send)
-        │    └─ Returns False → continue to text/template send
+        ├─ msg.template set AND template has openwa_dynamic_header?
+        │    ├─ caption = rendered header + body + footer (template send)
+        │    │            or msg.message (free text / Jinja)
+        │    ├─ _send_dynamic_header_for_outbox(msg, account, caption=caption)
+        │    │    ├─ Image sent? → done — image+caption is the ONLY delivery
+        │    │    └─ Image failed + not already delivered? → continue below
         │
         └─ _send_via_openwa()
              ├─ use_template=1 AND template set? → send-template with vars

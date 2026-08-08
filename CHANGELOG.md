@@ -56,6 +56,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **500 HTTP false-positive marked messages as Sent** — Removed incorrect assumption that HTTP 500 from OpenWA means "engine delivered before error". OpenWA's `persistSentState` always returns 201+messageId on success (swallows DB errors); `failSend` always throws 500 with NO messageId. ANY 500 now triggers retry with backoff.
 - **Ack status downgrade** — `message.ack` handler now only allows forward transitions (pending → Sent → Delivered → Read), never downgrades. Late "sent" acks after "delivered" are silently skipped. Matches OpenWA's own `ackStatusTransitionFrom` guard.
 - **PLAYED ack not normalized** — Baileys ack 5 (PLAYED, e.g. voice note auto-read) now maps to `Read` instead of creating an invalid `Played` status.
+- **Duplicate text on dynamic header template sends** — a template with `openwa_dynamic_header` sent the approved text twice: once as the image caption and once as a separate template bubble. The image+caption (header/body/footer, placeholders rendered) is now the **only** delivery and the template bubble is skipped. If the image fails, the approved template text is sent as a fallback.
 - **Duplicate message bug** — notification flow with dynamic header sent duplicate messages (user confirmed resolved)
 - **Atomic image+caption** — dynamic header image failures now raise exception for outbox retry instead of falling through to text send (which created duplicates)
 - **Templates with no variables always threw** — templates without `{{...}}` placeholders now send without requiring variables
@@ -73,7 +74,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **Global settings on wrong DocType** — Moved 7 settings (HMAC strict, API timeout, session start timeout, rate limit, CB threshold, CB cooldown, max outbox attempts) from per-account WhatsApp Account to global OpenWA Bridge Settings.
 - **UnboundLocalError in outbox processor** — `account` referenced before definition at `tasks.py:179`, causing every outbox attempt to crash. Messages stuck as Pending forever.
 - **Template sent as raw Meta dict** — `_send_openwa_template()` stored the entire Meta payload dict as `msg.message` instead of rendered text.
-- **Dynamic header skipped template** — When image sent successfully, outbox returned early, skipping the template send entirely.
+- **Dynamic header skipped template** — when the dynamic header image is sent successfully, the image+caption is the whole delivery and the separate template text is intentionally skipped so the recipient never receives the text twice; if the image fails, the approved template text is sent as a fallback.
 - **Jinja sent as raw template** — `_send_openwa_text()` set `template` on the doc, causing `send-template` path with empty vars instead of `send-text`.
 - **`requests` not defined** — 7 bare `requests.post()` calls missed during connection pooling migration.
 - **Template vs text send guard** — Changed `_send_via_openwa` guard from `if self.template` to `if self.use_template and self.template` so Jinja messages use `send-text`.
