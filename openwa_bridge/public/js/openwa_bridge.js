@@ -13,9 +13,9 @@
 //     doc.language → print format default → system, doc.letter_head → default).
 //   * Dynamic print settings (e.g. compact_item_print) from the whitelisted
 //     `get_print_settings_to_show` endpoint.
-//   * A live preview iframe rendered via `get_html_and_style`.
-//   * Send is disabled until a preview renders successfully, so a document is
-//     never sent before it has been confirmed renderable with these settings.
+//   * Send is disabled until the document is confirmed renderable with the
+//     current settings (verified via `get_html_and_style`), so a document is
+//     never sent before its render has been checked.
 
 $(document).on("app_ready", () => {
     _ensure_pane_style();
@@ -33,15 +33,13 @@ $(document).on("app_ready", () => {
 });
 
 /**
- * Inject the stylesheet for the two-column PDF pane once per page load.
+ * Inject the stylesheet for the PDF controls pane once per page load.
  */
 function _ensure_pane_style() {
     if (document.getElementById("openwa-pdf-pane-style")) return;
     const style = document.createElement("style");
     style.id = "openwa-pdf-pane-style";
     style.textContent = `
-        .openwa-pdf-pane { display: flex; gap: 16px; align-items: flex-start; }
-        .openwa-pdf-controls { flex: 0 0 300px; min-width: 260px; }
         .openwa-pdf-controls .frappe-control { margin-bottom: 12px; }
         .openwa-pdf-controls .control-input { margin-top: 4px; }
         .openwa-pdf-settings-title {
@@ -49,13 +47,6 @@ function _ensure_pane_style() {
             color: var(--text-muted); border-top: 1px solid var(--border-color);
             margin: 16px 0 4px; padding-top: 12px;
         }
-        .openwa-pdf-preview { flex: 1 1 auto; min-width: 0; }
-        .openwa-preview-iframe {
-            width: 100%; height: 520px; border: 1px solid var(--border-color);
-            border-radius: 6px; background: #fff;
-        }
-        .openwa-preview-status { margin-top: 8px; font-size: var(--text-sm); color: var(--text-muted); }
-        .openwa-preview-status.error { color: var(--error-color); }
     `;
     document.head.appendChild(style);
 }
@@ -109,14 +100,7 @@ function _open_send_dialog(frm) {
             {
                 fieldname: "ht_pdf",
                 fieldtype: "HTML",
-                options:
-                    '<div class="openwa-pdf-pane">' +
-                    '<div class="openwa-pdf-controls"></div>' +
-                    '<div class="openwa-pdf-preview">' +
-                    '<iframe class="openwa-preview-iframe" title="PDF Preview"></iframe>' +
-                    '<div class="openwa-preview-status"></div>' +
-                    "</div>" +
-                    "</div>",
+                options: '<div class="openwa-pdf-controls"></div>',
             },
             {
                 label: __("Send to"),
@@ -167,7 +151,7 @@ function _open_send_dialog(frm) {
     dialog.fields_dict.ht_pdf.toggle(false);
     dialog.show();
 
-    // Build the PDF controls + preview pane once the dialog is rendered.
+    // Build the PDF controls pane once the dialog is rendered.
     dialog.openwa_pdf_state = _init_pdf_pane(dialog, frm);
     _set_send_enabled(dialog, true);
 }
@@ -187,7 +171,7 @@ function _toggle_pdf_mode(dialog, is_pdf) {
     if (is_pdf) {
         const state = dialog.openwa_pdf_state;
         if (state) {
-            _refresh_preview(dialog, state);
+            _verify_render(dialog, state);
         } else {
             _set_send_enabled(dialog, false);
         }
@@ -197,25 +181,21 @@ function _toggle_pdf_mode(dialog, is_pdf) {
 }
 
 /**
- * Build the print-like controls and preview iframe for PDF mode.
+ * Build the print-like controls and render-check state for PDF mode.
  * @param {object} dialog - The open dialog.
  * @param {object} frm - The current form.
- * @returns {object} State object used by the preview/send flow.
+ * @returns {object} State object used by the render-check/send flow.
  */
 function _init_pdf_pane(dialog, frm) {
     const $wrapper = dialog.fields_dict.ht_pdf.$wrapper;
     const $controls = $wrapper.find(".openwa-pdf-controls");
-    const $iframe = $wrapper.find(".openwa-preview-iframe");
-    const $status = $wrapper.find(".openwa-preview-status");
 
     const state = {
         frm,
-        $iframe,
-        $status,
         settings: {},
         controls: [],
         ready: false,
-        preview_ok: false,
+        render_ok: false,
         _req: null,
     };
 
@@ -237,7 +217,7 @@ function _init_pdf_pane(dialog, frm) {
         },
         $controls,
         () => {
-            _apply_print_format_defaults(state).then(() => _refresh_preview(dialog, state));
+            _apply_print_format_defaults(state).then(() => _verify_render(dialog, state));
         }
     );
 
@@ -250,7 +230,7 @@ function _init_pdf_pane(dialog, frm) {
             fieldname: "language",
         },
         $controls,
-        () => _refresh_preview(dialog, state)
+        () => _verify_render(dialog, state)
     );
 
     // Letter Head
@@ -263,7 +243,7 @@ function _init_pdf_pane(dialog, frm) {
             get_query: () => ({ filters: { letter_head_for: "DocType" } }),
         },
         $controls,
-        () => _refresh_preview(dialog, state)
+        () => _verify_render(dialog, state)
     );
 
     // PDF Filename + caption
@@ -305,7 +285,7 @@ function _init_pdf_pane(dialog, frm) {
                 const fieldname = df.fieldname;
                 const ctl = make_control(df, $settings_parent, () => {
                     state.settings[fieldname] = ctl.get_value();
-                    _refresh_preview(dialog, state);
+                    _verify_render(dialog, state);
                 });
                 state.controls.push(ctl);
                 if (typeof df.default !== "undefined") {
@@ -316,10 +296,10 @@ function _init_pdf_pane(dialog, frm) {
             }
         });
 
-    // Prefill defaults, then render the first preview once they're applied.
+    // Prefill defaults, then run the first render check once they're applied.
     _set_defaults(dialog, state).then(() => {
         state.ready = true;
-        _refresh_preview(dialog, state);
+        _verify_render(dialog, state);
     });
 
     return state;
@@ -355,14 +335,13 @@ function _set_defaults(dialog, state) {
                   .then(({ message }) => {
                       const pf_doctype = message?.doc_type || null;
                       if (pf_doctype && pf_doctype !== frm.doctype) {
-                          state.$status
-                              .removeClass("error")
-                              .html(
-                                  __(
-                                      "Default print format '{0}' is for '{1}' and cannot be used for '{2}'; using Standard.",
-                                      [pf, pf_doctype, frm.doctype]
-                                  )
-                              );
+                          frappe.show_alert({
+                              message: __(
+                                  "Default print format '{0}' is for '{1}' and cannot be used for '{2}'; using Standard.",
+                                  [pf, pf_doctype, frm.doctype]
+                              ),
+                              indicator: "orange",
+                          });
                           return "Standard";
                       }
                       return pf;
@@ -470,8 +449,9 @@ function _default_letterhead(state) {
 }
 
 /**
- * Render the live preview via get_html_and_style and gate the Send button on
- * a successful render. Uses the exact same args the print page passes.
+ * Verify the document renders via get_html_and_style and gate the Send button
+ * on a successful render. Uses the exact same args the print page passes, so a
+ * document is never sent before its render has been confirmed.
  *
  * A named print format whose `doc_type` belongs to a different doctype can
  * never render this document (Frappe embeds Jinja errors in the output rather
@@ -480,7 +460,7 @@ function _default_letterhead(state) {
  * @param {object} dialog - The open dialog.
  * @param {object} state - PDF pane state.
  */
-function _refresh_preview(dialog, state) {
+function _verify_render(dialog, state) {
     if (!state.ready) return;
 
     const frm = state.frm;
@@ -488,9 +468,8 @@ function _refresh_preview(dialog, state) {
     const lh = state.lh_ctl.get_value() || "";
     const lang = state.lang_ctl.get_value() || frappe.boot.lang;
 
-    state.preview_ok = false;
+    state.render_ok = false;
     _set_send_enabled(dialog, false);
-    state.$status.removeClass("error").html(__("Rendering preview…"));
     if (state._req) state._req.abort();
 
     if (pf !== "Standard") {
@@ -499,21 +478,19 @@ function _refresh_preview(dialog, state) {
             .then(({ message }) => {
                 const pf_doctype = message?.doc_type || null;
                 if (pf_doctype && pf_doctype !== frm.doctype) {
-                    state.$status
-                        .addClass("error")
-                        .html(
-                            __(
-                                "Print Format '{0}' is for '{1}' and cannot be used for '{2}'. Pick a format for '{2}' or Standard.",
-                                [pf, pf_doctype, frm.doctype]
-                            )
-                        );
+                    frappe.msgprint(
+                        __(
+                            "Print Format '{0}' is for '{1}' and cannot be used for '{2}'. Pick a format for '{2}' or Standard.",
+                            [pf, pf_doctype, frm.doctype]
+                        )
+                    );
                     return;
                 }
-                _request_preview(dialog, state, pf, lh, lang);
+                _request_render_check(dialog, state, pf, lh, lang);
             });
         return;
     }
-    _request_preview(dialog, state, pf, lh, lang);
+    _request_render_check(dialog, state, pf, lh, lang);
 }
 
 /**
@@ -524,7 +501,7 @@ function _refresh_preview(dialog, state) {
  * @param {string} lh - Letter Head name ("" for none).
  * @param {string} lang - Language code.
  */
-function _request_preview(dialog, state, pf, lh, lang) {
+function _request_render_check(dialog, state, pf, lh, lang) {
     state._req = frappe.call({
         method: "frappe.www.printview.get_html_and_style",
         args: {
@@ -537,23 +514,14 @@ function _request_preview(dialog, state, pf, lh, lang) {
         },
         callback: (r) => {
             if (r.exc || !r.message || !r.message.html) {
-                state.$status
-                    .addClass("error")
-                    .html(
-                        _preview_error_text(r) ||
-                            __("Preview could not be rendered. Send is disabled.")
-                    );
+                frappe.msgprint(
+                    _render_error_text(r) ||
+                        __("The document could not be rendered with these settings. Send is disabled.")
+                );
                 return;
             }
-            const html =
-                "<!DOCTYPE html><html><head><meta charset='utf-8'>" +
-                `<style>${r.message.style || ""}</style></head><body>${r.message.html}</body></html>`;
-            state.$iframe.attr("srcdoc", html);
-            state.preview_ok = true;
+            state.render_ok = true;
             _set_send_enabled(dialog, true);
-            state.$status.html(
-                __("Preview ready — the PDF will be sent with these settings.")
-            );
         },
     });
 }
@@ -565,7 +533,7 @@ function _request_preview(dialog, state, pf, lh, lang) {
  * @param {object} r - frappe.call response.
  * @returns {string}
  */
-function _preview_error_text(r) {
+function _render_error_text(r) {
     const messages = r.message?._server_messages || r._server_messages;
     if (Array.isArray(messages) && messages.length) {
         for (const msg of messages) {
