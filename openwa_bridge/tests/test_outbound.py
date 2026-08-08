@@ -667,18 +667,58 @@ class TestDynamicHeaderOutbox(IntegrationTestCase):
         self.assertEqual(call_args[0][0], "Sales Invoice")
         self.assertEqual(call_args[0][1], "ACC-SINV-0001")
 
-    @patch("openwa_bridge.tasks._send_dynamic_header_for_outbox")
+    @patch("openwa_bridge.utils._http_session")
+    @patch("openwa_bridge.utils.render_doc_as_image", return_value=b"\xff\xd8\xff fake jpeg")
     @patch("openwa_bridge.tasks.frappe")
-    def test_use_template_skips_dynamic_header(self, mock_frappe, mock_image):
-        """Messages sent via the OpenWA template endpoint skip the dynamic header image."""
+    def test_record_message_false_does_not_persist_message_id(self, mock_frappe, mock_render, mock_session):
+        """record_message=False must deliver the image without storing message_id/status."""
+        msg = MagicMock()
+        msg.template = "test-template"
+        msg.reference_doctype = "Sales Invoice"
+        msg.reference_name = "ACC-SINV-0001"
+        msg.openwa_render_doctype = "Sales Invoice"
+        msg.openwa_render_name = "ACC-SINV-0001"
+        msg.message = "body"
+        msg.to = "1234567890"
+        account = MagicMock()
+        account.get.side_effect = lambda key, default=None: {
+            "openwa_base_url": "http://localhost:2785",
+            "openwa_session_id": "session-001",
+        }.get(key, default)
+
+        mock_tmpl = MagicMock()
+        mock_tmpl.openwa_dynamic_header = True
+        mock_tmpl.openwa_print_format = "Standard"
+        mock_frappe.get_doc.return_value = mock_tmpl
+        mock_frappe.db.get_value.return_value = None
+
+        mock_session.post.return_value = mock_openwa_api("POST", 200, {"messageId": "img-123"})
+
+        result = self.handler(msg, account, record_message=False)
+        self.assertTrue(result)
+        mock_frappe.db.set_value.assert_not_called()
+
+    @patch("openwa_bridge.tasks._send_dynamic_header_for_outbox", return_value=True)
+    @patch("openwa_bridge.tasks.frappe")
+    def test_use_template_sends_dynamic_header_then_template(self, mock_frappe, mock_image):
+        """send-template messages send the dynamic header image AND the approved template."""
         from openwa_bridge.tasks import _send_outbox_message
+
+        mock_tmpl = MagicMock()
+        mock_tmpl.openwa_dynamic_header = True
+        mock_tmpl.openwa_print_format = "Standard"
+        mock_tmpl.header = "Manaa Soft Enterprise"
+        mock_tmpl.template = "Dear {{1}}, your invoice is due."
+        mock_tmpl.footer = "Thank you"
+        mock_frappe.get_doc.return_value = mock_tmpl
 
         msg = MagicMock()
         msg.template = "test-template"
         msg.use_template = 1
         msg.content_type = "text"
         msg.attach = None
-        msg.message = "body"
+        msg.message = "Dear {{1}}, your invoice is due."
+        msg.template_parameters = json.dumps(["Faissal"])
         msg.reply_to_message_id = None
         msg._ensure_session_ready = MagicMock()
         msg._send_via_openwa = MagicMock()
@@ -687,7 +727,13 @@ class TestDynamicHeaderOutbox(IntegrationTestCase):
 
         _send_outbox_message(msg, account, outbox)
 
-        mock_image.assert_not_called()
+        mock_image.assert_called_once()
+        call_kwargs = mock_image.call_args.kwargs
+        self.assertIs(call_kwargs["record_message"], False)
+        self.assertEqual(
+            call_kwargs["caption"],
+            "Manaa Soft Enterprise\nDear Faissal, your invoice is due.\nThank you",
+        )
         msg._ensure_session_ready.assert_called_once()
         msg._send_via_openwa.assert_called_once()
 

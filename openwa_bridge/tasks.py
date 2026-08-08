@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from datetime import datetime, timedelta
 
@@ -574,12 +575,48 @@ def _process_outbox_entry_inner(outbox_name: str) -> None:  # noqa: C901
         pass
 
 
-def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
+_PLACEHOLDER_RE = re.compile(r"\{\{(\d+)\}\}")
+
+
+def _build_dynamic_header_caption(tmpl, msg) -> str | None:
+    """Compose the caption for a dynamic header image from a WhatsApp template's
+    header/body/footer, rendering ``{{N}}`` placeholders from ``template_parameters``."""
+    params: list[str] = []
+    raw = getattr(msg, "template_parameters", None)
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                params = [str(p) for p in parsed]
+        except (json.JSONDecodeError, TypeError):
+            params = []
+
+    def render(text: str) -> str:
+        def replace(match) -> str:
+            index = int(match.group(1)) - 1
+            return params[index] if 0 <= index < len(params) else match.group(0)
+
+        return _PLACEHOLDER_RE.sub(replace, text)
+
+    parts = []
+    for field in ("header", "template", "footer"):
+        text = getattr(tmpl, field, None)
+        if text:
+            parts.append(render(str(text)))
+    return "\n".join(parts) if parts else None
+
+
+def _send_dynamic_header_for_outbox(msg, account, caption=None, record_message=True) -> bool:
     """Send dynamic header image before the main message, if configured.
 
     Checks the linked WhatsApp Templates doc for ``openwa_dynamic_header``
     and ``openwa_print_format``.  Renders the reference doc as an image
     and sends it via OpenWA send-image endpoint with the text as caption.
+
+    ``record_message`` controls whether the image's message_id/status are
+    persisted on the WhatsApp Message doc.  Template sends pass
+    ``record_message=False`` so the image id does not trip the idempotency
+    guard that would otherwise skip the approved template text.
 
     Returns True if image was sent successfully (or delivered despite a
     non-2xx response — verified via message_id), False otherwise.
@@ -681,12 +718,12 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
         resp_data.get("key", {}).get("id") if isinstance(resp_data.get("key"), dict) else None
     )
 
-    if msg_id:
+    if msg_id and record_message:
         frappe.db.set_value("WhatsApp Message", msg.name, "message_id", msg_id)
 
     # --- 2xx = success ---
     if img_resp.status_code < 400:
-        if msg_id:
+        if msg_id and record_message:
             frappe.db.set_value("WhatsApp Message", msg.name, "status", "Sent")
         return True
 
@@ -715,7 +752,7 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
         ),
     )
 
-    if msg_id:
+    if msg_id and record_message:
         frappe.db.set_value("WhatsApp Message", msg.name, "status", "Sent")
 
     return True
@@ -725,7 +762,8 @@ def _send_outbox_message(msg, account, outbox) -> None:  # noqa: C901
     """Actually send the message via OpenWA. Reuses the dispatcher from whatsapp_message."""
 
     has_dynamic_header = False
-    if msg.template and not msg.use_template:
+    tmpl = None
+    if msg.template:
         try:
             tmpl = frappe.get_doc("WhatsApp Templates", msg.template)
             has_dynamic_header = bool(
@@ -736,33 +774,48 @@ def _send_outbox_message(msg, account, outbox) -> None:  # noqa: C901
             pass
 
     if has_dynamic_header:
-        # Try sending image+caption.  If the image fails (e.g. OpenWA 500),
-        # check whether the ack webhook already confirmed delivery before
-        # falling back to text — otherwise we'd send a duplicate.
-        image_sent = _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
-        if image_sent:
-            return
-
-        # The image returned an error, but OpenWA engines often deliver
-        # the message before the REST response is built.  The ack webhook
-        # may have already stored the message_id.  Reload and check.
-        frappe.db.commit()
-        msg.reload()
-        if msg.message_id:
+        if msg.use_template:
+            # The approved template text is delivered via the send-template
+            # endpoint below, so the header image rides along as a separate
+            # media bubble.  Compose its caption from the template's
+            # header/body/footer (placeholders rendered from
+            # template_parameters) and never record its message_id — recording
+            # it would trip _send_via_openwa's idempotency guard and skip the
+            # approved template text entirely.
+            caption = _build_dynamic_header_caption(tmpl, msg)
+            _send_dynamic_header_for_outbox(msg, account, caption=caption, record_message=False)
             frappe.logger().info(
-                f"OpenWA: Dynamic header image returned error but message "
-                f"was delivered (message_id={msg.message_id}). Skipping text fallback."
+                f"OpenWA: Dynamic header image sent for template msg {msg.name}; "
+                "sending the approved template text next."
             )
-            return
+        else:
+            # Try sending image+caption.  If the image fails (e.g. OpenWA 500),
+            # check whether the ack webhook already confirmed delivery before
+            # falling back to text — otherwise we'd send a duplicate.
+            image_sent = _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
+            if image_sent:
+                return
 
-        frappe.log_error(
-            title="OpenWA: Dynamic header failed, falling back to text",
-            message=(
-                f"Msg {msg.name}, Template {msg.template}: "
-                "image send failed, falling back to text/template delivery."
-            ),
-        )
-        # Fall through to text/template send below
+            # The image returned an error, but OpenWA engines often deliver
+            # the message before the REST response is built.  The ack webhook
+            # may have already stored the message_id.  Reload and check.
+            frappe.db.commit()
+            msg.reload()
+            if msg.message_id:
+                frappe.logger().info(
+                    f"OpenWA: Dynamic header image returned error but message "
+                    f"was delivered (message_id={msg.message_id}). Skipping text fallback."
+                )
+                return
+
+            frappe.log_error(
+                title="OpenWA: Dynamic header failed, falling back to text",
+                message=(
+                    f"Msg {msg.name}, Template {msg.template}: "
+                    "image send failed, falling back to text/template delivery."
+                ),
+            )
+            # Fall through to text/template send below
 
     # No dynamic header — send text/template message directly
     from frappe_whatsapp.utils import format_number
