@@ -176,3 +176,60 @@ class TestOpenwaTemplateFlow(IntegrationTestCase):
         instance._send_openwa_template(account, data)
 
         mock_frappe.log_error.assert_called_once()
+
+
+class TestSendNotificationNow(IntegrationTestCase):
+    """Test the send_notification_now whitelisted entry point."""
+
+    @patch("openwa_bridge.whatsapp_notification.frappe")
+    def test_triggers_notification_with_doc_and_phone(self, mock_frappe):
+        """Should load the doc + notification and trigger send_template_message."""
+        mock_doc = MagicMock()
+        mock_notif = MagicMock()
+
+        def _get_doc(doctype, name=None):
+            if doctype == "WhatsApp Notification":
+                return mock_notif
+            return mock_doc
+
+        mock_frappe.get_doc.side_effect = _get_doc
+
+        from openwa_bridge.whatsapp_notification import send_notification_now
+
+        send_notification_now(
+            notification="Sales",
+            reference_doctype="Sales Invoice",
+            reference_name="ACC-SINV-0001",
+            phone_no="+967777715787",
+        )
+
+        mock_frappe.get_doc.assert_any_call("Sales Invoice", "ACC-SINV-0001")
+        mock_frappe.get_doc.assert_any_call("WhatsApp Notification", "Sales")
+        mock_notif.send_template_message.assert_called_once_with(
+            mock_doc,
+            phone_no="+967777715787",
+            ignore_condition=False,
+        )
+
+    @patch("openwa_bridge.whatsapp_notification.frappe")
+    def test_no_phone_passes_none(self, mock_frappe):
+        """Phone should default to None when not supplied."""
+        mock_doc = MagicMock()
+        mock_notif = MagicMock()
+
+        def _get_doc(doctype, name=None):
+            if doctype == "WhatsApp Notification":
+                return mock_notif
+            return mock_doc
+
+        mock_frappe.get_doc.side_effect = _get_doc
+
+        from openwa_bridge.whatsapp_notification import send_notification_now
+
+        send_notification_now("Sales", "Sales Invoice", "ACC-SINV-0001")
+
+        mock_notif.send_template_message.assert_called_once_with(
+            mock_doc,
+            phone_no=None,
+            ignore_condition=False,
+        )

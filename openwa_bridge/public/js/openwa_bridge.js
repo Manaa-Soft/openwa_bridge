@@ -91,11 +91,28 @@ function _open_send_dialog(frm) {
                 },
             },
             {
+                label: __("Send via"),
+                fieldname: "mode",
+                fieldtype: "Select",
+                default: "Template",
+                options: ["Template", "Notification"],
+                change() {
+                    _toggle_notification_mode(dialog, dialog.get_value("mode"));
+                },
+            },
+            {
                 label: __("Select Template"),
                 fieldname: "template",
                 reqd: 1,
                 fieldtype: "Link",
                 options: "WhatsApp Templates",
+            },
+            {
+                label: __("Select Notification"),
+                fieldname: "notification",
+                reqd: 0,
+                fieldtype: "Link",
+                options: "WhatsApp Notification",
             },
             {
                 fieldname: "ht_pdf",
@@ -147,9 +164,19 @@ function _open_send_dialog(frm) {
     });
     dialog.fields_dict.template.refresh();
 
+    // Only show notifications configured for this doctype
+    dialog.fields_dict.notification.get_query = () => ({
+        filters: { reference_doctype: frm.doctype, disabled: 0 },
+        doctype: "WhatsApp Notification",
+    });
+    dialog.fields_dict.notification.refresh();
+
     // Hide PDF-only fields initially
     dialog.fields_dict.ht_pdf.toggle(false);
     dialog.show();
+
+    // Show the Template link, hide the Notification link initially
+    _toggle_notification_mode(dialog, dialog.get_value("mode") || "Template");
 
     // Build the PDF controls pane once the dialog is rendered.
     dialog.openwa_pdf_state = _init_pdf_pane(dialog, frm);
@@ -162,10 +189,19 @@ function _open_send_dialog(frm) {
  * @param {boolean} is_pdf - Whether PDF mode is active.
  */
 function _toggle_pdf_mode(dialog, is_pdf) {
+    const mode = dialog.fields_dict.mode;
     const tpl = dialog.fields_dict.template;
-    tpl.df.reqd = is_pdf ? 0 : 1;
+    const ntf = dialog.fields_dict.notification;
+    const active_mode = is_pdf ? "" : dialog.get_value("mode") || "Template";
+
+    mode.toggle(!is_pdf);
+    tpl.df.reqd = active_mode === "Template";
+    tpl.toggle(active_mode === "Template");
+    ntf.df.reqd = active_mode === "Notification";
+    ntf.toggle(active_mode === "Notification");
     tpl.refresh();
-    tpl.toggle(!is_pdf);
+    ntf.refresh();
+    mode.refresh();
     dialog.fields_dict.ht_pdf.toggle(is_pdf);
 
     if (is_pdf) {
@@ -178,6 +214,23 @@ function _toggle_pdf_mode(dialog, is_pdf) {
     } else {
         _set_send_enabled(dialog, true);
     }
+}
+
+/**
+ * Flip the dialog between the Template and Notification links.
+ * @param {object} dialog - The open dialog.
+ * @param {string} mode - "Template" or "Notification".
+ */
+function _toggle_notification_mode(dialog, mode) {
+    const tpl = dialog.fields_dict.template;
+    const ntf = dialog.fields_dict.notification;
+    tpl.df.reqd = mode === "Template";
+    tpl.toggle(mode === "Template");
+    ntf.df.reqd = mode === "Notification";
+    ntf.toggle(mode === "Notification");
+    tpl.refresh();
+    ntf.refresh();
+    _set_send_enabled(dialog, true);
 }
 
 /**
@@ -622,6 +675,30 @@ function _send_from_dialog(frm, dialog) {
                 dialog.hide();
             },
         });
+    } else if (values.mode === "Notification") {
+        // Send via a WhatsApp Notification (Jinja code or OpenWA template)
+        if (!values.notification) {
+            frappe.msgprint(__("Please select a WhatsApp Notification."));
+            return;
+        }
+        frappe.call({
+            method: "openwa_bridge.whatsapp_notification.send_notification_now",
+            args: {
+                notification: values.notification,
+                reference_doctype: frm.doctype,
+                reference_name: frm.docname,
+                phone_no: values.mobile_no,
+            },
+            freeze: true,
+            callback(r) {
+                if (r.exc) {
+                    frappe.msgprint(__("Failed to send. Check the Error Log."));
+                    return;
+                }
+                frappe.msgprint(__("Successfully Sent to: {0}", [values.mobile_no]));
+                dialog.hide();
+            },
+        });
     } else {
         // Send a WhatsApp template message
         frappe.call({
@@ -648,7 +725,9 @@ function _send_from_dialog(frm, dialog) {
     const space = "\n\n";
     const comment_message = values.send_pdf
         ? `To : ${values.mobile_no}${space}PDF:${filename || frm.docname + ".pdf"} | Print Format:${pf}`
-        : `To : ${values.mobile_no}${space}Whatsapp Template:${values.template}`;
+        : values.mode === "Notification"
+            ? `To : ${values.mobile_no}${space}WhatsApp Notification:${values.notification}`
+            : `To : ${values.mobile_no}${space}Whatsapp Template:${values.template}`;
 
     frappe.call({
         method: "frappe.desk.form.utils.add_comment",

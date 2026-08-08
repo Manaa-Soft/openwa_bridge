@@ -989,3 +989,22 @@ class TestTemplateMessageRendering(IntegrationTestCase):
 
         mock_frappe.get_doc.assert_not_called()
         self.assertEqual(instance.message, "Already sent text")
+
+    @patch("openwa_bridge.whatsapp_message.frappe")
+    def test_jinja_render_strips_bidi_control_chars(self, mock_frappe):
+        """RLE/PDF and other bidi control chars should not reach the customer."""
+        instance = self._make_instance(template="Sales Invoice-en")
+        mock_tmpl = self._mock_template("\u202B {{ doc.name }} \u202C")
+        mock_frappe.get_doc.side_effect = lambda doctype, name: {
+            "WhatsApp Templates": mock_tmpl,
+            "Sales Invoice": MagicMock(),
+        }[doctype]
+        mock_frappe.render_template.return_value = "\u202B Dear \u2066Acme Corp\u2069 \u202C"
+
+        instance.before_save()
+
+        self.assertNotIn("\u202B", instance.message)
+        self.assertNotIn("\u202C", instance.message)
+        self.assertNotIn("\u2066", instance.message)
+        self.assertNotIn("\u2069", instance.message)
+        self.assertIn("Dear Acme Corp", instance.message)

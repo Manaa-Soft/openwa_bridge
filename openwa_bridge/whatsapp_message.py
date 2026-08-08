@@ -17,6 +17,18 @@ _PLACEHOLDER_RE = re.compile(r"\{\{\s*\d+\s*\}\}")
 _JINJA_MARKER_RE = re.compile(
     r"(\{%|\{\{\s*(frappe|jenv|doc|RLE|PDF|company)\b)"
 )
+# Bidirectional / zero-width control characters that leak into delivered text
+# from template bodies (e.g. RLE/PDF placeholders used to force RTL) but should
+# not reach the customer: LRM/RLE/LRE/LRO/RLI/LRI/FSI/PDI/MU and friends.
+_BIDI_CONTROL_RE = re.compile("[\u200e\u200f\u202a-\u202e\u2066-\u2069\u061c\u206a-\u206f]")
+_DELETION_CHARS_RE = re.compile("[\ufeff\u00ad]")
+
+
+def _strip_bidi_controls(text: str) -> str:
+    """Remove bidi/zero-width control characters from delivered text."""
+    if not text:
+        return text
+    return _BIDI_CONTROL_RE.sub("", _DELETION_CHARS_RE.sub("", text))
 
 
 def _is_jinja_template(body: str) -> bool:
@@ -202,7 +214,9 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             rendered = body
         else:
             rendered = frappe.render_template(body, {"doc": doc, "frappe": frappe})
-        self.message = _compose_template_text(template_doc, (rendered or "").strip())
+        self.message = _compose_template_text(
+            template_doc, _strip_bidi_controls((rendered or "")).strip()
+        )
         self.message_type = "Manual"
         self.use_template = 0
 
