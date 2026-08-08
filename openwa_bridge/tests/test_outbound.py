@@ -621,6 +621,8 @@ class TestDynamicHeaderOutbox(IntegrationTestCase):
         msg.template = "test-template"
         msg.reference_doctype = None
         msg.reference_name = None
+        msg.openwa_render_doctype = None
+        msg.openwa_render_name = None
         account = MagicMock()
 
         mock_tmpl = MagicMock()
@@ -630,6 +632,64 @@ class TestDynamicHeaderOutbox(IntegrationTestCase):
 
         result = self.handler(msg, account)
         self.assertFalse(result)
+
+    @patch("openwa_bridge.utils._http_session")
+    @patch("openwa_bridge.utils.render_doc_as_image", return_value=b"\xff\xd8\xff fake jpeg")
+    @patch("openwa_bridge.tasks.frappe")
+    def test_uses_render_doctype_when_reference_relinked(self, mock_frappe, mock_render, mock_session):
+        """Should render from openwa_render_doctype/name when the reference is a CRM record."""
+        msg = MagicMock()
+        msg.template = "test-template"
+        msg.reference_doctype = "CRM Deal"
+        msg.reference_name = "DEAL-0001"
+        msg.openwa_render_doctype = "Sales Invoice"
+        msg.openwa_render_name = "ACC-SINV-0001"
+        msg.message = "caption text"
+        msg.to = "1234567890"
+        account = MagicMock()
+        account.get.side_effect = lambda key, default=None: {
+            "openwa_base_url": "http://localhost:2785",
+            "openwa_session_id": "session-001",
+        }.get(key, default)
+
+        mock_tmpl = MagicMock()
+        mock_tmpl.openwa_dynamic_header = True
+        mock_tmpl.openwa_print_format = "Standard"
+        mock_frappe.get_doc.return_value = mock_tmpl
+        mock_frappe.db.get_value.return_value = None
+
+        mock_session.post.return_value = mock_openwa_api("POST", 200, {"key": {"id": "img-123"}})
+
+        result = self.handler(msg, account)
+        self.assertTrue(result)
+        mock_render.assert_called_once()
+        call_args = mock_render.call_args
+        self.assertEqual(call_args[0][0], "Sales Invoice")
+        self.assertEqual(call_args[0][1], "ACC-SINV-0001")
+
+    @patch("openwa_bridge.tasks._send_dynamic_header_for_outbox")
+    @patch("openwa_bridge.tasks.frappe")
+    def test_use_template_skips_dynamic_header(self, mock_frappe, mock_image):
+        """Messages sent via the OpenWA template endpoint skip the dynamic header image."""
+        from openwa_bridge.tasks import _send_outbox_message
+
+        msg = MagicMock()
+        msg.template = "test-template"
+        msg.use_template = 1
+        msg.content_type = "text"
+        msg.attach = None
+        msg.message = "body"
+        msg.reply_to_message_id = None
+        msg._ensure_session_ready = MagicMock()
+        msg._send_via_openwa = MagicMock()
+        account = MagicMock()
+        outbox = MagicMock()
+
+        _send_outbox_message(msg, account, outbox)
+
+        mock_image.assert_not_called()
+        msg._ensure_session_ready.assert_called_once()
+        msg._send_via_openwa.assert_called_once()
 
 
 class TestTypingIndicator(IntegrationTestCase):
@@ -781,3 +841,151 @@ class TestReferencePreservation(IntegrationTestCase):
 
         self.assertEqual(instance.reference_doctype, "CRM Lead")
         self.assertEqual(instance.reference_name, "LEAD-0001")
+
+    def test_template_send_keeps_crm_relink_when_render_captured(self):
+        """A template sent from an invoice stays linked to the CRM record after validate."""
+        instance = self.msg_class.__new__(self.msg_class)
+        instance.reference_doctype = "Sales Invoice"
+        instance.reference_name = "ACC-SINV-0001"
+        instance.template = "Sales Invoice-en"
+
+        instance.before_validate()
+
+        # The source doc is preserved for the dynamic header image ...
+        self.assertEqual(instance.openwa_render_doctype, "Sales Invoice")
+        self.assertEqual(instance.openwa_render_name, "ACC-SINV-0001")
+
+        # ... while CRM's validate hook relinks the message to the Deal
+        instance.reference_doctype = "CRM Deal"
+        instance.reference_name = "DEAL-0001"
+
+        instance.before_save()
+
+        self.assertEqual(instance.reference_doctype, "CRM Deal")
+        self.assertEqual(instance.reference_name, "DEAL-0001")
+
+
+class TestTemplateMessageRendering(IntegrationTestCase):
+    """Test _prepare_template_message (Jinja / placeholder / plain rendering)."""
+
+    def setUp(self):
+        super().setUp()
+        from openwa_bridge.whatsapp_message import OverrideWhatsAppMessage
+        self.msg_class = OverrideWhatsAppMessage
+
+    def _make_instance(self, **kwargs):
+        instance = self.msg_class.__new__(self.msg_class)
+        defaults = dict(
+            type="Outgoing",
+            message=None,
+            message_type="Template",
+            use_template=None,
+            template_parameters=None,
+            body_param=None,
+            reference_doctype="CRM Deal",
+            reference_name="DEAL-0001",
+            openwa_render_doctype="Sales Invoice",
+            openwa_render_name="ACC-SINV-0001",
+        )
+        defaults.update(kwargs)
+        for key, value in defaults.items():
+            setattr(instance, key, value)
+        return instance
+
+    def _mock_template(self, body, header="Manaa Soft", footer="GOOD BAY", field_names=""):
+        tmpl = MagicMock()
+        tmpl.get.side_effect = lambda key, default=None: {
+            "template": body,
+            "header": header,
+            "footer": footer,
+            "field_names": field_names,
+        }.get(key, default)
+        return tmpl
+
+    @patch("openwa_bridge.whatsapp_message.frappe")
+    def test_jinja_body_renders_header_body_footer(self, mock_frappe):
+        """Jinja body should render against the doc and compose all template parts."""
+        instance = self._make_instance(template="Sales Invoice-en")
+        mock_tmpl = self._mock_template(
+            "{% set x = 1 %}\nDear {{ frappe.utils.escape_html(doc.customer_name) }}!"
+        )
+        mock_invoice = MagicMock()
+        mock_frappe.get_doc.side_effect = lambda doctype, name: {
+            "WhatsApp Templates": mock_tmpl,
+            "Sales Invoice": mock_invoice,
+        }[doctype]
+        mock_frappe.render_template.return_value = "Dear Acme Corp!"
+
+        instance.before_save()
+
+        self.assertEqual(instance.message, "Manaa Soft\n\nDear Acme Corp!\n\nGOOD BAY")
+        self.assertEqual(instance.message_type, "Manual")
+        self.assertEqual(instance.use_template, 0)
+        call = mock_frappe.render_template.call_args
+        self.assertIs(call[0][1]["frappe"], mock_frappe)
+        self.assertIs(call[0][1]["doc"], mock_invoice)
+
+    @patch("openwa_bridge.whatsapp_message.frappe")
+    def test_placeholder_body_uses_template_parameters(self, mock_frappe):
+        """Placeholder body should extract vars from field_names and use send-template."""
+        instance = self._make_instance(template="sales-invoice-en-2-en")
+        mock_tmpl = self._mock_template(
+            "Dear {{1}}, invoice {{2}} is ready. Amount: {{3}} {{4}}.",
+            field_names="customer_name, name, grand_total, currency",
+        )
+        mock_invoice = MagicMock()
+        mock_invoice.get_formatted.side_effect = ["Acme Corp", "ACC-SINV-0001", "100.00", "SAR"]
+        mock_frappe.get_doc.side_effect = lambda doctype, name: {
+            "WhatsApp Templates": mock_tmpl,
+            "Sales Invoice": mock_invoice,
+        }[doctype]
+
+        instance.before_save()
+
+        self.assertEqual(instance.use_template, 1)
+        self.assertEqual(instance.message_type, "Template")
+        self.assertEqual(
+            json.loads(instance.template_parameters),
+            ["Acme Corp", "ACC-SINV-0001", "100.00", "SAR"],
+        )
+
+    @patch("openwa_bridge.whatsapp_message.frappe")
+    def test_placeholder_without_variables_falls_back_to_text(self, mock_frappe):
+        """Placeholder body with no vars should degrade to free text instead of failing."""
+        instance = self._make_instance(template="sales-invoice-en-2-en")
+        mock_tmpl = self._mock_template("Dear {{1}}, invoice {{2}} is ready.", field_names="")
+        mock_frappe.get_doc.return_value = mock_tmpl
+
+        instance.before_save()
+
+        self.assertEqual(instance.use_template, 0)
+        self.assertEqual(instance.message_type, "Manual")
+        self.assertEqual(instance.message, "Dear {{1}}, invoice {{2}} is ready.")
+
+    @patch("openwa_bridge.whatsapp_message.frappe")
+    def test_render_failure_falls_back_to_raw_body(self, mock_frappe):
+        """A Jinja render error should keep the raw body and never raise."""
+        instance = self._make_instance(template="Sales Invoice-en")
+        mock_tmpl = self._mock_template("{% set x = 1 %}\nBroken {{ doc.missing }}")
+        mock_frappe.get_doc.side_effect = lambda doctype, name: {
+            "WhatsApp Templates": mock_tmpl,
+            "Sales Invoice": MagicMock(),
+        }[doctype]
+        mock_frappe.render_template.side_effect = Exception("Jinja error")
+        mock_frappe.log_error = MagicMock()
+
+        instance.before_save()
+
+        self.assertEqual(instance.message_type, "Manual")
+        self.assertEqual(instance.use_template, 0)
+        self.assertIn("Broken", instance.message)
+
+    @patch("openwa_bridge.whatsapp_message.frappe")
+    def test_existing_message_is_not_overwritten(self, mock_frappe):
+        """A message that already has text (e.g. notifications) is left untouched."""
+        instance = self._make_instance(template="welcome-template", message="Already sent text")
+
+        instance.before_save()
+
+        mock_frappe.get_doc.assert_not_called()
+        self.assertEqual(instance.message, "Already sent text")

@@ -595,9 +595,10 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
     if not getattr(tmpl, "openwa_dynamic_header", False) or not getattr(tmpl, "openwa_print_format", None):
         return False
 
-    # Need the source document to render
-    ref_doctype = msg.reference_doctype
-    ref_name = msg.reference_name
+    # Need the source document to render — prefer the preserved render doc
+    # (set when the reference was relinked to a CRM record), else the reference.
+    ref_doctype = getattr(msg, "openwa_render_doctype", None) or msg.reference_doctype
+    ref_name = getattr(msg, "openwa_render_name", None) or msg.reference_name
     if not ref_doctype or not ref_name:
         return False
 
@@ -724,7 +725,7 @@ def _send_outbox_message(msg, account, outbox) -> None:  # noqa: C901
     """Actually send the message via OpenWA. Reuses the dispatcher from whatsapp_message."""
 
     has_dynamic_header = False
-    if msg.template:
+    if msg.template and not msg.use_template:
         try:
             tmpl = frappe.get_doc("WhatsApp Templates", msg.template)
             has_dynamic_header = bool(

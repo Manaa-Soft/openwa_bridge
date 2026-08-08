@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import frappe
 import json
+import re
 import time
 from datetime import datetime
 
@@ -11,6 +12,43 @@ from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message i
 )
 from frappe_whatsapp.utils import format_number
 from openwa_bridge.utils import openwa_api, frappe_to_openwa_vars, get_api_key, _http_session, render_doc_as_pdf
+
+_PLACEHOLDER_RE = re.compile(r"\{\{\s*\d+\s*\}\}")
+_JINJA_MARKER_RE = re.compile(
+    r"(\{%|\{\{\s*(frappe|jenv|doc|RLE|PDF|company)\b)"
+)
+
+
+def _is_jinja_template(body: str) -> bool:
+    """True when the body uses Jinja (``{% ... %}`` or ``{{ identifier }}``)."""
+    if _JINJA_MARKER_RE.search(body):
+        return True
+    # Non-numeric {{ ... }} expressions (e.g. {{ RLE }}, {{ company.company_name }})
+    return bool(re.search(r"\{\{\s*[^\d}][^}]*\}\}", body))
+
+
+def _is_placeholder_template(body: str) -> bool:
+    """True when the body only uses ``{{1}}..{{n}}`` style placeholders."""
+    stripped = body.strip()
+    if not stripped:
+        return False
+    if _JINJA_MARKER_RE.search(stripped):
+        return False
+    return bool(_PLACEHOLDER_RE.search(stripped))
+
+
+def _compose_template_text(template_doc, body: str) -> str:
+    """Compose the delivered text from header + body + footer (all properties)."""
+    parts = []
+    header = (template_doc.get("header") or "").strip()
+    footer = (template_doc.get("footer") or "").strip()
+    if header:
+        parts.append(header)
+    if body:
+        parts.append(body)
+    if footer:
+        parts.append(footer)
+    return "\n\n".join(parts)
 
 
 def _send_typing_indicator(base_url: str, session_id: str, api_key: str, chat_id: str, state: str = "typing") -> None:
@@ -35,28 +73,199 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
     """Intercepts all outbound messages and routes OpenWA-enabled accounts through the gateway."""
 
     def before_validate(self) -> None:
-        """Capture the caller-set reference before downstream validate hooks can overwrite it.
+        """Snapshot the caller-set reference and preserve the source doc for rendering.
 
         The CRM app registers a ``doc_events`` validate hook
         (``crm.api.whatsapp.validate``) that resolves the recipient's number to a
         Contact/Lead/Deal and overwrites ``reference_doctype``/``reference_name`` on
         every save — including outgoing messages whose reference was set explicitly
         (``send_document_pdf``, template sends, the WhatsApp dialog). We snapshot the
-        reference here (``before_validate`` runs before ``validate``) so
-        :meth:`before_save` can restore it.
+        reference here (``before_validate`` runs before ``validate``).
+
+        For template/PDF sends the source document (e.g. a Sales Invoice) is also
+        captured into ``openwa_render_doctype``/``openwa_render_name``. That lets the
+        reference be relinked to the CRM record (so the message appears in the CRM
+        thread) while the dynamic header image still renders the source document.
         """
         self._explicit_reference = (self.reference_doctype, self.reference_name)
 
+        needs_source = bool(getattr(self, "template", None)) or bool(
+            getattr(self, "openwa_send_pdf", None)
+        )
+        if (
+            needs_source
+            and self.reference_doctype
+            and self.reference_name
+            and self.reference_doctype not in ("CRM Deal", "CRM Lead", "Contact")
+            and not getattr(self, "openwa_render_doctype", None)
+        ):
+            self.openwa_render_doctype = self.reference_doctype
+            self.openwa_render_name = self.reference_name
+
     def before_save(self) -> None:
-        """Restore the explicitly set reference that CRM's validate hook clobbered.
+        """Restore the explicit reference that CRM's validate hook clobbered — unless
+        the source doc was captured for rendering.
 
         Runs in the ``before_save`` phase, which is strictly after ``validate``.
-        Messages with no reference (e.g. incoming webhook messages) are left alone so
-        CRM's auto-linking from the sender's number still applies.
+        When ``openwa_render_doctype`` is set the source document is preserved for
+        the dynamic header image, so the reference can stay relinked to the CRM
+        Deal/Lead — that is what makes the message appear in the CRM thread. Messages
+        with no reference (e.g. incoming webhook messages) are left alone so CRM's
+        auto-linking from the sender's number still applies.
+
+        Outgoing template messages are also given a fully-rendered body here (Jinja
+        or placeholder-substituted) so the caption, Desk list and CRM thread all show
+        the real text instead of an empty message.
         """
         explicit = getattr(self, "_explicit_reference", (None, None))
-        if explicit != (None, None):
+        if explicit != (None, None) and not getattr(self, "openwa_render_doctype", None):
             self.reference_doctype, self.reference_name = explicit
+
+        if getattr(self, "template", None) and getattr(self, "type", None) == "Outgoing":
+            self._prepare_template_message()
+
+    # ------------------------------------------------------------------
+    # Template body rendering (Jinja / placeholder / plain)
+    # ------------------------------------------------------------------
+
+    _TEMPLATE_MESSAGE_SENTINEL = "Template message"
+
+    def _prepare_template_message(self) -> None:
+        """Fill the message text from the linked WhatsApp Templates doc.
+
+        Covers every creation path (Desk dialog, CRM, notifications, bulk):
+        - Jinja bodies (``{% ... %}`` / ``{{ doc.field }}``) are rendered against the
+          reference document with ``frappe`` in context and composed as
+          header + body + footer, delivered as free text.
+        - Placeholder bodies (``{{1}}..{{n}}``) get their variables extracted from the
+          template's ``field_names`` against the reference doc and are delivered via
+          the OpenWA ``send-template`` endpoint.
+        - Plain bodies are used verbatim.
+
+        Never raises: a rendering failure logs an error and keeps the raw body so the
+        send still proceeds.
+        """
+        current = getattr(self, "message", None)
+        if current and current != self._TEMPLATE_MESSAGE_SENTINEL:
+            return
+
+        try:
+            template_doc = frappe.get_doc("WhatsApp Templates", self.template)
+        except Exception as exc:
+            frappe.log_error(
+                title="OpenWA: failed to load template for message",
+                message=f"Msg {self.name}, Template {self.template}: {exc}",
+            )
+            return
+
+        body = (template_doc.get("template") or "").strip()
+        if not body:
+            return
+
+        try:
+            if _is_jinja_template(body):
+                self._render_jinja_template(template_doc, body)
+            elif _is_placeholder_template(body):
+                self._prepare_placeholder_template(template_doc, body)
+            else:
+                self.message = _compose_template_text(template_doc, body)
+                self.message_type = "Manual"
+                self.use_template = 0
+        except Exception:
+            frappe.log_error(
+                title="OpenWA: template body render failed",
+                message=(
+                    f"Msg {self.name}, Template {self.template}, "
+                    f"Ref {self.reference_doctype} {self.reference_name}\n"
+                    f"{frappe.get_traceback()}"
+                ),
+            )
+            self.message = current or body
+            self.message_type = "Manual"
+            self.use_template = 0
+
+    def _get_render_doc(self):
+        """Load the document the template renders against (e.g. the invoice), best-effort."""
+        doctype = getattr(self, "openwa_render_doctype", None) or self.reference_doctype
+        name = getattr(self, "openwa_render_name", None) or self.reference_name
+        if not doctype or not name:
+            return None
+        try:
+            return frappe.get_doc(doctype, name)
+        except Exception:
+            return None
+
+    def _render_jinja_template(self, template_doc, body: str) -> None:
+        """Render a Jinja body against the reference doc and set the message text."""
+        doc = self._get_render_doc()
+        if doc is None:
+            rendered = body
+        else:
+            rendered = frappe.render_template(body, {"doc": doc, "frappe": frappe})
+        self.message = _compose_template_text(template_doc, (rendered or "").strip())
+        self.message_type = "Manual"
+        self.use_template = 0
+
+    def _prepare_placeholder_template(self, template_doc, body: str) -> None:
+        """Set variables and switch to the OpenWA send-template endpoint."""
+        params = self._extract_template_params(template_doc)
+        if params:
+            self.template_parameters = json.dumps(params)
+            self.message = body
+            self.message_type = "Template"
+            self.use_template = 1
+            return
+
+        # No variables derivable — deliver the raw body as free text so the send
+        # does not fail. Configure ``field_names`` on the template to populate vars.
+        frappe.log_error(
+            title="OpenWA: template sent without variables",
+            message=(
+                f"Msg {self.name}, Template {self.template}: no variables available. "
+                "Delivering the raw template body as free text. Configure 'field_names' "
+                "on the WhatsApp Templates doc to populate variables."
+            ),
+        )
+        self.message = body
+        self.message_type = "Manual"
+        self.use_template = 0
+
+    def _extract_template_params(self, template_doc) -> list:
+        """Explicit variables win; otherwise map ``field_names`` onto the reference doc."""
+        if self.template_parameters:
+            try:
+                parsed = json.loads(self.template_parameters)
+                return parsed if isinstance(parsed, list) else []
+            except (json.JSONDecodeError, TypeError):
+                return []
+        if self.body_param:
+            try:
+                bp = json.loads(self.body_param)
+                return list(bp.values()) if isinstance(bp, dict) else (bp if isinstance(bp, list) else [])
+            except (json.JSONDecodeError, TypeError):
+                return []
+
+        field_names = []
+        if template_doc.get("field_names"):
+            field_names = [f.strip() for f in str(template_doc.field_names).split(",") if f.strip()]
+        if not field_names:
+            return []
+
+        doc = self._get_render_doc()
+        if doc is None:
+            return []
+        params = []
+        for field_name in field_names:
+            try:
+                value = doc.get_formatted(field_name)
+            except Exception:
+                value = doc.get(field_name) if hasattr(doc, "get") else None
+            params.append(value if value is not None else "")
+
+        # If none of the mapped fields yielded a real value, treat as no params
+        if not any(str(p).strip() for p in params):
+            return []
+        return params
 
     def notify(self, data: dict) -> None:
         """Intercept before Meta API call. ``data`` is the fully-built Meta payload."""
