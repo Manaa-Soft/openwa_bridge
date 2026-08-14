@@ -887,7 +887,9 @@ def check_whatsapp_number(account_name: str, number: str) -> dict:
 
     try:
         result = openwa_api(account, "GET", f"/contacts/check/{formatted}")
-        return {"exists": result.get("isRegistered", False), "jid": chat_id}
+        exists = bool(result.get("exists", False))
+        whatsapp_id = result.get("whatsappId") or chat_id
+        return {"exists": exists, "jid": whatsapp_id}
     except Exception as exc:
         return {"exists": False, "error": str(exc)}
 
@@ -954,6 +956,52 @@ def send_typing_indicator(account_name: str, chat_id: str, state: str = "typing"
 # Bulk messaging API
 # ---------------------------------------------------------------------------
 
+# OpenWA v0.18 sends bulk messages asynchronously as a batch: a POST to
+# /messages/send-bulk returns 202 with {batchId, status, statusUrl} and the
+# batch is drained in the background. Status is read via GET /messages/batch/:id.
+_BULK_CHUNK_SIZE = 100          # OpenWA cap on messages per send-bulk request
+_BULK_POLL_INTERVAL = 2         # seconds between batch status polls
+_BULK_MAX_POLLS = 30            # ~60s of waiting before returning pending counts
+
+
+def _submit_bulk_text_batch(account: dict, chat_ids: list[str], text: str) -> dict:
+    """Submit one send-bulk request for a chunk of chat IDs (v0.18 DTO).
+
+    Returns the OpenWA 202 response: ``{batchId, status, statusUrl, ...}``.
+    """
+    messages = [
+        {"chatId": chat_id, "type": "text", "content": {"text": text}}
+        for chat_id in chat_ids
+    ]
+    return openwa_api(account, "POST", "/messages/send-bulk", json_data={
+        "messages": messages,
+    })
+
+
+def _poll_batch_status(account: dict, batch_id: str) -> dict:
+    """Read the current status/progress of an OpenWA bulk batch."""
+    result = openwa_api(account, "GET", f"/messages/batch/{batch_id}")
+    if isinstance(result, dict):
+        return result
+    return {}
+
+
+def _bulk_counts(result: dict, fallback_total: int) -> dict:
+    """Extract sent/failed/pending counts from a batch status response."""
+    progress = result.get("progress") or {}
+    sent = progress.get("sent", 0)
+    failed = progress.get("failed", 0)
+    pending = progress.get("pending", 0)
+    cancelled = progress.get("cancelled", 0)
+    total = progress.get("total", fallback_total)
+    return {
+        "sent": sent,
+        "failed": failed,
+        "pending": pending,
+        "cancelled": cancelled,
+        "total": total,
+    }
+
 
 @frappe.whitelist()
 def send_bulk_openwa(account_name: str, contacts: str, message: str) -> dict:
@@ -964,7 +1012,7 @@ def send_bulk_openwa(account_name: str, contacts: str, message: str) -> dict:
         message:  The message body text.
 
     Returns:
-        dict: { "status": "ok", "sent": <count>, "failed": <count> }
+        dict: { "status": "ok", "batchId": ..., "sent": <count>, "failed": <count> }
     """
     if not frappe.has_permission("WhatsApp Account", "write", account_name):
         frappe.throw("Insufficient permissions.", frappe.PermissionError)
@@ -982,13 +1030,45 @@ def send_bulk_openwa(account_name: str, contacts: str, message: str) -> dict:
         frappe.throw("No valid contacts provided.")
 
     try:
-        result = openwa_api(account, "POST", "/messages/send-bulk", json_data={
-            "chatIds": chat_ids,
-            "text": message,
-        })
-        sent = len(result.get("sent", [])) if isinstance(result, dict) else len(chat_ids)
-        failed = len(result.get("failed", [])) if isinstance(result, dict) else 0
-        return {"status": "ok", "sent": sent, "failed": failed}
+        batch_ids = []
+        for i in range(0, len(chat_ids), _BULK_CHUNK_SIZE):
+            chunk = chat_ids[i:i + _BULK_CHUNK_SIZE]
+            response = _submit_bulk_text_batch(account, chunk, message)
+            batch_id = response.get("batchId", "")
+            if batch_id:
+                batch_ids.append(batch_id)
+
+        if not batch_ids:
+            return {"status": "error", "error": "OpenWA did not return a batch ID."}
+
+        # Poll the first (or only) batch until it reaches a terminal state or the
+        # wait budget is exhausted. Multi-chunk sends report per-batch; combine
+        # the last read as a best-effort summary.
+        combined = {"sent": 0, "failed": 0, "pending": 0, "cancelled": 0, "total": 0}
+        for batch_id in batch_ids:
+            counts = None
+            for _ in range(_BULK_MAX_POLLS):
+                status = _poll_batch_status(account, batch_id)
+                state = (status.get("status") or "").lower()
+                counts = _bulk_counts(status, len(chat_ids))
+                if state in ("completed", "failed", "cancelled"):
+                    break
+                time.sleep(_BULK_POLL_INTERVAL)
+            if counts:
+                for key in combined:
+                    combined[key] += counts[key]
+        if not combined["total"]:
+            combined["total"] = len(chat_ids)
+
+        return {
+            "status": "ok",
+            "batchId": batch_ids[0],
+            "sent": combined["sent"],
+            "failed": combined["failed"],
+            "pending": combined["pending"],
+            "cancelled": combined["cancelled"],
+            "total": combined["total"],
+        }
     except Exception as exc:
         return {"status": "error", "error": str(exc)}
 
@@ -996,6 +1076,37 @@ def send_bulk_openwa(account_name: str, contacts: str, message: str) -> dict:
 # ---------------------------------------------------------------------------
 # Message forward / delete API
 # ---------------------------------------------------------------------------
+
+
+def _resolve_message_chat_id(message_id: str) -> str | None:
+    """Find the chatId of a stored WhatsApp message by its OpenWA message_id.
+
+    OpenWA v0.18 requires ``chatId`` (forward/delete take it in the body) but the
+    bridge only keeps the OpenWA message ID. Resolve the chat from the WhatsApp
+    Message doc — ``to`` for outgoing messages, ``from`` for incoming.
+    """
+    try:
+        doc = frappe.db.get_value(
+            "WhatsApp Message",
+            {"message_id": message_id},
+            ["type", "to", "from"],
+            as_dict=True,
+        )
+    except Exception:
+        doc = None
+    if not doc:
+        return None
+    number = doc.get("to") if doc.get("type") == "Outgoing" else doc.get("from")
+    if not number:
+        return None
+    number = str(number)
+    if "@" in number:
+        return number
+    try:
+        from frappe_whatsapp.utils import format_number
+        return f"{format_number(number)}@c.us"
+    except Exception:
+        return f"{number}@c.us"
 
 
 @frappe.whitelist()
@@ -1009,10 +1120,17 @@ def forward_message(account_name: str, message_id: str, chat_id: str) -> dict:
     if not frappe.has_permission("WhatsApp Account", "write", account_name):
         frappe.throw("Insufficient permissions.", frappe.PermissionError)
     account = _get_account(account_name)
+    from_chat_id = _resolve_message_chat_id(message_id)
+    if not from_chat_id:
+        return {
+            "status": "error",
+            "error": "Could not resolve the source chat for this message.",
+        }
     try:
         result = openwa_api(account, "POST", "/messages/forward", json_data={
+            "fromChatId": from_chat_id,
+            "toChatId": chat_id,
             "messageId": message_id,
-            "chatId": chat_id,
         })
         return {"status": "ok", "result": result}
     except Exception as exc:
@@ -1030,10 +1148,30 @@ def delete_message(account_name: str, message_id: str, revoke: int = 0) -> dict:
     if not frappe.has_permission("WhatsApp Account", "write", account_name):
         frappe.throw("Insufficient permissions.", frappe.PermissionError)
     account = _get_account(account_name)
-    endpoint = f"/messages/{message_id}" + ("?revoke=true" if revoke else "")
+    chat_id = _resolve_message_chat_id(message_id)
+    if not chat_id:
+        return {
+            "status": "error",
+            "error": "Could not resolve the chat for this message.",
+        }
+    for_everyone = bool(revoke)
     try:
-        openwa_api(account, "DELETE", endpoint)
+        openwa_api(account, "POST", "/messages/delete", json_data={
+            "chatId": chat_id,
+            "messageId": message_id,
+            "forEveryone": for_everyone,
+        })
         return {"status": "deleted", "message_id": message_id}
+    except requests.exceptions.HTTPError as exc:
+        # OpenWA returns 503 ("may or may not have been applied") when WhatsApp
+        # does not answer within the request budget. Treat it as applied rather
+        # than an error so the caller does not retry and duplicate.
+        if exc.response is not None and exc.response.status_code == 503:
+            frappe.logger().warning(
+                f"OpenWA delete returned 503 for {message_id} — assumed applied."
+            )
+            return {"status": "deleted", "message_id": message_id, "uncertain": True}
+        return {"status": "error", "error": str(exc)}
     except Exception as exc:
         return {"status": "error", "error": str(exc)}
 
@@ -1307,7 +1445,7 @@ def mark_chat_read(account_name: str, chat_id: str) -> dict:
         frappe.throw("Insufficient permissions.", frappe.PermissionError)
     account = _get_account(account_name)
     try:
-        openwa_api(account, "POST", f"/chats/{chat_id}/read")
+        openwa_api(account, "POST", "/chats/read", json_data={"chatId": chat_id})
         return {"status": "ok"}
     except Exception as exc:
         return {"status": "error", "error": str(exc)}
@@ -1327,7 +1465,7 @@ def mark_chat_unread(account_name: str, chat_id: str) -> dict:
         frappe.throw("Insufficient permissions.", frappe.PermissionError)
     account = _get_account(account_name)
     try:
-        openwa_api(account, "POST", f"/chats/{chat_id}/unread")
+        openwa_api(account, "POST", "/chats/unread", json_data={"chatId": chat_id})
         return {"status": "ok"}
     except Exception as exc:
         return {"status": "error", "error": str(exc)}
@@ -1354,7 +1492,7 @@ def get_chat_history(account_name: str, chat_id: str, limit: int = 50) -> dict:
         frappe.throw("Insufficient permissions.", frappe.PermissionError)
     account = _get_account(account_name)
     try:
-        result = openwa_api(account, "GET", f"/chats/{chat_id}/history?limit={limit}")
+        result = openwa_api(account, "GET", f"/messages/{chat_id}/history?limit={limit}")
         return {"status": "ok", "messages": result}
     except Exception as exc:
         return {"status": "error", "error": str(exc)}
@@ -1464,7 +1602,7 @@ def add_group_participants(account_name: str, group_id: str, participants: str) 
         formatted = format_number(num)
         participant_list.append(f"{formatted}@c.us" if "@c.us" not in formatted else formatted)
     try:
-        result = openwa_api(account, "POST", f"/groups/{group_id}/participants/add", json_data={
+        result = openwa_api(account, "POST", f"/groups/{group_id}/participants", json_data={
             "participants": participant_list,
         })
         return {"status": "ok", "result": result}
@@ -1491,7 +1629,7 @@ def remove_group_participants(account_name: str, group_id: str, participants: st
         formatted = format_number(num)
         participant_list.append(f"{formatted}@c.us" if "@c.us" not in formatted else formatted)
     try:
-        result = openwa_api(account, "POST", f"/groups/{group_id}/participants/remove", json_data={
+        result = openwa_api(account, "DELETE", f"/groups/{group_id}/participants", json_data={
             "participants": participant_list,
         })
         return {"status": "ok", "result": result}
@@ -1698,11 +1836,14 @@ def send_bulk_with_progress(account_name: str, contacts: str, message: str) -> d
     if not chat_ids:
         frappe.throw("No valid contacts provided.")
     try:
-        result = openwa_api(account, "POST", "/messages/send-bulk", json_data={
-            "chatIds": chat_ids,
-            "text": message,
-        })
-        return {"status": "ok", "batchId": result.get("batchId", ""), "result": result}
+        batch_ids = []
+        for i in range(0, len(chat_ids), _BULK_CHUNK_SIZE):
+            chunk = chat_ids[i:i + _BULK_CHUNK_SIZE]
+            response = _submit_bulk_text_batch(account, chunk, message)
+            batch_id = response.get("batchId", "")
+            if batch_id:
+                batch_ids.append(batch_id)
+        return {"status": "ok", "batchId": batch_ids[0] if batch_ids else "", "result": response}
     except Exception as exc:
         return {"status": "error", "error": str(exc)}
 
@@ -1796,7 +1937,7 @@ def get_session_stats(account_name: str) -> dict:
         frappe.throw("Insufficient permissions.", frappe.PermissionError)
     account = _get_account(account_name)
     try:
-        result = openwa_api(account, "GET", "/sessions/stats/overview")
+        result = _raw_openwa_call(account, "GET", "/api/sessions/stats/overview")
         return {"status": "ok", "stats": result}
     except Exception as exc:
         return {"status": "error", "error": str(exc)}
@@ -1859,7 +2000,11 @@ def get_contact_statuses(account_name: str, contact_id: str) -> dict:
     account = _get_account(account_name)
     try:
         result = openwa_api(account, "GET", f"/status/{contact_id}")
-        return {"status": "ok", "statuses": result}
+        if isinstance(result, dict):
+            statuses = result.get("statuses", [])
+        else:
+            statuses = result
+        return {"status": "ok", "statuses": statuses}
     except Exception as exc:
         return {"status": "error", "error": str(exc)}
 
@@ -2171,14 +2316,24 @@ def get_contact_phone(account_name: str, contact_id: str) -> dict:
 
 
 @frappe.whitelist()
-def list_profile_pictures(account_name: str) -> dict:
-    """List profile pictures for all contacts."""
+def list_profile_pictures(account_name: str, contacts: str = "") -> dict:
+    """Batch-resolve profile picture URLs for contacts (OpenWA v0.18).
+
+    Args:
+        contacts: Comma-separated WhatsApp JIDs or phone numbers. OpenWA caps the
+                  lookup at the first 50 ids.
+    """
     if not frappe.has_permission("WhatsApp Account", "read", account_name):
         frappe.throw("Insufficient permissions.", frappe.PermissionError)
     account = _get_account(account_name)
     try:
-        result = openwa_api(account, "GET", "/contacts/profile-pictures")
-        return {"status": "ok", "profile_pictures": result}
+        ids = [n.strip() for n in contacts.split(",") if n.strip()][:50]
+        path = "/contacts/profile-pictures"
+        if ids:
+            path += "?ids=" + ",".join(ids)
+        result = openwa_api(account, "GET", path)
+        pictures = result.get("pictures", result) if isinstance(result, dict) else result
+        return {"status": "ok", "profile_pictures": pictures}
     except Exception as exc:
         return {"status": "error", "error": str(exc)}
 

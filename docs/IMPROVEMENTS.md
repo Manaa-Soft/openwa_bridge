@@ -516,6 +516,30 @@ Comprehensive code review identified additional issues. Each fix is scoped to mi
 
 ---
 
+## OpenWA v0.18 Compatibility
+
+**Status**: Complete
+**Scope**: `whatsapp_account.py`, `tasks.py`, `tests/test_bulk_messaging.py`, `tests/test_contact_management.py`, `tests/test_account.py`
+
+All bridge endpoints updated to the OpenWA 0.18.0 API contract:
+
+- **Bulk send** — `send_bulk_openwa` / `send_bulk_with_progress` now POST `messages[]` (≤100/request) to `/messages/send-bulk`, receive `202 {batchId}`, and poll `GET /messages/batch/:batchId` (~60s budget) to report `sent`/`failed`/`pending`/`cancelled`/`total`.
+- **Forward/delete** — new `_resolve_message_chat_id()` helper resolves the source chat from the stored WhatsApp Message; `POST /messages/forward` (`fromChatId`/`toChatId`/`messageId`) and `POST /messages/delete` (`chatId`/`messageId`/`forEveryone`). A `503` on delete is treated as applied (`uncertain: true`).
+- **Read/unread** — `POST /chats/read` / `POST /chats/unread` with `{chatId}` body.
+- **History** — `GET /messages/:chatId/history`.
+- **Group participants** — `POST` / `DELETE /groups/:groupId/participants`.
+- **Contacts** — `check_whatsapp_number` reads `{exists, whatsappId}`; `list_profile_pictures(contacts)` uses `?ids=` (cap 50) and reads `{pictures}`.
+- **Session stats** — `get_session_stats` reads `/api/sessions/stats/overview` via `_raw_openwa_call`.
+- **Statuses** — `get_contact_statuses` unwraps the `{statuses: [...]}` envelope.
+- **Webhook replay** — `replay_webhooks` maps `createdAt`, `waMessageId`, lowercase `direction`, and normalises epoch-seconds vs millisecond timestamps.
+
+**Notes**:
+- Requires OpenWA **0.18.x**; pre-0.18 contracts are no longer exercised by the bridge.
+- Tests updated to the v0.18 DTOs (mocks assert `{number, exists, whatsappId}`, `/chats/read`, `/messages/send-bulk` with `messages[]`, batch polling).
+- Test suite requires a live Frappe bench (`manaa-soft` site) — not runnable in a bare checkout.
+
+---
+
 ## OpenWA v0.10.6/v0.10.9+ Feature Integration
 
 All OpenWA v0.10.6 through v0.10.10 features have been integrated into the bridge.

@@ -98,6 +98,18 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **`use_json_request_body = True`** — removed (was causing 417 rejection)
 
 ### Changed
+- **OpenWA v0.18 API contract support** — all endpoints upgraded to the v0.18 DTOs:
+  - `send_bulk_openwa` / `send_bulk_with_progress` now submit per-message items (`chatId` + `type` + `content`) in chunks of ≤100 (OpenWA's `send-bulk` cap) to `POST /messages/send-bulk`. OpenWA drains the batch asynchronously and returns `202` + `batchId`; the bridge polls `GET /messages/batch/:batchId` (≤30 × 2s) and reports `sent`/`failed`/`pending`/`cancelled`/`total` counts.
+  - `forward_message` now sends `fromChatId` + `toChatId` + `messageId` (v0.18 DTO). The source chat is resolved from the stored WhatsApp Message via the new `_resolve_message_chat_id()` helper.
+  - `delete_message` now uses `POST /messages/delete` with `{chatId, messageId, forEveryone}` (replaces `DELETE /messages/:id?revoke=`). A `503` from OpenWA (outcome uncertain — "may or may not have been applied") is treated as applied rather than an error so callers don't retry and duplicate.
+  - `mark_chat_read` / `mark_chat_unread` now POST to `/chats/read` / `/chats/unread` with `{chatId}` in the JSON body.
+  - `get_chat_history` now reads `GET /messages/:chatId/history`.
+  - `add_group_participants` / `remove_group_participants` now use `POST` / `DELETE /groups/:groupId/participants` (replaces `/participants/add` and `/participants/remove`).
+  - `get_session_stats` now reads `/api/sessions/stats/overview` via the raw call path.
+  - `get_contact_statuses` now unwraps the `{statuses: [...]}` envelope returned by v0.18.
+  - `list_profile_pictures` now accepts an optional `contacts` argument (comma-separated JIDs, capped at 50) and reads `{pictures: [...]}`.
+- **`check_whatsapp_number` v0.18 response** — OpenWA v0.18 returns `{exists, whatsappId}` instead of `isRegistered`; the bridge now reads `exists`/`whatsappId` and returns `jid` = `whatsappId`.
+- **`replay_webhooks` v0.18 field mapping** — reads `createdAt` and `waMessageId` (v0.18 webhook field names), lowercases `direction`, skips anything that is not `incoming`, and normalises epoch-seconds vs millisecond timestamps.
 - **Send-as-PDF dialog preview removed** — the live iframe preview pane and its status line were dropped from the "Send To Whatsapp" dialog. The dialog still verifies the document renders with the chosen Print Format/Language/Letter Head/Print Settings (`get_html_and_style`) before enabling Send; render failures surface as a message instead of inline status text. Errors from cross-doctype print formats are unchanged.
 - **Settings moved to WhatsApp Account** — 7 settings (HMAC strict, API timeout, session start timeout, rate limit, CB threshold, CB cooldown, max outbox attempts) moved from OpenWA Bridge Settings to per-account WhatsApp Account. Each account now has independent config.
 - **WhatsApp Account custom fields** — expanded from 9 to 16 fields (7 new settings in collapsible "Settings" section)

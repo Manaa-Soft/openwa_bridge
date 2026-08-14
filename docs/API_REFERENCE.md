@@ -248,43 +248,90 @@ Edit an already-sent message body.
 
 ### POST /messages/send-bulk
 
-Send a text message to multiple contacts.
+Send messages to multiple contacts (OpenWA v0.18: asynchronous batch).
+
+OpenWA v0.18 accepts up to **100 messages per request** as `messages[]`, then
+drains the batch in the background. The bridge chunks sends to ≤100 contacts and
+polls batch status.
 
 ```json
 {
-  "chatIds": ["967777715787@c.us", "967777711111@c.us"],
-  "text": "Hello everyone!"
+  "messages": [
+    { "chatId": "967777715787@c.us", "type": "text", "content": { "text": "Hello everyone!" } },
+    { "chatId": "967777711111@c.us", "type": "text", "content": { "text": "Hello everyone!" } }
+  ]
 }
 ```
 
 **DTO fields**:
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `chatIds` | string[] | Yes | Array of WhatsApp JIDs |
-| `text` | string | Yes | Message body |
+| `messages[].chatId` | string | Yes | Recipient WhatsApp JID |
+| `messages[].type` | string | Yes | `text` \| `image` \| `video` \| `audio` \| `document` |
+| `messages[].content` | object | Yes | `{ text }` for text; media DTO for others (max 100 items/request) |
+| `options` | object | No | `delay`, `randomizeDelay`, `stopOnError` |
 
----
-
-### POST /messages/forward
-
-Forward an existing message to another chat.
-
+**Response** (`202` — batch started, drained asynchronously):
 ```json
 {
-  "messageId": "true_967777715787@c.us_3EB0...",
-  "chatId": "967777711111@c.us"
+  "batchId": "b_...",
+  "status": "processing",
+  "totalMessages": 100,
+  "estimatedCompletionTime": "...",
+  "statusUrl": "/api/sessions/:sessionId/messages/batch/b_..."
+}
+```
+
+### GET /messages/batch/:batchId
+
+Poll the status/progress of a bulk-send batch.
+
+```
+GET /api/sessions/:sessionId/messages/batch/{batchId}
+```
+
+**Response**:
+```json
+{
+  "batchId": "b_...",
+  "status": "processing",
+  "progress": { "total": 100, "sent": 42, "failed": 0, "pending": 58, "cancelled": 0 },
+  "startedAt": "...",
+  "completedAt": null
 }
 ```
 
 ---
 
-### DELETE /messages/:messageId
+### POST /messages/forward
 
-Delete a message. Add `?revoke=true` to delete for everyone (revoke).
+Forward an existing message to another chat (OpenWA v0.18 DTO).
 
+```json
+{
+  "fromChatId": "967777715787@c.us",
+  "toChatId": "967777711111@c.us",
+  "messageId": "true_967777715787@c.us_3EB0..."
+}
 ```
-DELETE /api/sessions/:sessionId/messages/true_967777715787@c.us_3EB0...?revoke=true
+
+---
+
+### POST /messages/delete
+
+Delete a message (OpenWA v0.18 DTO — replaces `DELETE /messages/:id?revoke=`).
+
+```json
+{
+  "chatId": "967777715787@c.us",
+  "messageId": "true_967777715787@c.us_3EB0...",
+  "forEveryone": true
+}
 ```
+
+**Note**: a `503` response means the outcome is uncertain ("may or may not have
+been applied"); the bridge treats it as applied rather than an error so callers
+do not retry and duplicate the delete.
 
 ---
 
@@ -333,9 +380,12 @@ GET /api/sessions/:sessionId/contacts/check/967777715787
 **Response** (200):
 ```json
 {
-  "isRegistered": true
+  "exists": true,
+  "whatsappId": "967777715787@c.us"
 }
 ```
+
+> **v0.18**: the response field is now `exists` + `whatsappId` (was `isRegistered`).
 
 ---
 
@@ -423,19 +473,27 @@ GET /api/sessions/:sessionId/messages/{messageId}/reactions
 
 ## Batch Operations
 
-### DELETE /messages/batch/:batchId
+### GET /messages/batch/:batchId
+
+Poll the status of a pending bulk-send batch (see `POST /messages/send-bulk`).
+
+```
+GET /api/sessions/:sessionId/messages/batch/{batchId}
+```
+
+### POST /messages/batch/:batchId/cancel
 
 Cancel a pending batch send operation.
 
 ```
-DELETE /api/sessions/:sessionId/messages/batch/{batchId}
+POST /api/sessions/:sessionId/messages/batch/{batchId}/cancel
 ```
 
 ---
 
 ## Statistics
 
-### GET /stats/overview
+### GET /sessions/stats/overview
 
 Get session overview statistics.
 
@@ -846,6 +904,8 @@ Check if a phone number is registered on WhatsApp.
 
 **Returns**: `{ exists: true, jid: "12345@c.us" }` or `{ exists: false }`
 
+**v0.18**: reads OpenWA's `exists`/`whatsappId` fields; `jid` is the resolved WhatsApp ID.
+
 ---
 
 ### block_contact
@@ -886,7 +946,7 @@ Send a typing indicator to a chat.
 
 ### send_bulk_openwa
 
-Send a text message to multiple contacts via OpenWA's send-bulk endpoint.
+Send a text message to multiple contacts via OpenWA's async send-bulk endpoint.
 
 **Method**: `openwa_bridge.whatsapp_account.send_bulk_openwa`
 
@@ -894,7 +954,9 @@ Send a text message to multiple contacts via OpenWA's send-bulk endpoint.
 
 - `contacts`: comma-separated phone numbers or JIDs
 
-**Returns**: `{ status: "ok", sent: 2, failed: 0 }`
+**Returns**: `{ status: "ok", batchId: "...", sent: 2, failed: 0, pending: 0, cancelled: 0, total: 2 }`
+
+**v0.18**: submits ≤100-message batches and polls `GET /messages/batch/:batchId` (≈60s budget). If the budget expires, `pending` still counts the unfinished messages.
 
 ---
 
@@ -906,7 +968,9 @@ Forward an existing message to another chat.
 
 **Args**: `{ account_name: string, message_id: string, chat_id: string }`
 
-**Returns**: `{ status: "ok", result: {...} }`
+**Returns**: `{ status: "ok", result: {...} }` or `{ status: "error", error: "..." }`
+
+**v0.18**: sends `fromChatId`/`toChatId`/`messageId`; the source chat is resolved from the stored WhatsApp Message doc via `_resolve_message_chat_id()`. Fails cleanly if the source chat cannot be resolved.
 
 ---
 
@@ -918,7 +982,9 @@ Delete a message. Set `revoke=1` to delete for everyone.
 
 **Args**: `{ account_name: string, message_id: string, revoke?: 0|1 }`
 
-**Returns**: `{ status: "deleted", message_id: "..." }`
+**Returns**: `{ status: "deleted", message_id: "..." }` (a `503` from OpenWA is treated as applied, adding `uncertain: true`)
+
+**v0.18**: uses `POST /messages/delete` with `{chatId, messageId, forEveryone}`.
 
 ---
 
@@ -1026,7 +1092,9 @@ Mark all messages in a chat as read.
 
 **Args**: `{ account_name: string, chat_id: string }`
 
-**Returns**: `{ status: "ok", result: {...} }`
+**Returns**: `{ status: "ok" }`
+
+**v0.18**: `POST /chats/read` with `{chatId}` in the body.
 
 ---
 
@@ -1038,7 +1106,9 @@ Mark a chat as unread.
 
 **Args**: `{ account_name: string, chat_id: string }`
 
-**Returns**: `{ status: "ok", result: {...} }`
+**Returns**: `{ status: "ok" }`
+
+**v0.18**: `POST /chats/unread` with `{chatId}` in the body.
 
 ---
 
@@ -1051,6 +1121,8 @@ Retrieve message history for a specific chat.
 **Args**: `{ account_name: string, chat_id: string, limit?: number }`
 
 **Returns**: `{ messages: [...] }`
+
+**v0.18**: reads `GET /messages/:chatId/history`.
 
 ---
 
@@ -1102,6 +1174,8 @@ Add participants to a group.
 
 **Returns**: `{ status: "ok", result: {...} }`
 
+**v0.18**: `POST /groups/:groupId/participants`.
+
 ---
 
 ### remove_group_participants
@@ -1113,6 +1187,8 @@ Remove participants from a group.
 **Args**: `{ account_name: string, group_id: string, participants: string }`
 
 **Returns**: `{ status: "ok", result: {...} }`
+
+**v0.18**: `DELETE /groups/:groupId/participants`.
 
 ---
 
@@ -1258,6 +1334,8 @@ Get session-level statistics.
 
 **Returns**: `{ stats: {...} }`
 
+**v0.18**: reads `GET /api/sessions/stats/overview` via `_raw_openwa_call` (session-scoped key or ADMIN role).
+
 ---
 
 ### list_channels
@@ -1293,6 +1371,8 @@ Get all statuses (stories) for a specific contact.
 **Args**: `{ account_name: string, contact_id: string }`
 
 **Returns**: `{ statuses: [...] }`
+
+**v0.18**: unwraps the `{statuses: [...]}` envelope OpenWA returns from `GET /status/:contactId`.
 
 ---
 
@@ -1516,13 +1596,17 @@ Resolve phone number from JID.
 
 ### list_profile_pictures
 
-List all profile pictures.
+Batch-resolve profile picture URLs for contacts.
 
 **Method**: `openwa_bridge.whatsapp_account.list_profile_pictures`
 
-**Args**: `{ account_name: string }`
+**Args**: `{ account_name: string, contacts?: string }`
 
-**Returns**: `{ profilePictures: [...] }`
+- `contacts`: comma-separated WhatsApp JIDs or phone numbers (OpenWA caps the lookup at the first 50 ids)
+
+**Returns**: `{ status: "ok", profile_pictures: [...] }`
+
+**v0.18**: calls `GET /contacts/profile-pictures?ids=...` and reads `{pictures: [...]}`.
 
 ---
 

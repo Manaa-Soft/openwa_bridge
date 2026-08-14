@@ -26,20 +26,21 @@ class TestCheckWhatsappNumber:
     @patch("openwa_bridge.whatsapp_account.openwa_api")
     def test_number_exists(self, mock_api, mock_get):
         mock_get.return_value = _mock_account()
-        mock_api.return_value = {"isRegistered": True}
+        # v0.18 response shape: {number, exists, whatsappId}
+        mock_api.return_value = {"number": "+1234567890", "exists": True, "whatsappId": "1234567890@c.us"}
 
         from openwa_bridge.whatsapp_account import check_whatsapp_number
         result = check_whatsapp_number("Test Account", "1234567890")
 
         assert result["exists"] is True
-        assert "@c.us" in result["jid"]
+        assert result["jid"] == "1234567890@c.us"
         mock_api.assert_called_once_with(mock_get.return_value, "GET", "/contacts/check/+1234567890")
 
     @patch("openwa_bridge.whatsapp_account._get_account")
     @patch("openwa_bridge.whatsapp_account.openwa_api")
     def test_number_not_found(self, mock_api, mock_get):
         mock_get.return_value = _mock_account()
-        mock_api.return_value = {"isRegistered": False}
+        mock_api.return_value = {"number": "+9999999999", "exists": False, "whatsappId": None}
 
         from openwa_bridge.whatsapp_account import check_whatsapp_number
         result = check_whatsapp_number("Test Account", "9999999999")

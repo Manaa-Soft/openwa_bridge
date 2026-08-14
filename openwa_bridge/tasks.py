@@ -1290,18 +1290,23 @@ def replay_webhooks(account_name: str, since: str | None = None, chat_id: str | 
     for msg_data in messages:
         try:
             # Filter by time
-            msg_time = msg_data.get("timestamp") or msg_data.get("created_at")
+            msg_time = msg_data.get("timestamp") or msg_data.get("createdAt") or msg_data.get("created_at")
             if msg_time:
                 if isinstance(msg_time, str):
                     msg_dt = datetime.fromisoformat(msg_time.replace("Z", "+00:00"))
                 else:
-                    msg_dt = datetime.fromtimestamp(msg_time / 1000)
+                    # OpenWA stores epoch-seconds; guard against millisecond timestamps too.
+                    seconds = msg_time / 1000 if msg_time > 1e12 else msg_time
+                    msg_dt = datetime.fromtimestamp(seconds)
                 if msg_dt.replace(tzinfo=None) < since_dt:
                     skipped += 1
                     continue
 
             # Only process incoming messages (we don't replay our own sends)
-            direction = msg_data.get("direction") or msg_data.get("from")
+            direction = (msg_data.get("direction") or "").lower()
+            if direction and direction != "incoming":
+                skipped += 1
+                continue
             if not direction:
                 skipped += 1
                 continue
@@ -1313,7 +1318,9 @@ def replay_webhooks(account_name: str, since: str | None = None, chat_id: str | 
             # Determine message content
             text = msg_data.get("body") or msg_data.get("text") or ""
             msg_type = msg_data.get("type") or "text"
-            msg_id = msg_data.get("id") or msg_data.get("key") or ""
+            # v0.18: waMessageId is the WhatsApp message id (webhook payloads expose
+            # it as `id`); the top-level `id` is the internal record UUID.
+            msg_id = msg_data.get("waMessageId") or msg_data.get("id") or msg_data.get("key") or ""
 
             # Check for duplicates by message_id or body hash
             if msg_id:

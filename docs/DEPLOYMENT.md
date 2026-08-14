@@ -482,6 +482,27 @@ The bridge is aware of the OpenWA 0.12.x session-lifecycle changes:
 
 ---
 
+## OpenWA 0.18.x Behaviour (bridge support)
+
+The bridge supports the OpenWA **0.18.0** API contract. Upgrade OpenWA to **0.18.x** (the bridge no longer matches the pre-0.18 contracts below).
+
+| Feature | What changed | Bridge behaviour |
+|---|---|---|
+| `POST /messages/send-bulk` (0.18) | Breaking: body is now `messages[]` (`chatId` + `type` + `content`, max 100/request) instead of `chatIds` + `text`; returns `202` + `batchId` and drains asynchronously | `send_bulk_openwa`/`send_bulk_with_progress` submit ≤100-message chunks and poll `GET /messages/batch/:batchId` (≈60s budget), reporting `sent`/`failed`/`pending`/`cancelled`/`total` |
+| `POST /messages/forward` (0.18) | Breaking: DTO is now `fromChatId` + `toChatId` + `messageId` (was `chatId` + `messageId`) | `forward_message` resolves the source chat from the stored WhatsApp Message via `_resolve_message_chat_id()` |
+| Message delete (0.18) | Breaking: `DELETE /messages/:id?revoke=` replaced by `POST /messages/delete` with `{chatId, messageId, forEveryone}` | `delete_message` sends the new DTO; a `503` (uncertain outcome) is treated as applied (`uncertain: true`) to avoid duplicate retries |
+| Read/unread (0.18) | Breaking: `POST /chats/:chatId/read`/`unread` replaced by `POST /chats/read`/`unread` with `{chatId}` in the body | `mark_chat_read`/`mark_chat_unread` send the body form |
+| Chat history (0.18) | Breaking: `GET /chats/:chatId/history` moved to `GET /messages/:chatId/history` | `get_chat_history` reads the new path |
+| Group participants (0.18) | Breaking: `/groups/:groupId/participants/add` and `/remove` folded into `POST`/`DELETE /groups/:groupId/participants` | `add_group_participants`/`remove_group_participants` use the folded endpoints |
+| `GET /contacts/check/:number` (0.18) | Breaking: response is now `{exists, whatsappId}` (was `{isRegistered}`) | `check_whatsapp_number` reads the new fields; `jid` is the resolved WhatsApp ID |
+| Profile pictures (0.18) | Breaking: `GET /contacts/profile-pictures` now takes `?ids=` and returns `{pictures: [...]}` | `list_profile_pictures(contacts)` accepts the comma-separated list (capped at 50) |
+| `GET /sessions/stats/overview` (0.18) | Session stats read via the raw `/api/...` path | `get_session_stats` uses `_raw_openwa_call` (session-scoped key or ADMIN role) |
+| Webhook payloads (0.18) | Fields renamed: `createdAt`, `waMessageId`; `direction` is a lowercase string | `replay_webhooks` maps the new fields and skips anything not `incoming` |
+
+**0.17.x and earlier:** the pre-0.18 contracts (`chatIds`+`text` bulk, `DELETE /messages/:id`, `/chats/:chatId/read`, `/participants/add`) are no longer exercised by the bridge.
+
+---
+
 ## Testing Checklist
 
 ### Basic Message Flow
@@ -532,6 +553,17 @@ The bridge is aware of the OpenWA 0.12.x session-lifecycle changes:
 - [ ] `action_required` session auto-recovers via stop→start; if stuck, account shows "Action Required" + Recover button
 - [ ] Unlink button removes the device from the account's Linked Devices (fresh QR required to reconnect)
 - [ ] Unlink while not started returns a clear "not started" error
+
+### OpenWA 0.18.x
+- [ ] Bulk send (50+ contacts) returns `batchId`, polls batch status, and reports `sent`/`failed`/`pending` counts
+- [ ] `check_whatsapp_number` returns correct `exists` + `jid` (WhatsApp ID) for known/unknown numbers
+- [ ] Forward a message — resolves source chat and delivers to the target chat
+- [ ] Delete a message (for me and for everyone) via `delete_message`
+- [ ] Mark chat read/unread works after a session restart
+- [ ] `get_chat_history` returns the last N messages via `/messages/:chatId/history`
+- [ ] Add/remove group participants via the folded `/groups/:groupId/participants` endpoint
+- [ ] `list_profile_pictures("jid1,jid2")` returns picture URLs
+- [ ] `get_session_stats` returns session stats (run with a session-scoped key or ADMIN)
 
 ---
 

@@ -565,7 +565,7 @@ Check frappe.has_permission()
   └─ Has permission → route by method:
        │
        ├─ check_whatsapp_number(account, number)
-       │    └─ GET /contacts/check/:number → { isRegistered: true/false }
+       │    └─ GET /contacts/check/:number → { exists, whatsappId }
        │
        ├─ block_contact(account, jid)
        │    └─ POST /contacts/:jid/block → { status: "blocked" }
@@ -577,15 +577,17 @@ Check frappe.has_permission()
        │    └─ POST /chats/typing { chatId, state } → { status: "ok" }
        │
        ├─ send_bulk_openwa(account, contacts, message)
-       │    ├─ Parse comma-separated contacts → format to JIDs
-       │    └─ POST /messages/send-bulk { chatIds, text } → { sent, failed }
+       │    ├─ Parse comma-separated contacts → format to JIDs (chunk ≤100)
+       │    └─ POST /messages/send-bulk { messages[] } → 202 { batchId } → poll GET /messages/batch/:id → { sent, failed, pending }
        │
        ├─ forward_message(account, message_id, chat_id)
-       │    └─ POST /messages/forward { messageId, chatId }
+       │    ├─ Resolve source chat via _resolve_message_chat_id()
+       │    └─ POST /messages/forward { fromChatId, toChatId, messageId }
        │
        ├─ delete_message(account, message_id, revoke)
-       │    ├─ revoke=0 → DELETE /messages/:id
-       │    └─ revoke=1 → DELETE /messages/:id?revoke=true
+       │    ├─ Resolve chat via _resolve_message_chat_id()
+       │    └─ POST /messages/delete { chatId, messageId, forEveryone }
+       │       (503 → treated as applied, uncertain: true)
        │
        ├─ request_pairing_code(account, phone)
        │    └─ POST /pairing-code { phoneNumber } → { pairingCode: "ABCD1234" }
@@ -611,14 +613,14 @@ Check frappe.has_permission()
         ├─ reject_call(account, call_id)
         │    └─ POST /calls/:callId/reject → { status: "ok" }
         │
-        ├─ mark_chat_read(account, chat_id)
-        │    └─ POST /chats/:chatId/read → { status: "ok" }
-        │
-        ├─ mark_chat_unread(account, chat_id)
-        │    └─ POST /chats/:chatId/unread → { status: "ok" }
-        │
-        ├─ get_chat_history(account, chat_id, limit)
-        │    └─ GET /chats/:chatId/messages?limit=N → { messages: [...] }
+       ├─ mark_chat_read(account, chat_id)
+       │    └─ POST /chats/read { chatId } → { status: "ok" }
+       │
+       ├─ mark_chat_unread(account, chat_id)
+       │    └─ POST /chats/unread { chatId } → { status: "ok" }
+       │
+       ├─ get_chat_history(account, chat_id, limit)
+       │    └─ GET /messages/:chatId/history?limit=N → { messages: [...] }
         │
         ├─ search_messages(account, query, limit)
         │    └─ GET /messages/search?q=query&limit=N → { messages: [...] }
@@ -656,8 +658,8 @@ Check frappe.has_permission()
         ├─ remove_label_from_chat(account, label_id, chat_id)
         │    └─ DELETE /labels/:id/chats/:chatId → { status }
         │
-        ├─ send_bulk_with_progress(account, contacts, message)
-        │    └─ POST /messages/send-bulk { chatIds, text } → { batchId, sent, failed }
+       ├─ send_bulk_with_progress(account, contacts, message)
+       │    └─ POST /messages/send-bulk { messages[] } → 202 { batchId }
         │
         ├─ set_profile_name(account, name)
         │    └─ PUT /profile/name { name } → { status }
@@ -734,8 +736,8 @@ Check frappe.has_permission()
         ├─ get_contact_phone(account, contact_id)
         │    └─ GET /contacts/:contactId/phone → { phone }
         │
-        ├─ list_profile_pictures(account)
-        │    └─ GET /contacts/profile-pictures → { profilePictures: [...] }
+       ├─ list_profile_pictures(account, contacts)
+       │    └─ GET /contacts/profile-pictures?ids=... (cap 50) → { pictures: [...] }
         │
         ├─ delete_chat(account, chat_id)
         │    └─ POST /chats/delete { chatId } → { status }

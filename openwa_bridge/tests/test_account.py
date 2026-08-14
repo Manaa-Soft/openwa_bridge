@@ -269,7 +269,7 @@ class TestMarkChatRead(IntegrationTestCase):
     @patch("openwa_bridge.whatsapp_account.openwa_api")
     @patch("openwa_bridge.whatsapp_account.frappe")
     def test_mark_read_calls_correct_endpoint(self, mock_frappe, mock_api):
-        """Should POST to /chats/{chatId}/read."""
+        """Should POST to /chats/read with {chatId} in the body (v0.18)."""
         from openwa_bridge.whatsapp_account import mark_chat_read
 
         mock_frappe.get_doc.return_value = MagicMock(
@@ -288,7 +288,8 @@ class TestMarkChatRead(IntegrationTestCase):
         mock_api.assert_called_once()
         call_args = mock_api.call_args
         self.assertEqual(call_args[0][1], "POST")
-        self.assertIn("/chats/1234567890@c.us/read", call_args[0][2])
+        self.assertEqual(call_args[0][2], "/chats/read")
+        self.assertEqual(call_args.kwargs["json_data"], {"chatId": "1234567890@c.us"})
 
 
 class TestListGroups(IntegrationTestCase):
@@ -377,10 +378,10 @@ class TestSearchMessages(IntegrationTestCase):
 class TestGetSessionStats(IntegrationTestCase):
     """Test get_session_stats whitelisted method."""
 
-    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account._raw_openwa_call")
     @patch("openwa_bridge.whatsapp_account.frappe")
-    def test_stats_calls_correct_endpoint(self, mock_frappe, mock_api):
-        """Should GET /stats."""
+    def test_stats_calls_correct_endpoint(self, mock_frappe, mock_raw):
+        """Should GET /api/sessions/stats/overview (global, not session-scoped)."""
         from openwa_bridge.whatsapp_account import get_session_stats
 
         mock_frappe.get_doc.return_value = MagicMock(
@@ -389,14 +390,14 @@ class TestGetSessionStats(IntegrationTestCase):
             get_password.return_value="api-key",
         )
         mock_frappe.has_permission.return_value = True
-        mock_api.return_value = mock_openwa_api("GET", 200, {"sent": 100})
+        mock_raw.return_value = mock_openwa_api("GET", 200, {"sent": 100})
 
         result = get_session_stats(account_name="test-account")
 
-        mock_api.assert_called_once()
-        call_args = mock_api.call_args
+        mock_raw.assert_called_once()
+        call_args = mock_raw.call_args
         self.assertEqual(call_args[0][1], "GET")
-        self.assertIn("/stats", call_args[0][2])
+        self.assertIn("/api/sessions/stats/overview", call_args[0][2])
 
 
 class TestGetContactStatuses(IntegrationTestCase):
