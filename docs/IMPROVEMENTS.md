@@ -540,6 +540,29 @@ All bridge endpoints updated to the OpenWA 0.18.0 API contract:
 
 ---
 
+## OpenWA v0.19-v0.23 Compatibility
+
+**Status**: Complete
+**Scope**: `whatsapp_account.py`, `tests/test_account.py`
+
+Bridge follows the OpenWA `main` branch (verified against **0.23.4**). Only one hard break, otherwise additive:
+
+- **`send_catalog_message` deprecated** — `POST /messages/send-catalog` removed in v0.19 (501 on every engine). The method now returns a clear error instead of calling OpenWA; `send_product_message` and `_send_catalog_summary` (text+image fallback) remain the supported paths.
+- **`mark_chat_read` v0.23 `messageIds`** — optional `message_ids` argument (comma-separated, ≤100) forwarded as `messageIds` for per-message read receipts; omitted → whole chat marked read.
+- **19 new whitelisted methods** (74 → 93):
+  - Messages: `vote_poll`, `pin_message` (validated `durationSeconds`), `unpin_message`, `star_message`, `get_chat_media`.
+  - Chats/session: `archive_chat`, `mute_chat`, `pin_chat`, `clear_chat_messages`, `get_session_proxy`, `set_session_proxy`.
+  - Groups: `get_group_membership_requests`, `approve_group_membership_requests`, `reject_group_membership_requests` (empty participants = all).
+  - Status: `post_status_voice`.
+  - Channels: `create_channel`, `mute_channel`, `demote_channel_admin`, `transfer_channel_ownership`.
+
+**Notes**:
+- v0.19's uniform `{sessionId}` route change needs no bridge change — `openwa_api()` joins relative paths onto `/api/sessions/{session_id}`.
+- `test_account.py` now compiles: the 55 broken `MagicMock(get_password.return_value=...)` dotted-kwarg lines (SyntaxError since Python 3.8) were replaced with attribute assignments, so the whole suite is runnable (on a bench) for the first time.
+- New endpoint tests cover every added method (path, HTTP verb, and body assertions).
+
+---
+
 ## OpenWA v0.10.6/v0.10.9+ Feature Integration
 
 All OpenWA v0.10.6 through v0.10.10 features have been integrated into the bridge.
@@ -594,9 +617,9 @@ Total webhook events: **17** (up from 10)
 - [x] `get_catalog_products()` — get catalog products (stub, returns 501)
 - [x] `get_catalog_product()` — get catalog product (stub, returns 501)
 - [x] `send_product_message()` — send product message (stub, returns 501)
-- [x] `send_catalog_message()` — send catalog message (stub, returns 501)
+- [x] `send_catalog_message()` — deprecated (OpenWA 0.19+ removed the endpoint; method returns a clear error, use `send_product_message` / `_send_catalog_summary`)
 
-Total whitelisted methods: **67** (up from 44)
+Total whitelisted methods: **93** (was 74 at the v0.18 commit; +19 v0.19-v0.23 additions)
 
 ### Typing Indicator
 

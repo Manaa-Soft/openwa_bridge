@@ -613,8 +613,8 @@ Check frappe.has_permission()
         ├─ reject_call(account, call_id)
         │    └─ POST /calls/:callId/reject → { status: "ok" }
         │
-       ├─ mark_chat_read(account, chat_id)
-       │    └─ POST /chats/read { chatId } → { status: "ok" }
+       ├─ mark_chat_read(account, chat_id, [+ message_ids="id1,id2"])
+       │    └─ POST /chats/read { chatId, [+ messageIds: string[] ] } → { status: "ok" }
        │
        ├─ mark_chat_unread(account, chat_id)
        │    └─ POST /chats/unread { chatId } → { status: "ok" }
@@ -770,7 +770,8 @@ Check frappe.has_permission()
         │    └─ POST /messages/send-product → 501 Not Implemented
         │
         └─ send_catalog_message(account, chat_id, catalog_id)
-             └─ POST /messages/send-catalog → 501 Not Implemented
+             └─ (deprecated in v0.19+) → { status: "error" }
+                (POST /messages/send-catalog was removed in OpenWA 0.19; use send_product_message or _send_catalog_summary)
 ```
 
 ## Flow 13: Outbox Cleanup (Daily Scheduler)
@@ -809,3 +810,62 @@ User creates WhatsApp Catalog Product (linked to ERPNext Item)
 - **All products are sent as fallback** — richly formatted text+image messages with product name, description, price, availability, and image
 - **Item auto-fetch** — name, description, image, and valuation_rate are pulled from the linked Item
 - **All fields are editable** — WhatsApp-specific overrides don't affect the original Item
+
+---
+
+## Flow 15: OpenWA v0.19-v0.23 Whitelisted Methods
+
+Whitelisted `openwa_bridge.whatsapp_account` methods for the newer OpenWA API surface. All follow the same pattern: permission check → `_get_account` → `openwa_api(account, METHOD, <relative path>, json_data)`. Relative paths are joined onto `/api/sessions/{session_id}` by `openwa_api()` (handles the uniform `{sessionId}` routing in v0.19+).
+
+```
+messages/
+  vote_poll(account, chat_id, poll_message_id, options)
+    └─ POST /messages/vote-poll { chatId, pollMessageId, options[] }
+  pin_message(account, chat_id, message_id, duration_seconds=604800)
+    └─ POST /messages/pin { chatId, messageId, durationSeconds }
+  unpin_message(account, chat_id, message_id)
+    └─ POST /messages/unpin { chatId, messageId }
+  star_message(account, chat_id, message_id, star=1)
+    └─ POST /messages/star { chatId, messageId, star }
+  get_chat_media(account, chat_id, message_id)
+    └─ GET /messages/:chatId/:messageId/media → { status: "ok", media }
+
+chats/
+  archive_chat(account, chat_id, archive=1)
+    └─ POST /chats/archive { chatId, archive }
+  mute_chat(account, chat_id, mute_until=0)
+    └─ POST /chats/mute { chatId, muteUntil }
+  pin_chat(account, chat_id, pin=1)
+    └─ POST /chats/pin { chatId, pin }
+  clear_chat_messages(account, chat_id)
+    └─ DELETE /chats/:chatId/messages
+  get_session_proxy(account) / set_session_proxy(account, proxy_url)
+    └─ GET /proxy / PATCH /proxy { proxyUrl }
+
+groups/
+  get_group_membership_requests(account, group_id)
+    └─ GET /groups/:groupId/membership-requests
+  approve_group_membership_requests(account, group_id, participants="")
+    └─ POST /groups/:groupId/membership-requests/approve  (empty = approve all)
+  reject_group_membership_requests(account, group_id, participants="")
+    └─ POST /groups/:groupId/membership-requests/reject   (empty = reject all)
+
+statuses/
+  post_status_voice(account, url="" | base64="", caption="")
+    └─ POST /status/send-voice
+
+channels/
+  create_channel(account, name, description="")
+    └─ POST /channels { name, description }
+  mute_channel(account, channel_id, mute=1)
+    └─ POST /channels/:channelId/mute { mute }
+  demote_channel_admin(account, channel_id, user_id)
+    └─ POST /channels/:channelId/admins/demote { userId }
+  transfer_channel_ownership(account, channel_id, new_owner_id)
+    └─ POST /channels/:channelId/owner/transfer { newOwnerId }
+```
+
+### Key Points
+- **`send_catalog_message` is deprecated** since OpenWA 0.19 (endpoint removed, 501) — the method returns a clear error and never calls OpenWA; use `send_product_message` or the `_send_catalog_summary` fallback.
+- **`mark_chat_read` accepts `message_ids`** — comma-separated list forwarded as v0.23 `messageIds` (max 100, Baileys) for per-message read receipts.
+- **Session proxy** — `set_session_proxy` with an empty `proxy_url` clears the proxy (`proxyUrl: null`).

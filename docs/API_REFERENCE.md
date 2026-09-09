@@ -1086,15 +1086,17 @@ Reject an incoming voice/video call.
 
 ### mark_chat_read
 
-Mark all messages in a chat as read.
+Mark all messages in a chat (or specific messages) as read.
 
 **Method**: `openwa_bridge.whatsapp_account.mark_chat_read`
 
-**Args**: `{ account_name: string, chat_id: string }`
+**Args**: `{ account_name: string, chat_id: string, message_ids?: string }`
+
+- `message_ids`: optional comma-separated list of message IDs (max 100, Baileys) to mark as read individually. When omitted, the whole chat is marked as read.
 
 **Returns**: `{ status: "ok" }`
 
-**v0.18**: `POST /chats/read` with `{chatId}` in the body.
+**v0.18+**: `POST /chats/read` with `{chatId}` in the body; **v0.23**: also accepts `messageIds: string[]`.
 
 ---
 
@@ -1825,3 +1827,223 @@ Send a specific catalog product to a chat by product name (account-qualified).
   "result": { "messageId": "true_967777715787@c.us_3EB0..." }
 }
 ```
+
+---
+
+### send_catalog_message (deprecated)
+
+Send a catalog listing to a chat.
+
+**Method**: `openwa_bridge.whatsapp_account.send_catalog_message`
+
+**Args**: `{ account_name: string, chat_id: string, catalog_id: string }`
+
+**Returns**:
+```json
+{
+  "status": "error",
+  "error": "POST /messages/send-catalog was removed in OpenWA 0.19 ..."
+}
+```
+
+`POST /messages/send-catalog` was **removed in OpenWA 0.19** (answers 501 on every engine). The bridge method no longer calls OpenWA and always returns this error. Use `openwa_bridge.whatsapp_account.send_product_message` or the catalog helpers (`send_product_to_chat`, `send_catalog_to_chat`) which render a text+image fallback.
+
+---
+
+## OpenWA v0.19-v0.23 whitelisted methods
+
+New `openwa_bridge.whatsapp_account` whitelisted methods added for the OpenWA 0.19–0.23 API surface.
+
+### vote_poll
+
+Cast a vote on a WhatsApp poll.
+
+**Method**: `openwa_bridge.whatsapp_account.vote_poll`
+
+**Args**: `{ account_name: string, chat_id: string, poll_message_id: string, options: string }`
+
+- `options`: comma-separated option strings (max 12).
+
+**Endpoint**: `POST /messages/vote-poll` with `{chatId, pollMessageId, options}`.
+
+### pin_message
+
+Pin a message in a chat.
+
+**Method**: `openwa_bridge.whatsapp_account.pin_message`
+
+**Args**: `{ account_name: string, chat_id: string, message_id: string, duration_seconds?: number }`
+
+- `duration_seconds`: 86400 (24h), 604800 (7d), or 2592000 (30d). Default 7d.
+
+**Endpoint**: `POST /messages/pin` with `{chatId, messageId, durationSeconds}`.
+
+### unpin_message
+
+Remove a message's pin.
+
+**Method**: `openwa_bridge.whatsapp_account.unpin_message`
+
+**Args**: `{ account_name: string, chat_id: string, message_id: string }`
+
+**Endpoint**: `POST /messages/unpin` with `{chatId, messageId}`.
+
+### star_message
+
+Star or unstar a message.
+
+**Method**: `openwa_bridge.whatsapp_account.star_message`
+
+**Args**: `{ account_name: string, chat_id: string, message_id: string, star?: 0 | 1 }`
+
+**Endpoint**: `POST /messages/star` with `{chatId, messageId, star: boolean}`.
+
+### get_chat_media
+
+Download stored media for a message.
+
+**Method**: `openwa_bridge.whatsapp_account.get_chat_media`
+
+**Args**: `{ account_name: string, chat_id: string, message_id: string }`
+
+**Returns**: `{ status: "ok", media: {...} }`
+
+**Endpoint**: `GET /messages/:chatId/:messageId/media`.
+
+### archive_chat
+
+Archive or unarchive a chat.
+
+**Method**: `openwa_bridge.whatsapp_account.archive_chat`
+
+**Args**: `{ account_name: string, chat_id: string, archive?: 0 | 1 }`
+
+**Endpoint**: `POST /chats/archive` with `{chatId, archive: boolean}`.
+
+### mute_chat
+
+Mute or unmute a chat.
+
+**Method**: `openwa_bridge.whatsapp_account.mute_chat`
+
+**Args**: `{ account_name: string, chat_id: string, mute_until?: number }`
+
+- `mute_until`: epoch-ms until which the chat is muted (0 = indefinite).
+
+**Endpoint**: `POST /chats/mute` with `{chatId, muteUntil}`.
+
+### pin_chat
+
+Pin or unpin a chat in the chat list.
+
+**Method**: `openwa_bridge.whatsapp_account.pin_chat`
+
+**Args**: `{ account_name: string, chat_id: string, pin?: 0 | 1 }`
+
+**Endpoint**: `POST /chats/pin` with `{chatId, pin: boolean}`.
+
+### clear_chat_messages
+
+Delete every message in a chat (clear history).
+
+**Method**: `openwa_bridge.whatsapp_account.clear_chat_messages`
+
+**Args**: `{ account_name: string, chat_id: string }`
+
+**Endpoint**: `DELETE /chats/:chatId/messages`.
+
+### get_session_proxy / set_session_proxy
+
+Read or update the per-session egress proxy configuration.
+
+**Methods**: `openwa_bridge.whatsapp_account.get_session_proxy`, `openwa_bridge.whatsapp_account.set_session_proxy`
+
+**Args (set)**: `{ account_name: string, proxy_url: string }` — set a proxy URL, or empty string to clear it.
+
+**Endpoints**: `GET /proxy` and `PATCH /proxy` (per-session route).
+
+### get_group_membership_requests
+
+List pending membership requests for a group.
+
+**Method**: `openwa_bridge.whatsapp_account.get_group_membership_requests`
+
+**Args**: `{ account_name: string, group_id: string }`
+
+**Endpoint**: `GET /groups/:groupId/membership-requests`.
+
+### approve_group_membership_requests
+
+Approve pending membership requests.
+
+**Method**: `openwa_bridge.whatsapp_account.approve_group_membership_requests`
+
+**Args**: `{ account_name: string, group_id: string, participants?: string }`
+
+- `participants`: comma-separated JIDs to approve; empty = approve all.
+
+**Endpoint**: `POST /groups/:groupId/membership-requests/approve`.
+
+### reject_group_membership_requests
+
+Reject pending membership requests.
+
+**Method**: `openwa_bridge.whatsapp_account.reject_group_membership_requests`
+
+**Args**: `{ account_name: string, group_id: string, participants?: string }`
+
+- `participants`: comma-separated JIDs to reject; empty = reject all.
+
+**Endpoint**: `POST /groups/:groupId/membership-requests/reject`.
+
+### post_status_voice
+
+Post an audio status as a WhatsApp voice note.
+
+**Method**: `openwa_bridge.whatsapp_account.post_status_voice`
+
+**Args**: `{ account_name: string, url?: string, base64?: string, caption?: string }`
+
+Provide either `url` or `base64` (not both).
+
+**Endpoint**: `POST /status/send-voice`.
+
+### create_channel
+
+Create a new WhatsApp channel.
+
+**Method**: `openwa_bridge.whatsapp_account.create_channel`
+
+**Args**: `{ account_name: string, name: string, description?: string }`
+
+**Endpoint**: `POST /channels`.
+
+### mute_channel
+
+Mute or unmute a channel.
+
+**Method**: `openwa_bridge.whatsapp_account.mute_channel`
+
+**Args**: `{ account_name: string, channel_id: string, mute?: 0 | 1 }`
+
+**Endpoint**: `POST /channels/:channelId/mute`.
+
+### demote_channel_admin
+
+Demote a channel admin.
+
+**Method**: `openwa_bridge.whatsapp_account.demote_channel_admin`
+
+**Args**: `{ account_name: string, channel_id: string, user_id: string }`
+
+**Endpoint**: `POST /channels/:channelId/admins/demote`.
+
+### transfer_channel_ownership
+
+Transfer channel ownership to another user.
+
+**Method**: `openwa_bridge.whatsapp_account.transfer_channel_ownership`
+
+**Args**: `{ account_name: string, channel_id: string, new_owner_id: string }`
+
+**Endpoint**: `POST /channels/:channelId/owner/transfer`.

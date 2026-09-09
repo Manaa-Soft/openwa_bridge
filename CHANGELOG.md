@@ -122,6 +122,18 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **WhatsApp Account custom fields** — reduced from 16 to 9 fields (7 moved to global settings)
 - **WhatsApp Templates custom fields** — expanded from 6 to 8 fields
 - **Global settings** — HMAC strict, API timeout, session start timeout, rate limit, CB threshold, CB cooldown, max outbox attempts moved to OpenWA Bridge Settings
+- **OpenWA v0.19-v0.23 API contract support** — bridge follows the current OpenWA `main` (v0.23.4):
+  - `send_catalog_message` deprecated — `POST /messages/send-catalog` was **removed in v0.19** and answers 501 on every engine; the method now returns a clear error pointing to `send_product_message` / `_send_catalog_summary` instead of calling the dead endpoint.
+  - `mark_chat_read` accepts an optional `message_ids` argument — comma-separated list forwarded as the v0.23 `messageIds` array (max 100, Baileys) for per-message read receipts; omitted → the whole chat is marked read as before.
+  - New message endpoints: `vote_poll` (`POST /messages/vote-poll`), `pin_message` (`POST /messages/pin`, validated `durationSeconds` 86400/604800/2592000), `unpin_message` (`POST /messages/unpin`), `star_message` (`POST /messages/star`), `get_chat_media` (`GET /messages/:chatId/:messageId/media`).
+  - New chat/session endpoints: `archive_chat`, `mute_chat`, `pin_chat` (`POST /chats/archive|mute|pin`), `clear_chat_messages` (`DELETE /chats/:chatId/messages`), `get_session_proxy` / `set_session_proxy` (per-session egress proxy `GET`/`PATCH /proxy`).
+  - New group endpoints: `get_group_membership_requests`, `approve_group_membership_requests`, `reject_group_membership_requests` (`GET`/`POST /groups/:groupId/membership-requests[/approve|/reject]`; empty participant list approves/rejects all).
+  - New status endpoint: `post_status_voice` (`POST /status/send-voice`, URL or base64).
+  - New channel endpoints: `create_channel` (`POST /channels`), `mute_channel` (`POST /channels/:channelId/mute`), `demote_channel_admin` (`POST /channels/:channelId/admins/demote`), `transfer_channel_ownership` (`POST /channels/:channelId/owner/transfer`).
+  - The v0.19 uniform `{sessionId}` route change requires no bridge change — relative paths are appended to `/api/sessions/{session_id}` by `openwa_api()`.
+
+### Fixed
+- **Unit test file did not compile** — every `MagicMock(get_password.return_value=...)` used Python 3.8-removed dotted-name keyword args (SyntaxError), so `test_account.py` never parsed and no `pytest` run could include it. Replaced with `mock.get_password.return_value = "..."` assignments across all 55 test mocks; the suite now compiles and lint/typecheck can analyze it.
 
 ## [0.1.0] - 2026-07-01
 
