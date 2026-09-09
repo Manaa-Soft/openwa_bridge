@@ -1458,12 +1458,17 @@ def check_webhook_delivery_failures() -> None:
 
 
 def _known_delivery_failure_keys(session_id: str) -> set[str]:
-    """Return idempotency keys already recorded in the Event Log for a session."""
+    """Return idempotency keys already recorded in the Event Log for a session.
+
+    Bounded to the last 30 days so the payload scan cannot grow unbounded.
+    """
+    since = frappe.utils.now_datetime() - timedelta(days=30)
     keys = frappe.get_all(
         "OpenWA Event Log",
         filters={
             "event_type": "webhook.delivery_failure",
             "session_id": session_id,
+            "creation": (">=", since),
         },
         fields=["payload"],
         limit_page_length=0,

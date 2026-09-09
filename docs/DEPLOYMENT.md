@@ -507,7 +507,7 @@ The bridge tracks the OpenWA `main` branch (tested against **0.23.4**). The only
 
 | Feature | What changed | Bridge behaviour |
 |---|---|---|
-| `POST /messages/send-catalog` (0.19) | **Breaking:** endpoint removed — answers **501** on every engine | `send_catalog_message` no longer calls OpenWA and returns a clear error pointing at `send_product_message` / `_send_catalog_summary` (text+image fallback) |
+| `POST /messages/send-catalog` (0.19) | **Breaking:** endpoint removed — answers **501** on every engine | `send_catalog_message` no longer calls OpenWA and returns a clear error pointing at `send_product_message` (product card, Baileys) / `send_product_to_chat` / `send_catalog_to_chat` (text+image / text-summary fallbacks) |
 | `PUT /api/settings` (0.19) | Removed | Not used by the bridge |
 | `API_MASTER_KEY` (0.19) | Minimum length raised to 32 characters | Enforced by OpenWA itself; `openwa_api_key` must meet it |
 | `POST /chats/read` (0.23) | Optional `messageIds` array for per-message read receipts (Baileys) | `mark_chat_read(..., message_ids="id1,id2")` forwards up to 100 IDs as `messageIds`; omitting it marks the whole chat read |
@@ -515,8 +515,8 @@ The bridge tracks the OpenWA `main` branch (tested against **0.23.4**). The only
 | Messages list (0.23.4) | `GET /sessions/:sessionId/messages` accepts `inlineMedia=false` and an `after` keyset cursor | Read-only; no bridge change required |
 | All session routes (0.19) | Session IDs unified to `{sessionId}` path segments | No bridge change — paths are relative and joined onto `/api/sessions/{session_id}` by `openwa_api()` |
 | New message ops (0.19-0.23) | `vote-poll`, `pin`, `unpin`, `star`, `GET /messages/:chatId/:messageId/media` | New whitelisted methods: `vote_poll`, `pin_message`, `unpin_message`, `star_message`, `get_chat_media` |
-| New chat ops (0.19-0.23) | `POST /chats/archive|mute|pin`, `DELETE /chats/:chatId/messages`, per-session `GET`/`PATCH /proxy` | New whitelisted methods: `archive_chat`, `mute_chat`, `pin_chat`, `clear_chat_messages`, `get_session_proxy`, `set_session_proxy` |
-| Group membership requests (0.21+) | `GET`/`POST /groups/:groupId/membership-requests[/approve|/reject]` | New whitelisted methods: `get_group_membership_requests`, `approve_group_membership_requests`, `reject_group_membership_requests` |
+| New chat ops (0.19-0.23) | `POST /chats/archive`, `POST /chats/mute`, `POST /chats/pin`, `DELETE /chats/:chatId/messages`, per-session `GET`/`PATCH /proxy` | New whitelisted methods: `archive_chat`, `mute_chat`, `pin_chat`, `clear_chat_messages`, `get_session_proxy`, `set_session_proxy` |
+| Group membership requests (0.21+) | `GET /groups/:groupId/membership-requests`, `POST .../membership-requests/approve`, `POST .../membership-requests/reject` | New whitelisted methods: `get_group_membership_requests`, `approve_group_membership_requests`, `reject_group_membership_requests` |
 | Status voice notes (0.21+) | `POST /status/send-voice` | New whitelisted method: `post_status_voice` |
 | Channel management (0.21+) | `POST /channels`, `POST /channels/:channelId/mute`, `POST /channels/:channelId/admins/demote`, `POST /channels/:channelId/owner/transfer` | New whitelisted methods: `create_channel`, `mute_channel`, `demote_channel_admin`, `transfer_channel_ownership` |
 
@@ -561,7 +561,7 @@ If you were on 0.18 and only use the previously documented endpoints, upgrading 
 - [ ] Check `Dynamic Header` on template
 - [ ] Set Print Format (e.g., "Sales Invoice Standard")
 - [ ] Verify PyMuPDF installed: `bench pip install PyMuPDF`
-- [ ] Submit Sales Invoice -> verify image received, then template text
+- [ ] Submit Sales Invoice -> verify ONE image with the rendered caption arrives (image+caption is the only delivery; no separate text bubble)
 
 ### Inbound Messages
 - [ ] Send message from phone -> verify WhatsApp Message doc created

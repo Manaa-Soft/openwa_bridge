@@ -444,6 +444,24 @@ class TestSendDocumentPdf(IntegrationTestCase):
         self.assertEqual(mock_doc.openwa_render_name, "CRM-DEAL-2026-00003")
         mock_frappe.get_installed_apps.assert_not_called()
 
+    def test_denies_send_when_no_read_permission_on_reference(self):
+        """Without read permission on the render doc the send must be rejected."""
+        from openwa_bridge.whatsapp_message import send_document_pdf
+
+        with patch("openwa_bridge.whatsapp_message.frappe") as mock_frappe:
+            mock_frappe.has_permission.return_value = False
+            with self.assertRaises(frappe.PermissionError):
+                send_document_pdf(
+                    to="967777713637",
+                    reference_doctype="Sales Invoice",
+                    reference_name="ACC-SINV-2026-00047",
+                )
+
+        mock_frappe.has_permission.assert_called_once_with(
+            "Sales Invoice", "read", "ACC-SINV-2026-00047"
+        )
+        mock_frappe.get_doc.assert_not_called()
+
 
 class TestPrintFormatValidation(IntegrationTestCase):
     """Test _validate_print_format_for_doctype guard (doctype-agnostic)."""

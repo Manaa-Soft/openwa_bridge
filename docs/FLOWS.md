@@ -671,7 +671,7 @@ Check frappe.has_permission()
         │    └─ PUT /profile/picture { url/base64 } → { status }
         │
         ├─ get_session_stats(account)
-        │    └─ GET /stats/overview → { stats }
+        │    └─ GET /api/sessions/stats/overview → { stats }
         │
         ├─ list_channels(account)
         │    └─ GET /channels → { channels: [...] }
@@ -696,12 +696,6 @@ Check frappe.has_permission()
         │
         ├─ cancel_batch(account, batch_id)
         │    └─ DELETE /messages/batch/:id → { status }
-        │
-        ├─ get_overview_stats(account)
-        │    └─ GET /stats/overview → { stats }
-        │
-        ├─ get_message_stats(account, period)
-        │    └─ GET /stats/messages?period=24h → { stats }
         │
         ├─ get_group(account, group_id)
         │    └─ GET /groups/:groupId → { group }
@@ -764,14 +758,14 @@ Check frappe.has_permission()
         │    └─ GET /catalog/products → 501 Not Implemented
         │
         ├─ get_catalog_product(account, product_id)
-        │    └─ GET /catalog/products/:productId → 501 Not Implemented
+        │    └─ GET /catalog/products/:productId → 501 on wwjs engine
         │
         ├─ send_product_message(account, chat_id, product_id)
-        │    └─ POST /messages/send-product → 501 Not Implemented
+        │    └─ POST /messages/send-product → product card (Baileys only)
         │
         └─ send_catalog_message(account, chat_id, catalog_id)
              └─ (deprecated in v0.19+) → { status: "error" }
-                (POST /messages/send-catalog was removed in OpenWA 0.19; use send_product_message or _send_catalog_summary)
+                (POST /messages/send-catalog was removed in OpenWA 0.19; use send_product_message or send_product_to_chat / send_catalog_to_chat)
 ```
 
 ## Flow 13: Outbox Cleanup (Daily Scheduler)
@@ -866,6 +860,6 @@ channels/
 ```
 
 ### Key Points
-- **`send_catalog_message` is deprecated** since OpenWA 0.19 (endpoint removed, 501) — the method returns a clear error and never calls OpenWA; use `send_product_message` or the `_send_catalog_summary` fallback.
+- **`send_catalog_message` is deprecated** since OpenWA 0.19 (endpoint removed, 501) — the method returns a clear error and never calls OpenWA; use `send_product_message` (product card, Baileys) or `send_product_to_chat` / `send_catalog_to_chat` (text+image / text-summary fallbacks).
 - **`mark_chat_read` accepts `message_ids`** — comma-separated list forwarded as v0.23 `messageIds` (max 100, Baileys) for per-message read receipts.
 - **Session proxy** — `set_session_proxy` with an empty `proxy_url` clears the proxy (`proxyUrl: null`).

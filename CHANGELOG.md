@@ -96,6 +96,13 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **Outbox SQL filtering** — Python filtering moved to SQL with NULL handling
 - **Documentation inaccuracies** — FLOWS.md, ARCHITECTURE.md, DEPLOYMENT.md, CUSTOM_FIELDS.md corrected
 - **`use_json_request_body = True`** — removed (was causing 417 rejection)
+- **`send_document_pdf` missing read-permission check** — the whitelisted method accepted any caller-supplied document and rendered/sent it later as the worker user; it now rejects the send unless the caller can read the reference document (`frappe.has_permission`).
+- **`send_catalog_message` deprecation guidance pointed at a 501 path** — docs now recommend `send_product_message` (product card, Baileys) and `send_product_to_chat` / `send_catalog_to_chat` (text+image / text-summary fallbacks) instead of `_send_catalog_summary`.
+- **Phantom stats methods removed** — `get_overview_stats` / `get_message_stats` were documented and tested but never implemented (the real `/api/stats/*` routes require an ADMIN + unscoped key the bridge does not hold); removed from tests, docs and the wiki. `get_session_stats` (`GET /api/sessions/stats/overview`) remains.
+- **Multi-chunk bulk total inflation** — `send_bulk_openwa` summed counts against the full recipient list for every chunk; each chunk is now sized against its own batch (`_bulk_counts(status, len(chunk))`).
+- **Unbounded delivery-failure dedupe scan** — `_known_delivery_failure_keys` now filters Event Log rows to the last 30 days.
+- **`scheduled_at` string comparison** — `after_insert` normalizes a possible string `scheduled_at` via `frappe.utils.get_datetime` before comparing, avoiding a naive-vs-`datetime` TypeError.
+- **Docs: stats routes, setup example, table pipes, dynamic-header checklist** — Statistics section now documents the real unscoped routes; `setup_openwa_session` example shows the actual `qr_ready`/`ready` contract; unescaped `|` in DEPLOYMENT tables fixed; checklist now expects one image+caption delivery rather than image plus separate text bubble.
 
 ### Changed
 - **OpenWA v0.18 API contract support** — all endpoints upgraded to the v0.18 DTOs:
@@ -123,7 +130,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **WhatsApp Templates custom fields** — expanded from 6 to 8 fields
 - **Global settings** — HMAC strict, API timeout, session start timeout, rate limit, CB threshold, CB cooldown, max outbox attempts moved to OpenWA Bridge Settings
 - **OpenWA v0.19-v0.23 API contract support** — bridge follows the current OpenWA `main` (v0.23.4):
-  - `send_catalog_message` deprecated — `POST /messages/send-catalog` was **removed in v0.19** and answers 501 on every engine; the method now returns a clear error pointing to `send_product_message` / `_send_catalog_summary` instead of calling the dead endpoint.
+  - `send_catalog_message` deprecated — `POST /messages/send-catalog` was **removed in v0.19** and answers 501 on every engine; the method now returns a clear error pointing to `send_product_message` (product card, Baileys) / `send_product_to_chat` / `send_catalog_to_chat` (text+image / text-summary fallbacks) instead of calling the dead endpoint.
   - `mark_chat_read` accepts an optional `message_ids` argument — comma-separated list forwarded as the v0.23 `messageIds` array (max 100, Baileys) for per-message read receipts; omitted → the whole chat is marked read as before.
   - New message endpoints: `vote_poll` (`POST /messages/vote-poll`), `pin_message` (`POST /messages/pin`, validated `durationSeconds` 86400/604800/2592000), `unpin_message` (`POST /messages/unpin`), `star_message` (`POST /messages/star`), `get_chat_media` (`GET /messages/:chatId/:messageId/media`).
   - New chat/session endpoints: `archive_chat`, `mute_chat`, `pin_chat` (`POST /chats/archive|mute|pin`), `clear_chat_messages` (`DELETE /chats/:chatId/messages`), `get_session_proxy` / `set_session_proxy` (per-session egress proxy `GET`/`PATCH /proxy`).

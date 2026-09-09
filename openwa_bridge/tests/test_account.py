@@ -582,56 +582,6 @@ class TestCancelBatch(IntegrationTestCase):
         self.assertIn("/messages/batch/batch-001/cancel", call_args[0][2])
 
 
-class TestGetOverviewStats(IntegrationTestCase):
-    """Test get_overview_stats whitelisted method."""
-
-    @patch("openwa_bridge.whatsapp_account.openwa_api")
-    @patch("openwa_bridge.whatsapp_account.frappe")
-    def test_calls_correct_endpoint(self, mock_frappe, mock_api):
-        """Should GET /stats/overview."""
-        from openwa_bridge.whatsapp_account import get_overview_stats
-
-        mock_frappe.get_doc.return_value = MagicMock(
-            openwa_base_url="http://localhost:2785",
-            openwa_session_id="session-001",
-        )
-        mock_frappe.get_doc.return_value.get_password.return_value = "api-key"
-        mock_frappe.has_permission.return_value = True
-        mock_api.return_value = mock_openwa_api("GET", 200, {})
-
-        result = get_overview_stats(account_name="test-account")
-
-        mock_api.assert_called_once()
-        call_args = mock_api.call_args
-        self.assertEqual(call_args[0][1], "GET")
-        self.assertIn("/stats/overview", call_args[0][2])
-
-
-class TestGetMessageStats(IntegrationTestCase):
-    """Test get_message_stats whitelisted method."""
-
-    @patch("openwa_bridge.whatsapp_account.openwa_api")
-    @patch("openwa_bridge.whatsapp_account.frappe")
-    def test_calls_correct_endpoint_with_period(self, mock_frappe, mock_api):
-        """Should GET /stats/messages with period param."""
-        from openwa_bridge.whatsapp_account import get_message_stats
-
-        mock_frappe.get_doc.return_value = MagicMock(
-            openwa_base_url="http://localhost:2785",
-            openwa_session_id="session-001",
-        )
-        mock_frappe.get_doc.return_value.get_password.return_value = "api-key"
-        mock_frappe.has_permission.return_value = True
-        mock_api.return_value = mock_openwa_api("GET", 200, {})
-
-        result = get_message_stats(account_name="test-account", period="7d")
-
-        mock_api.assert_called_once()
-        call_args = mock_api.call_args
-        self.assertEqual(call_args[0][1], "GET")
-        self.assertIn("/stats/messages?period=7d", call_args[0][2])
-
-
 # ---------------------------------------------------------------------------
 # Group enhancement tests
 # ---------------------------------------------------------------------------

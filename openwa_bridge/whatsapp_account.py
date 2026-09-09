@@ -1031,26 +1031,28 @@ def send_bulk_openwa(account_name: str, contacts: str, message: str) -> dict:
 
     try:
         batch_ids = []
+        chunks = []
         for i in range(0, len(chat_ids), _BULK_CHUNK_SIZE):
             chunk = chat_ids[i:i + _BULK_CHUNK_SIZE]
             response = _submit_bulk_text_batch(account, chunk, message)
             batch_id = response.get("batchId", "")
             if batch_id:
                 batch_ids.append(batch_id)
+                chunks.append(chunk)
 
         if not batch_ids:
             return {"status": "error", "error": "OpenWA did not return a batch ID."}
 
-        # Poll the first (or only) batch until it reaches a terminal state or the
-        # wait budget is exhausted. Multi-chunk sends report per-batch; combine
-        # the last read as a best-effort summary.
+        # Poll each batch until it reaches a terminal state or the wait budget
+        # is exhausted. Multi-chunk sends report per-batch; combine the last
+        # read as a best-effort summary, sized against each chunk.
         combined = {"sent": 0, "failed": 0, "pending": 0, "cancelled": 0, "total": 0}
-        for batch_id in batch_ids:
+        for batch_id, chunk in zip(batch_ids, chunks, strict=False):
             counts = None
             for _ in range(_BULK_MAX_POLLS):
                 status = _poll_batch_status(account, batch_id)
                 state = (status.get("status") or "").lower()
-                counts = _bulk_counts(status, len(chat_ids))
+                counts = _bulk_counts(status, len(chunk))
                 if state in ("completed", "failed", "cancelled"):
                     break
                 time.sleep(_BULK_POLL_INTERVAL)
@@ -2547,8 +2549,9 @@ def send_catalog_message(account_name: str, chat_id: str, catalog_id: str) -> di
     .. deprecated::
        ``POST /messages/send-catalog`` was removed in OpenWA 0.19 (returns 501 on
        every engine).  The method now always returns a clear error.  Use
-       ``send_product_message`` or ``_send_catalog_summary`` (which falls back to
-       richly formatted text+image) instead.
+       ``send_product_message`` (Baileys only; product card) or the catalog
+       helpers ``openwa_bridge.catalog.send_product_to_chat`` /
+       ``send_catalog_to_chat`` (text+image / text-summary fallbacks) instead.
     """
     if not frappe.has_permission("WhatsApp Account", "write", account_name):
         frappe.throw("Insufficient permissions.", frappe.PermissionError)
@@ -2556,9 +2559,9 @@ def send_catalog_message(account_name: str, chat_id: str, catalog_id: str) -> di
         "status": "error",
         "error": (
             "POST /messages/send-catalog was removed in OpenWA 0.19 and returns "
-            "501 on every engine.  Use send_product_message() or "
-            "_send_catalog_summary() (which sends richly formatted text+image) "
-            "instead."
+            "501 on every engine.  Use send_product_message() (product card) or "
+            "openwa_bridge.catalog.send_product_to_chat / send_catalog_to_chat "
+            "(text+image / text-summary fallbacks) instead."
         ),
     }
 

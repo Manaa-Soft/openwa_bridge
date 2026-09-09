@@ -547,7 +547,7 @@ All bridge endpoints updated to the OpenWA 0.18.0 API contract:
 
 Bridge follows the OpenWA `main` branch (verified against **0.23.4**). Only one hard break, otherwise additive:
 
-- **`send_catalog_message` deprecated** — `POST /messages/send-catalog` removed in v0.19 (501 on every engine). The method now returns a clear error instead of calling OpenWA; `send_product_message` and `_send_catalog_summary` (text+image fallback) remain the supported paths.
+- **`send_catalog_message` deprecated** — `POST /messages/send-catalog` removed in v0.19 (501 on every engine). The method now returns a clear error instead of calling OpenWA; `send_product_message` (product card, Baileys) and the catalog fallbacks `send_product_to_chat` / `send_catalog_to_chat` (text+image / text-summary) remain the supported paths.
 - **`mark_chat_read` v0.23 `messageIds`** — optional `message_ids` argument (comma-separated, ≤100) forwarded as `messageIds` for per-message read receipts; omitted → whole chat marked read.
 - **19 new whitelisted methods** (74 → 93):
   - Messages: `vote_poll`, `pin_message` (validated `durationSeconds`), `unpin_message`, `star_message`, `get_chat_media`.
@@ -589,8 +589,6 @@ Total webhook events: **17** (up from 10)
 - [x] `unsubscribe_channel()` — unsubscribe from a channel
 - [x] `get_message_reactions()` — get reactions for a message
 - [x] `cancel_batch()` — cancel a pending batch send
-- [x] `get_overview_stats()` — session overview statistics
-- [x] `get_message_stats()` — message statistics for a time period
 - [x] `get_channel_messages()` — list channel messages
 
 ### Additional Whitelisted Methods (23 added)
@@ -613,11 +611,11 @@ Total webhook events: **17** (up from 10)
 - [x] `get_chat_labels()` — get labels for a chat
 - [x] `get_batch_status()` — get batch send status
 - [x] `test_webhook()` — test webhook delivery
-- [x] `get_catalog()` — get catalog (stub, returns 501)
-- [x] `get_catalog_products()` — get catalog products (stub, returns 501)
-- [x] `get_catalog_product()` — get catalog product (stub, returns 501)
-- [x] `send_product_message()` — send product message (stub, returns 501)
-- [x] `send_catalog_message()` — deprecated (OpenWA 0.19+ removed the endpoint; method returns a clear error, use `send_product_message` / `_send_catalog_summary`)
+- [x] `get_catalog()` — get catalog (answers 501 on the whatsapp-web.js engine)
+- [x] `get_catalog_products()` — get catalog products (answers 501 on the whatsapp-web.js engine)
+- [x] `get_catalog_product()` — get catalog product (answers 501 on the whatsapp-web.js engine)
+- [x] `send_product_message()` — send product message (Baileys engine only)
+- [x] `send_catalog_message()` — deprecated (OpenWA 0.19+ removed the endpoint; method returns a clear error, use `send_product_message` / `send_product_to_chat` / `send_catalog_to_chat`)
 
 Total whitelisted methods: **93** (was 74 at the v0.18 commit; +19 v0.19-v0.23 additions)
 

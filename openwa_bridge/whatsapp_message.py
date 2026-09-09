@@ -380,7 +380,10 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
 
         # Scheduled messages are held in Pending until scheduled_at — do not
         # enqueue them now; the scheduler safety-net picks them up when due.
-        if outbox.scheduled_at and outbox.scheduled_at > datetime.now():
+        scheduled_at = outbox.scheduled_at
+        if isinstance(scheduled_at, str):
+            scheduled_at = frappe.utils.get_datetime(scheduled_at)
+        if scheduled_at and scheduled_at > datetime.now():
             return
 
         try:
@@ -1080,6 +1083,14 @@ def send_document_pdf(
     Raises:
         frappe.ValidationError: If the document cannot be created.
     """
+    if not frappe.has_permission(reference_doctype, "read", reference_name):
+        frappe.throw(
+            frappe._("Not permitted to read {0} {1}.").format(
+                reference_doctype, reference_name
+            ),
+            frappe.PermissionError,
+        )
+
     doc = frappe.get_doc({
         "doctype": "WhatsApp Message",
         "to": to,

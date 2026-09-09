@@ -493,20 +493,28 @@ POST /api/sessions/:sessionId/messages/batch/{batchId}/cancel
 
 ## Statistics
 
-### GET /sessions/stats/overview
+### GET /stats/overview
 
-Get session overview statistics.
+Get cross-session aggregate statistics.
+
+> Requires an OpenWA **ADMIN** role with an **unscoped** API key. The bridge
+> only holds session-scoped keys, so this endpoint is NOT exposed as a
+> whitelisted method.
 
 ```
-GET /api/sessions/:sessionId/stats/overview
+GET /api/stats/overview
 ```
 
 ### GET /stats/messages
 
-Get message statistics for a time period.
+Get message statistics with a time series for a period.
+
+> Same AUTH requirement as `/stats/overview` — NOT exposed as a whitelisted
+> method. Per-session message statistics are covered by `get_session_stats`
+> below.
 
 ```
-GET /api/sessions/:sessionId/stats/messages?period=24h
+GET /api/stats/messages?period=24h
 ```
 
 **Query params**: `period` — `1h`, `24h`, `7d`, `30d`
@@ -704,11 +712,17 @@ One-click setup: create session in OpenWA, start it, fetch QR code.
 
 **Returns**:
 ```json
-{
-  "status": "ok",
-  "method": "fallback",
-  "result": { "messageId": "true_967777715787@c.us_3EB0..." }
-}
+{ "status": "qr_ready", "qr_code": "data:image/png;base64,...", "session_id": "uuid" }
+```
+
+When the session is already connected:
+```json
+{ "status": "ready", "session_id": "uuid", "phone": "967777700000", "push_name": "Name" }
+```
+
+On failure:
+```json
+{ "status": "error", "error": "...", "session_id": "uuid" }
 ```
 
 ---
@@ -1438,32 +1452,6 @@ Cancel a pending batch send operation.
 
 ---
 
-### get_overview_stats
-
-Get session overview statistics.
-
-**Method**: `openwa_bridge.whatsapp_account.get_overview_stats`
-
-**Args**: `{ account_name: string }`
-
-**Returns**: `{ stats: {...} }`
-
----
-
-### get_message_stats
-
-Get message statistics for a time period.
-
-**Method**: `openwa_bridge.whatsapp_account.get_message_stats`
-
-**Args**: `{ account_name: string, period?: string }`
-
-- `period`: `1h`, `24h` (default), `7d`, `30d`
-
-**Returns**: `{ stats: {...} }`
-
----
-
 ### get_group
 
 Get group metadata.
@@ -1846,7 +1834,7 @@ Send a catalog listing to a chat.
 }
 ```
 
-`POST /messages/send-catalog` was **removed in OpenWA 0.19** (answers 501 on every engine). The bridge method no longer calls OpenWA and always returns this error. Use `openwa_bridge.whatsapp_account.send_product_message` or the catalog helpers (`send_product_to_chat`, `send_catalog_to_chat`) which render a text+image fallback.
+`POST /messages/send-catalog` was **removed in OpenWA 0.19** (answers 501 on every engine). The bridge method no longer calls OpenWA and always returns this error. Use `openwa_bridge.whatsapp_account.send_product_message` (product card, Baileys engine) or the catalog helpers (`send_product_to_chat`, `send_catalog_to_chat`) which render text+image / text-summary fallbacks.
 
 ---
 
