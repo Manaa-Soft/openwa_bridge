@@ -351,3 +351,28 @@ class OverrideWhatsAppNotification(WhatsAppNotification):
                 pass
 
         return None
+
+
+@frappe.whitelist()
+def send_notification_now(
+    notification: str,
+    reference_doctype: str,
+    reference_name: str,
+    phone_no: str | None = None,
+) -> None:
+    """Send a WhatsApp Notification immediately from the Send-to-WhatsApp dialog.
+
+    Triggers the notification's ``send_template_message`` against the given
+    document, honouring any configured Condition. The notification's
+    ``openwa_send_type`` decides the path:
+
+    - ``Template`` → real OpenWA send-template with variables mapped from the
+      notification's Fields child table.
+    - ``Jinja``    → ``code`` rendered as Jinja and sent as free text.
+
+    The resulting WhatsApp Message flows through the normal chain (CRM
+    relink, render-doc capture, dynamic header image, outbox).
+    """
+    doc = frappe.get_doc(reference_doctype, reference_name)
+    notif = frappe.get_doc("WhatsApp Notification", notification)
+    notif.send_template_message(doc, phone_no=phone_no, ignore_condition=False)

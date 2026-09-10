@@ -50,10 +50,13 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **Uninstall cleanup** — `before_uninstall()` deletes OpenWA sessions and webhooks
 
 ### Fixed
+- **PDF messages invisible in CRM thread** — a PDF sent from a Sales Invoice (or any non-CRM doctype) was linked only to that document, so it never appeared in the CRM Deal/Lead/Contact thread. `send_document_pdf` now links the message to the CRM record matching the recipient number (via `crm.integrations.api.get_contact_lead_or_deal_from_number`) while keeping the rendered document in new `openwa_render_doctype`/`openwa_render_name` fields; `_send_via_openwa()` renders the PDF from those (falling back to the reference for existing messages).
+- **Reference fields clobbered by CRM validate hook** — `send_document_pdf` (and template/dialog sends) had `reference_doctype`/`reference_name` silently overwritten (or nulled) by the CRM app's `doc_events` validate hook, which resolves the recipient's number to a Contact/Lead/Deal. `OverrideWhatsAppMessage` now snapshots the reference in `before_validate()` and restores it in `before_save()`. Incoming messages (no explicit reference) are untouched, so CRM auto-linking still works.
 - **Messages marked Sent when session disconnected** — Added pre-send session check in outbox processor that verifies `status=ready` AND `phone` field is set before attempting to send. Prevents sending to a disconnected engine that accepts messages (201+messageId) but can never deliver them.
 - **500 HTTP false-positive marked messages as Sent** — Removed incorrect assumption that HTTP 500 from OpenWA means "engine delivered before error". OpenWA's `persistSentState` always returns 201+messageId on success (swallows DB errors); `failSend` always throws 500 with NO messageId. ANY 500 now triggers retry with backoff.
 - **Ack status downgrade** — `message.ack` handler now only allows forward transitions (pending → Sent → Delivered → Read), never downgrades. Late "sent" acks after "delivered" are silently skipped. Matches OpenWA's own `ackStatusTransitionFrom` guard.
 - **PLAYED ack not normalized** — Baileys ack 5 (PLAYED, e.g. voice note auto-read) now maps to `Read` instead of creating an invalid `Played` status.
+- **Duplicate text on dynamic header template sends** — a template with `openwa_dynamic_header` sent the approved text twice: once as the image caption and once as a separate template bubble. The image+caption (header/body/footer, placeholders rendered) is now the **only** delivery and the template bubble is skipped. If the image fails, the approved template text is sent as a fallback.
 - **Duplicate message bug** — notification flow with dynamic header sent duplicate messages (user confirmed resolved)
 - **Atomic image+caption** — dynamic header image failures now raise exception for outbox retry instead of falling through to text send (which created duplicates)
 - **Templates with no variables always threw** — templates without `{{...}}` placeholders now send without requiring variables
@@ -71,7 +74,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **Global settings on wrong DocType** — Moved 7 settings (HMAC strict, API timeout, session start timeout, rate limit, CB threshold, CB cooldown, max outbox attempts) from per-account WhatsApp Account to global OpenWA Bridge Settings.
 - **UnboundLocalError in outbox processor** — `account` referenced before definition at `tasks.py:179`, causing every outbox attempt to crash. Messages stuck as Pending forever.
 - **Template sent as raw Meta dict** — `_send_openwa_template()` stored the entire Meta payload dict as `msg.message` instead of rendered text.
-- **Dynamic header skipped template** — When image sent successfully, outbox returned early, skipping the template send entirely.
+- **Dynamic header skipped template** — when the dynamic header image is sent successfully, the image+caption is the whole delivery and the separate template text is intentionally skipped so the recipient never receives the text twice; if the image fails, the approved template text is sent as a fallback.
 - **Jinja sent as raw template** — `_send_openwa_text()` set `template` on the doc, causing `send-template` path with empty vars instead of `send-text`.
 - **`requests` not defined** — 7 bare `requests.post()` calls missed during connection pooling migration.
 - **Template vs text send guard** — Changed `_send_via_openwa` guard from `if self.template` to `if self.use_template and self.template` so Jinja messages use `send-text`.
@@ -93,8 +96,28 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **Outbox SQL filtering** — Python filtering moved to SQL with NULL handling
 - **Documentation inaccuracies** — FLOWS.md, ARCHITECTURE.md, DEPLOYMENT.md, CUSTOM_FIELDS.md corrected
 - **`use_json_request_body = True`** — removed (was causing 417 rejection)
+- **`send_document_pdf` missing read-permission check** — the whitelisted method accepted any caller-supplied document and rendered/sent it later as the worker user; it now rejects the send unless the caller can read the reference document (`frappe.has_permission`).
+- **`send_catalog_message` deprecation guidance pointed at a 501 path** — docs now recommend `send_product_message` (product card, Baileys) and `send_product_to_chat` / `send_catalog_to_chat` (text+image / text-summary fallbacks) instead of `_send_catalog_summary`.
+- **Phantom stats methods removed** — `get_overview_stats` / `get_message_stats` were documented and tested but never implemented (the real `/api/stats/*` routes require an ADMIN + unscoped key the bridge does not hold); removed from tests, docs and the wiki. `get_session_stats` (`GET /api/sessions/stats/overview`) remains.
+- **Multi-chunk bulk total inflation** — `send_bulk_openwa` summed counts against the full recipient list for every chunk; each chunk is now sized against its own batch (`_bulk_counts(status, len(chunk))`).
+- **Unbounded delivery-failure dedupe scan** — `_known_delivery_failure_keys` now filters Event Log rows to the last 30 days.
+- **`scheduled_at` string comparison** — `after_insert` normalizes a possible string `scheduled_at` via `frappe.utils.get_datetime` before comparing, avoiding a naive-vs-`datetime` TypeError.
+- **Docs: stats routes, setup example, table pipes, dynamic-header checklist** — Statistics section now documents the real unscoped routes; `setup_openwa_session` example shows the actual `qr_ready`/`ready` contract; unescaped `|` in DEPLOYMENT tables fixed; checklist now expects one image+caption delivery rather than image plus separate text bubble.
 
 ### Changed
+- **OpenWA v0.18 API contract support** — all endpoints upgraded to the v0.18 DTOs:
+  - `send_bulk_openwa` / `send_bulk_with_progress` now submit per-message items (`chatId` + `type` + `content`) in chunks of ≤100 (OpenWA's `send-bulk` cap) to `POST /messages/send-bulk`. OpenWA drains the batch asynchronously and returns `202` + `batchId`; the bridge polls `GET /messages/batch/:batchId` (≤30 × 2s) and reports `sent`/`failed`/`pending`/`cancelled`/`total` counts.
+  - `forward_message` now sends `fromChatId` + `toChatId` + `messageId` (v0.18 DTO). The source chat is resolved from the stored WhatsApp Message via the new `_resolve_message_chat_id()` helper.
+  - `delete_message` now uses `POST /messages/delete` with `{chatId, messageId, forEveryone}` (replaces `DELETE /messages/:id?revoke=`). A `503` from OpenWA (outcome uncertain — "may or may not have been applied") is treated as applied rather than an error so callers don't retry and duplicate.
+  - `mark_chat_read` / `mark_chat_unread` now POST to `/chats/read` / `/chats/unread` with `{chatId}` in the JSON body.
+  - `get_chat_history` now reads `GET /messages/:chatId/history`.
+  - `add_group_participants` / `remove_group_participants` now use `POST` / `DELETE /groups/:groupId/participants` (replaces `/participants/add` and `/participants/remove`).
+  - `get_session_stats` now reads `/api/sessions/stats/overview` via the raw call path.
+  - `get_contact_statuses` now unwraps the `{statuses: [...]}` envelope returned by v0.18.
+  - `list_profile_pictures` now accepts an optional `contacts` argument (comma-separated JIDs, capped at 50) and reads `{pictures: [...]}`.
+- **`check_whatsapp_number` v0.18 response** — OpenWA v0.18 returns `{exists, whatsappId}` instead of `isRegistered`; the bridge now reads `exists`/`whatsappId` and returns `jid` = `whatsappId`.
+- **`replay_webhooks` v0.18 field mapping** — reads `createdAt` and `waMessageId` (v0.18 webhook field names), lowercases `direction`, skips anything that is not `incoming`, and normalises epoch-seconds vs millisecond timestamps.
+- **Send-as-PDF dialog preview removed** — the live iframe preview pane and its status line were dropped from the "Send To Whatsapp" dialog. The dialog still verifies the document renders with the chosen Print Format/Language/Letter Head/Print Settings (`get_html_and_style`) before enabling Send; render failures surface as a message instead of inline status text. Errors from cross-doctype print formats are unchanged.
 - **Settings moved to WhatsApp Account** — 7 settings (HMAC strict, API timeout, session start timeout, rate limit, CB threshold, CB cooldown, max outbox attempts) moved from OpenWA Bridge Settings to per-account WhatsApp Account. Each account now has independent config.
 - **WhatsApp Account custom fields** — expanded from 9 to 16 fields (7 new settings in collapsible "Settings" section)
 - **OpenWA Bridge Settings** — reduced from 10 to 3 fields (only idempotency TTL, outbox batch size, media size limit remain global)
@@ -106,6 +129,18 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **WhatsApp Account custom fields** — reduced from 16 to 9 fields (7 moved to global settings)
 - **WhatsApp Templates custom fields** — expanded from 6 to 8 fields
 - **Global settings** — HMAC strict, API timeout, session start timeout, rate limit, CB threshold, CB cooldown, max outbox attempts moved to OpenWA Bridge Settings
+- **OpenWA v0.19-v0.23 API contract support** — bridge follows the current OpenWA `main` (v0.23.4):
+  - `send_catalog_message` deprecated — `POST /messages/send-catalog` was **removed in v0.19** and answers 501 on every engine; the method now returns a clear error pointing to `send_product_message` (product card, Baileys) / `send_product_to_chat` / `send_catalog_to_chat` (text+image / text-summary fallbacks) instead of calling the dead endpoint.
+  - `mark_chat_read` accepts an optional `message_ids` argument — comma-separated list forwarded as the v0.23 `messageIds` array (max 100, Baileys) for per-message read receipts; omitted → the whole chat is marked read as before.
+  - New message endpoints: `vote_poll` (`POST /messages/vote-poll`), `pin_message` (`POST /messages/pin`, validated `durationSeconds` 86400/604800/2592000), `unpin_message` (`POST /messages/unpin`), `star_message` (`POST /messages/star`), `get_chat_media` (`GET /messages/:chatId/:messageId/media`).
+  - New chat/session endpoints: `archive_chat`, `mute_chat`, `pin_chat` (`POST /chats/archive|mute|pin`), `clear_chat_messages` (`DELETE /chats/:chatId/messages`), `get_session_proxy` / `set_session_proxy` (per-session egress proxy `GET`/`PATCH /proxy`).
+  - New group endpoints: `get_group_membership_requests`, `approve_group_membership_requests`, `reject_group_membership_requests` (`GET`/`POST /groups/:groupId/membership-requests[/approve|/reject]`; empty participant list approves/rejects all).
+  - New status endpoint: `post_status_voice` (`POST /status/send-voice`, URL or base64).
+  - New channel endpoints: `create_channel` (`POST /channels`), `mute_channel` (`POST /channels/:channelId/mute`), `demote_channel_admin` (`POST /channels/:channelId/admins/demote`), `transfer_channel_ownership` (`POST /channels/:channelId/owner/transfer`).
+  - The v0.19 uniform `{sessionId}` route change requires no bridge change — relative paths are appended to `/api/sessions/{session_id}` by `openwa_api()`.
+
+### Fixed
+- **Unit test file did not compile** — every `MagicMock(get_password.return_value=...)` used Python 3.8-removed dotted-name keyword args (SyntaxError), so `test_account.py` never parsed and no `pytest` run could include it. Replaced with `mock.get_password.return_value = "..."` assignments across all 55 test mocks; the suite now compiles and lint/typecheck can analyze it.
 
 ## [0.1.0] - 2026-07-01
 

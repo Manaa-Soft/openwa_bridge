@@ -26,9 +26,12 @@ class TestBulkMessaging:
     @patch("openwa_bridge.whatsapp_account.openwa_api")
     def test_bulk_send_success(self, mock_api, mock_get):
         mock_get.return_value = _mock_account()
+        # v0.18: POST /messages/send-bulk returns 202 {batchId, statusUrl}; the
+        # batch status is then read via GET /messages/batch/:batchId.
         mock_api.return_value = {
-            "sent": ["12345@c.us", "67890@c.us"],
-            "failed": [],
+            "batchId": "batch-1",
+            "status": "completed",
+            "progress": {"total": 2, "sent": 2, "failed": 0, "pending": 0},
         }
 
         from openwa_bridge.whatsapp_account import send_bulk_openwa
@@ -38,13 +41,24 @@ class TestBulkMessaging:
         assert result["sent"] == 2
         assert result["failed"] == 0
 
+        # Verify the v0.18 request body shape
+        post_call = mock_api.call_args_list[0]
+        assert post_call.args[1] == "POST"
+        assert post_call.args[2] == "/messages/send-bulk"
+        body = post_call.kwargs["json_data"]
+        assert body["messages"] == [
+            {"chatId": "12345@c.us", "type": "text", "content": {"text": "Hello everyone"}},
+            {"chatId": "67890@c.us", "type": "text", "content": {"text": "Hello everyone"}},
+        ]
+
     @patch("openwa_bridge.whatsapp_account._get_account")
     @patch("openwa_bridge.whatsapp_account.openwa_api")
     def test_bulk_send_partial_failure(self, mock_api, mock_get):
         mock_get.return_value = _mock_account()
         mock_api.return_value = {
-            "sent": ["12345@c.us"],
-            "failed": ["99999@c.us"],
+            "batchId": "batch-1",
+            "status": "completed",
+            "progress": {"total": 2, "sent": 1, "failed": 1, "pending": 0},
         }
 
         from openwa_bridge.whatsapp_account import send_bulk_openwa
@@ -76,10 +90,12 @@ class TestBulkMessaging:
 
 
 class TestForwardMessage:
+    @patch("openwa_bridge.whatsapp_account._resolve_message_chat_id")
     @patch("openwa_bridge.whatsapp_account._get_account")
     @patch("openwa_bridge.whatsapp_account.openwa_api")
-    def test_forward_success(self, mock_api, mock_get):
+    def test_forward_success(self, mock_api, mock_get, mock_resolve):
         mock_get.return_value = _mock_account()
+        mock_resolve.return_value = "12345@c.us"
         mock_api.return_value = {"messageId": "new-msg-id"}
 
         from openwa_bridge.whatsapp_account import forward_message
@@ -88,13 +104,19 @@ class TestForwardMessage:
         assert result["status"] == "ok"
         mock_api.assert_called_once_with(
             mock_get.return_value, "POST", "/messages/forward",
-            json_data={"messageId": "original-msg-id", "chatId": "67890@c.us"},
+            json_data={
+                "fromChatId": "12345@c.us",
+                "toChatId": "67890@c.us",
+                "messageId": "original-msg-id",
+            },
         )
 
+    @patch("openwa_bridge.whatsapp_account._resolve_message_chat_id")
     @patch("openwa_bridge.whatsapp_account._get_account")
     @patch("openwa_bridge.whatsapp_account.openwa_api")
-    def test_forward_api_error(self, mock_api, mock_get):
+    def test_forward_api_error(self, mock_api, mock_get, mock_resolve):
         mock_get.return_value = _mock_account()
+        mock_resolve.return_value = "12345@c.us"
         mock_api.side_effect = Exception("Message not found")
 
         from openwa_bridge.whatsapp_account import forward_message
@@ -102,12 +124,25 @@ class TestForwardMessage:
 
         assert result["status"] == "error"
 
+    @patch("openwa_bridge.whatsapp_account._resolve_message_chat_id")
+    @patch("openwa_bridge.whatsapp_account._get_account")
+    def test_forward_unknown_source_chat(self, mock_get, mock_resolve):
+        mock_get.return_value = _mock_account()
+        mock_resolve.return_value = None
+
+        from openwa_bridge.whatsapp_account import forward_message
+        result = forward_message("Test Account", "orphan-id", "67890@c.us")
+
+        assert result["status"] == "error"
+
 
 class TestDeleteMessage:
+    @patch("openwa_bridge.whatsapp_account._resolve_message_chat_id")
     @patch("openwa_bridge.whatsapp_account._get_account")
     @patch("openwa_bridge.whatsapp_account.openwa_api")
-    def test_delete_self(self, mock_api, mock_get):
+    def test_delete_self(self, mock_api, mock_get, mock_resolve):
         mock_get.return_value = _mock_account()
+        mock_resolve.return_value = "12345@c.us"
         mock_api.return_value = {}
 
         from openwa_bridge.whatsapp_account import delete_message
@@ -116,13 +151,20 @@ class TestDeleteMessage:
         assert result["status"] == "deleted"
         assert result["message_id"] == "msg-to-delete"
         mock_api.assert_called_once_with(
-            mock_get.return_value, "DELETE", "/messages/msg-to-delete"
+            mock_get.return_value, "POST", "/messages/delete",
+            json_data={
+                "chatId": "12345@c.us",
+                "messageId": "msg-to-delete",
+                "forEveryone": False,
+            },
         )
 
+    @patch("openwa_bridge.whatsapp_account._resolve_message_chat_id")
     @patch("openwa_bridge.whatsapp_account._get_account")
     @patch("openwa_bridge.whatsapp_account.openwa_api")
-    def test_revoke_message(self, mock_api, mock_get):
+    def test_revoke_message(self, mock_api, mock_get, mock_resolve):
         mock_get.return_value = _mock_account()
+        mock_resolve.return_value = "12345@c.us"
         mock_api.return_value = {}
 
         from openwa_bridge.whatsapp_account import delete_message
@@ -130,16 +172,36 @@ class TestDeleteMessage:
 
         assert result["status"] == "deleted"
         mock_api.assert_called_once_with(
-            mock_get.return_value, "DELETE", "/messages/msg-to-revoke?revoke=true"
+            mock_get.return_value, "POST", "/messages/delete",
+            json_data={
+                "chatId": "12345@c.us",
+                "messageId": "msg-to-revoke",
+                "forEveryone": True,
+            },
         )
 
+    @patch("openwa_bridge.whatsapp_account._resolve_message_chat_id")
     @patch("openwa_bridge.whatsapp_account._get_account")
     @patch("openwa_bridge.whatsapp_account.openwa_api")
-    def test_delete_api_error(self, mock_api, mock_get):
+    def test_delete_api_error(self, mock_api, mock_get, mock_resolve):
         mock_get.return_value = _mock_account()
+        mock_resolve.return_value = "12345@c.us"
         mock_api.side_effect = Exception("Not found")
 
         from openwa_bridge.whatsapp_account import delete_message
         result = delete_message("Test Account", "msg-404")
 
         assert result["status"] == "error"
+
+    @patch("openwa_bridge.whatsapp_account._resolve_message_chat_id")
+    @patch("openwa_bridge.whatsapp_account._get_account")
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    def test_delete_unknown_chat(self, mock_api, mock_get, mock_resolve):
+        mock_get.return_value = _mock_account()
+        mock_resolve.return_value = None
+
+        from openwa_bridge.whatsapp_account import delete_message
+        result = delete_message("Test Account", "orphan-msg")
+
+        assert result["status"] == "error"
+        mock_api.assert_not_called()

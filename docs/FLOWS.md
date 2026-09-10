@@ -115,10 +115,14 @@ OverrideWhatsAppNotification.send_template_message(doc)
         │    │
         │    ▼
         │  _send_outbox_message():
-        │    ├─ _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
-        │    │    ├─ Template has openwa_dynamic_header? → render doc as PNG → send image
-        │    │    └─ Returns True if sent (done, no separate text send)
-        │    └─ If no image: _send_via_openwa()
+        │    ├─ Dynamic header enabled on template?
+        │    │    ├─ caption = rendered header + body + footer (placeholders filled)
+        │    │    │   (free text / Jinja: caption = composed message)
+        │    │    ├─ _send_dynamic_header_for_outbox(msg, account, caption=caption)
+        │    │    │    ├─ Image sent? → done — image+caption is the ONLY delivery,
+        │    │    │    │    no separate template/text bubble (no duplicate text)
+        │    │    │    └─ Image failed and not already delivered? → fall through
+        │    └─ _send_via_openwa()
         │         ├─ use_template=1 AND template set? → POST /messages/send-template
         │         └─ Otherwise → POST /messages/send-text
         │
@@ -137,10 +141,12 @@ OverrideWhatsAppNotification.send_template_message(doc)
         │    │
         │    ▼
         │  _send_outbox_message():
-        │    ├─ _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
-        │    │    ├─ Template has openwa_dynamic_header? → render doc as PNG → send image with caption
-        │    │    └─ Returns True if sent (done)
-        │    └─ If no image: _send_via_openwa()
+        │    ├─ Dynamic header enabled on template?
+        │    │    ├─ caption = msg.message (rendered Jinja text)
+        │    │    ├─ _send_dynamic_header_for_outbox(msg, account, caption=caption)
+        │    │    │    ├─ Image sent? → done — image+caption is the ONLY delivery
+        │    │    │    └─ Image failed and not already delivered? → fall through
+        │    └─ _send_via_openwa()
         │         └─ use_template NOT set → content_type == "text" → POST /messages/send-text
         │              (sends rendered Jinja text as plain text)
         │
@@ -485,11 +491,12 @@ process_outbox_entry(outbox_name)
   │
   10. _send_outbox_message(msg, account, outbox)
         │
-        ├─ _send_dynamic_header_for_outbox(msg, account, caption=msg.message)
-        │    ├─ msg.template set AND template has openwa_dynamic_header?
-        │    │    → render doc as PNG → send image with rendered text as caption
-        │    ├─ Returns True → done (no separate text send)
-        │    └─ Returns False → continue to text/template send
+        ├─ msg.template set AND template has openwa_dynamic_header?
+        │    ├─ caption = rendered header + body + footer (template send)
+        │    │            or msg.message (free text / Jinja)
+        │    ├─ _send_dynamic_header_for_outbox(msg, account, caption=caption)
+        │    │    ├─ Image sent? → done — image+caption is the ONLY delivery
+        │    │    └─ Image failed + not already delivered? → continue below
         │
         └─ _send_via_openwa()
              ├─ use_template=1 AND template set? → send-template with vars
@@ -558,7 +565,7 @@ Check frappe.has_permission()
   └─ Has permission → route by method:
        │
        ├─ check_whatsapp_number(account, number)
-       │    └─ GET /contacts/check/:number → { isRegistered: true/false }
+       │    └─ GET /contacts/check/:number → { exists, whatsappId }
        │
        ├─ block_contact(account, jid)
        │    └─ POST /contacts/:jid/block → { status: "blocked" }
@@ -570,15 +577,17 @@ Check frappe.has_permission()
        │    └─ POST /chats/typing { chatId, state } → { status: "ok" }
        │
        ├─ send_bulk_openwa(account, contacts, message)
-       │    ├─ Parse comma-separated contacts → format to JIDs
-       │    └─ POST /messages/send-bulk { chatIds, text } → { sent, failed }
+       │    ├─ Parse comma-separated contacts → format to JIDs (chunk ≤100)
+       │    └─ POST /messages/send-bulk { messages[] } → 202 { batchId } → poll GET /messages/batch/:id → { sent, failed, pending }
        │
        ├─ forward_message(account, message_id, chat_id)
-       │    └─ POST /messages/forward { messageId, chatId }
+       │    ├─ Resolve source chat via _resolve_message_chat_id()
+       │    └─ POST /messages/forward { fromChatId, toChatId, messageId }
        │
        ├─ delete_message(account, message_id, revoke)
-       │    ├─ revoke=0 → DELETE /messages/:id
-       │    └─ revoke=1 → DELETE /messages/:id?revoke=true
+       │    ├─ Resolve chat via _resolve_message_chat_id()
+       │    └─ POST /messages/delete { chatId, messageId, forEveryone }
+       │       (503 → treated as applied, uncertain: true)
        │
        ├─ request_pairing_code(account, phone)
        │    └─ POST /pairing-code { phoneNumber } → { pairingCode: "ABCD1234" }
@@ -604,14 +613,14 @@ Check frappe.has_permission()
         ├─ reject_call(account, call_id)
         │    └─ POST /calls/:callId/reject → { status: "ok" }
         │
-        ├─ mark_chat_read(account, chat_id)
-        │    └─ POST /chats/:chatId/read → { status: "ok" }
-        │
-        ├─ mark_chat_unread(account, chat_id)
-        │    └─ POST /chats/:chatId/unread → { status: "ok" }
-        │
-        ├─ get_chat_history(account, chat_id, limit)
-        │    └─ GET /chats/:chatId/messages?limit=N → { messages: [...] }
+       ├─ mark_chat_read(account, chat_id, [+ message_ids="id1,id2"])
+       │    └─ POST /chats/read { chatId, [+ messageIds: string[] ] } → { status: "ok" }
+       │
+       ├─ mark_chat_unread(account, chat_id)
+       │    └─ POST /chats/unread { chatId } → { status: "ok" }
+       │
+       ├─ get_chat_history(account, chat_id, limit)
+       │    └─ GET /messages/:chatId/history?limit=N → { messages: [...] }
         │
         ├─ search_messages(account, query, limit)
         │    └─ GET /messages/search?q=query&limit=N → { messages: [...] }
@@ -649,8 +658,8 @@ Check frappe.has_permission()
         ├─ remove_label_from_chat(account, label_id, chat_id)
         │    └─ DELETE /labels/:id/chats/:chatId → { status }
         │
-        ├─ send_bulk_with_progress(account, contacts, message)
-        │    └─ POST /messages/send-bulk { chatIds, text } → { batchId, sent, failed }
+       ├─ send_bulk_with_progress(account, contacts, message)
+       │    └─ POST /messages/send-bulk { messages[] } → 202 { batchId }
         │
         ├─ set_profile_name(account, name)
         │    └─ PUT /profile/name { name } → { status }
@@ -662,7 +671,7 @@ Check frappe.has_permission()
         │    └─ PUT /profile/picture { url/base64 } → { status }
         │
         ├─ get_session_stats(account)
-        │    └─ GET /stats/overview → { stats }
+        │    └─ GET /api/sessions/stats/overview → { stats }
         │
         ├─ list_channels(account)
         │    └─ GET /channels → { channels: [...] }
@@ -687,12 +696,6 @@ Check frappe.has_permission()
         │
         ├─ cancel_batch(account, batch_id)
         │    └─ DELETE /messages/batch/:id → { status }
-        │
-        ├─ get_overview_stats(account)
-        │    └─ GET /stats/overview → { stats }
-        │
-        ├─ get_message_stats(account, period)
-        │    └─ GET /stats/messages?period=24h → { stats }
         │
         ├─ get_group(account, group_id)
         │    └─ GET /groups/:groupId → { group }
@@ -727,8 +730,8 @@ Check frappe.has_permission()
         ├─ get_contact_phone(account, contact_id)
         │    └─ GET /contacts/:contactId/phone → { phone }
         │
-        ├─ list_profile_pictures(account)
-        │    └─ GET /contacts/profile-pictures → { profilePictures: [...] }
+       ├─ list_profile_pictures(account, contacts)
+       │    └─ GET /contacts/profile-pictures?ids=... (cap 50) → { pictures: [...] }
         │
         ├─ delete_chat(account, chat_id)
         │    └─ POST /chats/delete { chatId } → { status }
@@ -755,13 +758,14 @@ Check frappe.has_permission()
         │    └─ GET /catalog/products → 501 Not Implemented
         │
         ├─ get_catalog_product(account, product_id)
-        │    └─ GET /catalog/products/:productId → 501 Not Implemented
+        │    └─ GET /catalog/products/:productId → 501 on wwjs engine
         │
         ├─ send_product_message(account, chat_id, product_id)
-        │    └─ POST /messages/send-product → 501 Not Implemented
+        │    └─ POST /messages/send-product → product card (Baileys only)
         │
         └─ send_catalog_message(account, chat_id, catalog_id)
-             └─ POST /messages/send-catalog → 501 Not Implemented
+             └─ (deprecated in v0.19+) → { status: "error" }
+                (POST /messages/send-catalog was removed in OpenWA 0.19; use send_product_message or send_product_to_chat / send_catalog_to_chat)
 ```
 
 ## Flow 13: Outbox Cleanup (Daily Scheduler)
@@ -800,3 +804,62 @@ User creates WhatsApp Catalog Product (linked to ERPNext Item)
 - **All products are sent as fallback** — richly formatted text+image messages with product name, description, price, availability, and image
 - **Item auto-fetch** — name, description, image, and valuation_rate are pulled from the linked Item
 - **All fields are editable** — WhatsApp-specific overrides don't affect the original Item
+
+---
+
+## Flow 15: OpenWA v0.19-v0.23 Whitelisted Methods
+
+Whitelisted `openwa_bridge.whatsapp_account` methods for the newer OpenWA API surface. All follow the same pattern: permission check → `_get_account` → `openwa_api(account, METHOD, <relative path>, json_data)`. Relative paths are joined onto `/api/sessions/{session_id}` by `openwa_api()` (handles the uniform `{sessionId}` routing in v0.19+).
+
+```
+messages/
+  vote_poll(account, chat_id, poll_message_id, options)
+    └─ POST /messages/vote-poll { chatId, pollMessageId, options[] }
+  pin_message(account, chat_id, message_id, duration_seconds=604800)
+    └─ POST /messages/pin { chatId, messageId, durationSeconds }
+  unpin_message(account, chat_id, message_id)
+    └─ POST /messages/unpin { chatId, messageId }
+  star_message(account, chat_id, message_id, star=1)
+    └─ POST /messages/star { chatId, messageId, star }
+  get_chat_media(account, chat_id, message_id)
+    └─ GET /messages/:chatId/:messageId/media → { status: "ok", media }
+
+chats/
+  archive_chat(account, chat_id, archive=1)
+    └─ POST /chats/archive { chatId, archive }
+  mute_chat(account, chat_id, mute_until=0)
+    └─ POST /chats/mute { chatId, muteUntil }
+  pin_chat(account, chat_id, pin=1)
+    └─ POST /chats/pin { chatId, pin }
+  clear_chat_messages(account, chat_id)
+    └─ DELETE /chats/:chatId/messages
+  get_session_proxy(account) / set_session_proxy(account, proxy_url)
+    └─ GET /proxy / PATCH /proxy { proxyUrl }
+
+groups/
+  get_group_membership_requests(account, group_id)
+    └─ GET /groups/:groupId/membership-requests
+  approve_group_membership_requests(account, group_id, participants="")
+    └─ POST /groups/:groupId/membership-requests/approve  (empty = approve all)
+  reject_group_membership_requests(account, group_id, participants="")
+    └─ POST /groups/:groupId/membership-requests/reject   (empty = reject all)
+
+statuses/
+  post_status_voice(account, url="" | base64="", caption="")
+    └─ POST /status/send-voice
+
+channels/
+  create_channel(account, name, description="")
+    └─ POST /channels { name, description }
+  mute_channel(account, channel_id, mute=1)
+    └─ POST /channels/:channelId/mute { mute }
+  demote_channel_admin(account, channel_id, user_id)
+    └─ POST /channels/:channelId/admins/demote { userId }
+  transfer_channel_ownership(account, channel_id, new_owner_id)
+    └─ POST /channels/:channelId/owner/transfer { newOwnerId }
+```
+
+### Key Points
+- **`send_catalog_message` is deprecated** since OpenWA 0.19 (endpoint removed, 501) — the method returns a clear error and never calls OpenWA; use `send_product_message` (product card, Baileys) or `send_product_to_chat` / `send_catalog_to_chat` (text+image / text-summary fallbacks).
+- **`mark_chat_read` accepts `message_ids`** — comma-separated list forwarded as v0.23 `messageIds` (max 100, Baileys) for per-message read receipts.
+- **Session proxy** — `set_session_proxy` with an empty `proxy_url` clears the proxy (`proxyUrl: null`).

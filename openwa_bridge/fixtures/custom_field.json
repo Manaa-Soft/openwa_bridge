@@ -361,5 +361,109 @@
         "property_type":  "Data",
         "value":  "eval:!doc.openwa_enabled",
         "doctype_or_field":  "Field"
+    },
+    {
+        "name":  "WhatsApp Message-openwa_reactions",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Message",
+        "fieldname":  "openwa_reactions",
+        "fieldtype":  "JSON",
+        "label":  "OpenWA Reactions",
+        "insert_after":  "product_catalog_json",
+        "description":  "Reactions received on this message (JSON array of {emoji, sender, timestamp})"
+    },
+    {
+        "name":  "WhatsApp Message-openwa_scheduled_at",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Message",
+        "fieldname":  "openwa_scheduled_at",
+        "fieldtype":  "Datetime",
+        "label":  "OpenWA Scheduled At",
+        "insert_after":  "openwa_reactions",
+        "description":  "Send this message at the given time (OpenWA has no delayed send; the bridge holds it in the outbox until then)"
+    },
+    {
+        "name":  "WhatsApp Message-openwa_send_pdf",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Message",
+        "fieldname":  "openwa_send_pdf",
+        "fieldtype":  "Check",
+        "label":  "Send as PDF",
+        "insert_after":  "openwa_scheduled_at",
+        "description":  "Render the linked reference document as a PDF and send it as a WhatsApp document"
+    },
+    {
+        "name":  "WhatsApp Message-openwa_print_format",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Message",
+        "fieldname":  "openwa_print_format",
+        "fieldtype":  "Link",
+        "options":  "Print Format",
+        "label":  "Print Format",
+        "insert_after":  "openwa_send_pdf",
+        "description":  "Print Format used to render the PDF (default: Standard)"
+    },
+    {
+        "name":  "WhatsApp Message-openwa_pdf_filename",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Message",
+        "fieldname":  "openwa_pdf_filename",
+        "fieldtype":  "Data",
+        "label":  "PDF Filename",
+        "insert_after":  "openwa_print_format",
+        "description":  "Filename delivered to the recipient (default: <reference_name>.pdf)"
+    },
+    {
+        "name":  "WhatsApp Message-openwa_letterhead",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Message",
+        "fieldname":  "openwa_letterhead",
+        "fieldtype":  "Link",
+        "options":  "Letter Head",
+        "label":  "Letterhead",
+        "insert_after":  "openwa_pdf_filename",
+        "description":  "Letterhead used to render the PDF (default: document letter_head, else the default Letter Head)"
+    },
+    {
+        "name":  "WhatsApp Message-openwa_language",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Message",
+        "fieldname":  "openwa_language",
+        "fieldtype":  "Data",
+        "label":  "Print Language",
+        "insert_after":  "openwa_letterhead",
+        "description":  "Language code used to render the PDF (default: doc language, else print format default, else system)"
+    },
+    {
+        "name":  "WhatsApp Message-openwa_print_settings",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Message",
+        "fieldname":  "openwa_print_settings",
+        "fieldtype":  "JSON",
+        "label":  "Print Settings",
+        "insert_after":  "openwa_language",
+        "description":  "Dynamic print settings (e.g. compact_item_print) applied when rendering the PDF"
+    },
+    {
+        "name":  "WhatsApp Message-openwa_render_doctype",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Message",
+        "fieldname":  "openwa_render_doctype",
+        "fieldtype":  "Data",
+        "label":  "Render DocType",
+        "insert_after":  "openwa_print_settings",
+        "read_only":  1,
+        "description":  "Document rendered as PDF. Differs from the reference when the reference is a CRM record (e.g. Deal) and the PDF is another doc (e.g. Sales Invoice)"
+    },
+    {
+        "name":  "WhatsApp Message-openwa_render_name",
+        "doctype":  "Custom Field",
+        "dt":  "WhatsApp Message",
+        "fieldname":  "openwa_render_name",
+        "fieldtype":  "Data",
+        "label":  "Render Name",
+        "insert_after":  "openwa_render_doctype",
+        "read_only":  1,
+        "description":  "Name of the document rendered as PDF (see Render DocType)"
     }
 ]

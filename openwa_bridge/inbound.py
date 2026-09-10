@@ -652,9 +652,12 @@ def _handle_message_revoked(event_data: dict) -> None:
 
 
 def _handle_message_reaction(event_data: dict) -> None:
-    """Log message reaction on the WhatsApp Message doc."""
+    """Record a message reaction on the WhatsApp Message doc."""
+    import json as _json
+
     message_id: str = event_data.get("messageId") or event_data.get("id", "")
     emoji: str = event_data.get("emoji", "")
+    sender: str = event_data.get("sender", "") or event_data.get("from", "")
     if not message_id or not emoji:
         return
 
@@ -666,9 +669,30 @@ def _handle_message_reaction(event_data: dict) -> None:
     if not name:
         return
 
-    frappe.logger().info(
-        f"OpenWA reaction on {name}: {emoji}"
-    )
+    reaction = {
+        "emoji": emoji,
+        "sender": strip_jid_suffix(sender) if sender else "",
+        "timestamp": frappe.utils.now(),
+    }
+
+    # Append to the existing reaction list (advance-only on duplicate emoji)
+    reactions = []
+    existing = frappe.db.get_value("WhatsApp Message", name, "openwa_reactions")
+    if existing:
+        try:
+            reactions = _json.loads(existing)
+            if not isinstance(reactions, list):
+                reactions = []
+        except Exception:
+            reactions = []
+
+    deduped = [r for r in reactions if not (
+        r.get("emoji") == emoji and r.get("sender") == reaction["sender"]
+    )]
+    deduped.append(reaction)
+
+    frappe.db.set_value("WhatsApp Message", name, "openwa_reactions", _json.dumps(deduped))
+    frappe.logger().info(f"OpenWA reaction on {name}: {emoji}")
 
 
 def _handle_message_edited(event_data: dict) -> None:
@@ -714,8 +738,41 @@ def _handle_session_reconnect_loop(event_data: dict, session_id: str) -> None:
     )
 
 
+def _log_event(event_type: str, session_id: str, summary: str,
+               payload: dict, group_id: str = "", contact: str = "") -> None:
+    """Persist a non-message OpenWA event to the OpenWA Event Log doctype.
+
+    Best-effort: a missing doctype or permission problem must never break the
+    webhook receiver, so any failure is swallowed and logged at info level.
+    """
+    account_name = frappe.db.get_value(
+        "WhatsApp Account",
+        {"openwa_session_id": session_id},
+        "name",
+    )
+    try:
+        import json as _json
+
+        doc = frappe.get_doc({
+            "doctype": "OpenWA Event Log",
+            "event_type": event_type,
+            "whatsapp_account": account_name,
+            "session_id": session_id,
+            "timestamp": frappe.utils.now(),
+            "summary": (summary or "")[:500],
+            "payload": _json.dumps(payload, default=str)[:20000],
+            "related_group": group_id,
+            "related_contact": contact,
+        })
+        doc.insert(ignore_permissions=True)
+        frappe.db.commit()
+    except Exception:
+        # Never let a logging failure break webhook processing
+        frappe.logger().info(f"OpenWA {event_type}: {summary}")
+
+
 def _handle_group_membership(event_data: dict, session_id: str, event_type: str) -> None:
-    """Log group join/leave events."""
+    """Persist group join/leave events to the OpenWA Event Log."""
     group_id: str = event_data.get("groupId", "")
     participants: list = event_data.get("participantIds", [])
     actor: str = event_data.get("actorId", "")
@@ -723,42 +780,53 @@ def _handle_group_membership(event_data: dict, session_id: str, event_type: str)
     if not group_id:
         return
 
-    frappe.logger().info(
-        f"OpenWA {event_type}: group={group_id}, "
-        f"participants={participants}, actor={actor}"
+    _log_event(
+        event_type,
+        session_id,
+        f"{event_type}: {len(participants)} participant(s) via {actor}",
+        event_data,
+        group_id=group_id,
     )
 
 
 def _handle_group_update(event_data: dict, session_id: str) -> None:
-    """Log group metadata changes."""
+    """Persist group metadata changes to the OpenWA Event Log."""
     group_id: str = event_data.get("groupId", "")
     changes: dict = event_data.get("changes", {})
 
     if not group_id:
         return
 
-    frappe.logger().info(
-        f"OpenWA group.update: group={group_id}, changes={changes}"
+    _log_event(
+        "group.update",
+        session_id,
+        f"group.update: {list(changes.keys()) if isinstance(changes, dict) else changes}",
+        event_data,
+        group_id=group_id,
     )
 
 
 def _handle_call_received(event_data: dict, session_id: str) -> None:
-    """Log incoming call events."""
+    """Persist incoming call events to the OpenWA Event Log."""
     call_id: str = event_data.get("callId", "")
     caller: str = event_data.get("from", "")
     is_video: bool = event_data.get("isVideo", False)
     is_group: bool = event_data.get("isGroup", False)
 
-    frappe.logger().info(
-        f"OpenWA call.received: call={call_id}, from={caller}, "
-        f"video={is_video}, group={is_group}"
+    _log_event(
+        "call.received",
+        session_id,
+        f"call.received: {caller} ({'video' if is_video else 'audio'}"
+        f"{', group' if is_group else ''})",
+        event_data,
+        contact=caller,
     )
 
 
 def _handle_status_received(event_data: dict, session_id: str) -> None:
     """
-    Log a received contact status or story update.
-    
+    Persist a received contact status or story update to the OpenWA Event Log.
+
     Parameters:
     	event_data (dict): Event payload containing the contact, status type, caption, and media indicator.
     	session_id (str): OpenWA session identifier.
@@ -768,9 +836,12 @@ def _handle_status_received(event_data: dict, session_id: str) -> None:
     caption: str = event_data.get("caption", "")
     has_media: bool = event_data.get("hasMedia", False)
 
-    frappe.logger().info(
-        f"OpenWA status.received: contact={contact}, type={status_type}, "
-        f"hasMedia={has_media}, caption={caption[:50] if caption else ''}"
+    _log_event(
+        "status.received",
+        session_id,
+        f"status.received: {contact} ({status_type or 'unknown'})",
+        event_data,
+        contact=contact,
     )
 
 

@@ -5,23 +5,25 @@
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
- "field_order": [
-  "status",
-  "whatsapp_account",
-  "column_break_main",
-  "content_type",
-  "chat_id",
-  "section_break_retry",
-  "attempts",
-  "max_attempts",
-  "column_break_retry",
-  "next_retry_at",
-  "last_error",
-  "section_break_ref",
-  "whatsapp_message",
-  "column_break_ref",
-  "priority"
- ],
+  "field_order": [
+   "status",
+   "whatsapp_account",
+   "column_break_main",
+   "content_type",
+   "chat_id",
+   "section_break_retry",
+   "attempts",
+   "max_attempts",
+   "column_break_retry",
+   "next_retry_at",
+   "last_error",
+   "section_break_sched",
+   "scheduled_at",
+   "section_break_ref",
+   "whatsapp_message",
+   "column_break_ref",
+   "priority"
+  ],
  "fields": [
   {
    "default": "Pending",
@@ -97,6 +99,18 @@
    "fieldtype": "Long Text",
    "label": "Last Error",
    "read_only": 1
+  },
+  {
+   "fieldname": "section_break_sched",
+   "fieldtype": "Section Break",
+   "label": "Scheduling"
+  },
+  {
+   "description": "Leave empty to send immediately. Entries are held in Pending until this time.",
+   "fieldname": "scheduled_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Scheduled At"
   },
   {
    "fieldname": "section_break_ref",

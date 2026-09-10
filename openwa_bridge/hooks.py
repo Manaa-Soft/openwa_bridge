@@ -30,7 +30,7 @@ add_to_apps_screen = [
 
 # include js, css files in header of desk.html
 # app_include_css = "/assets/openwa_bridge/css/openwa_bridge.css"
-# app_include_js = "/assets/openwa_bridge/js/openwa_bridge.js"
+app_include_js = "/assets/openwa_bridge/js/openwa_bridge.js"
 
 # include js, css files in header of web template
 # web_include_css = "/assets/openwa_bridge/css/openwa_bridge.css"
@@ -93,6 +93,10 @@ doctype_js = {
 
 before_install = "openwa_bridge.install.before_install"
 after_install = "openwa_bridge.install.after_install"
+
+# Runs after every `bench migrate` — seeds/backfills Desktop Icon rows for the
+# fork's Desktop Icons desk page (see install.after_migrate).
+after_migrate = "openwa_bridge.install.after_migrate"
 
 # Uninstallation
 # ------------
@@ -214,7 +218,7 @@ override_doctype_class = {
 fixtures = [
 	{
 		"dt": "Custom Field",
-		"filters": [["dt", "in", ["WhatsApp Account", "WhatsApp Templates", "WhatsApp Notification"]]],
+		"filters": [["dt", "in", ["WhatsApp Account", "WhatsApp Templates", "WhatsApp Notification", "WhatsApp Message"]]],
 	},
 	{
 		"dt": "Property Setter",

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hmac
 import hashlib
+import json
 import re
 from datetime import datetime, timedelta
 
@@ -250,6 +251,143 @@ def openwa_to_frappe_vars(text: str) -> str:
 # ------------------------------------------------------------------
 # Document rendering (PDF → image for dynamic headers)
 # ------------------------------------------------------------------
+
+
+def _resolve_letterhead(letterhead: str | None = None, doc=None) -> str | None:
+    """Resolve the letterhead to use for a print render.
+
+    Priority: explicit ``letterhead`` arg, then the document's own
+    ``letter_head`` field, then the site's default DocType letterhead
+    (matches the behaviour of the Frappe print page).
+    """
+    if letterhead:
+        return letterhead
+    if doc and doc.get("letter_head"):
+        return doc.get("letter_head")
+    try:
+        default = frappe.db.get_value(
+            "Letter Head",
+            {"disabled": 0, "is_default": 1, "letter_head_for": "DocType"},
+            "name",
+        )
+        if not default:
+            default = frappe.db.get_value(
+                "Letter Head", {"disabled": 0, "is_default": 1}, "name"
+            )
+        return default or None
+    except Exception:
+        return None
+
+
+def _validate_print_format_for_doctype(doctype: str, print_format: str | None) -> str:
+    """Return the effective print format for a doctype, refusing mismatches.
+
+    Frappe's renderers happily apply *any* named Print Format to *any*
+    document (printview's ``get_print_format_doc`` only checks that the
+    Print Format row exists). That lets a Sales Invoice format render
+    against a CRM Deal and embed Jinja errors for fields that doctype
+    does not have (``no such element … object['company']``) without ever
+    raising.
+
+    This guard refuses that up-front so the bridge never sends a broken PDF:
+    only formats whose ``doc_type`` matches the doctype (or generic formats
+    with no ``doc_type``, plus "Standard") are accepted. Anything else raises
+    so the message fails with a clear reason.
+
+    Args:
+        doctype: The DocType being printed.
+        print_format: Print Format name (None/"Standard" allowed).
+
+    Returns:
+        The validated print format name.
+
+    Raises:
+        frappe.ValidationError: If the format belongs to a different doctype.
+    """
+    pf = (print_format or "Standard").strip() or "Standard"
+    if pf == "Standard":
+        return "Standard"
+
+    pf_doctype = frappe.db.get_value("Print Format", pf, "doc_type")
+    if pf_doctype and pf_doctype != doctype:
+        frappe.throw(
+            frappe._(
+                "Print Format '{0}' belongs to '{1}' and cannot be used to print "
+                "'{2}'. Pick a print format for '{2}' or use Standard."
+            ).format(pf, pf_doctype, doctype),
+            frappe.ValidationError,
+        )
+    return pf
+
+
+def render_doc_as_pdf(
+    doctype: str, name: str, print_format: str = "Standard",
+    letterhead: str | None = None,
+    language: str | None = None,
+    settings: dict | None = None,
+) -> bytes | None:
+    """Render a Frappe document as raw PDF bytes via a print format.
+
+    1. Try Chrome PDF generation (matches ``render_doc_as_image``).
+    2. Fall back to wkhtmltopdf on failure.
+    3. Returns PDF bytes, or ``None`` on failure.
+
+    ``language`` is applied via ``frappe.translate.print_language``.
+    ``settings`` (dynamic print settings such as ``compact_item_print``)
+    are injected into ``frappe.local.form_dict`` so the printview renderer
+    consumes them (same mechanism as ``get_html_and_style``).
+
+    The print format is validated against ``doctype`` first (see
+    ``_validate_print_format_for_doctype``) so a format built for another
+    doctype can never be rendered into a sent PDF here.
+    """
+    from frappe.translate import print_language
+
+    print_format = _validate_print_format_for_doctype(doctype, print_format)
+
+    doc = None
+    try:
+        doc = frappe.get_doc(doctype, name)
+    except Exception:
+        pass
+    letterhead = _resolve_letterhead(letterhead, doc)
+
+    # Pre-set settings into form_dict — frappe.get_print deep-copies form_dict
+    # at entry (print_utils.py) so printview.py:64 reads them, then restores it.
+    prev_settings = frappe.local.form_dict.get("settings")
+    if settings:
+        frappe.local.form_dict["settings"] = json.dumps(settings)
+    try:
+        with print_language(language):
+            for generator in ("chrome", "wkhtmltopdf"):
+                try:
+                    pdf_bytes = frappe.get_print(
+                        doctype, name, print_format, as_pdf=True,
+                        no_letterhead=0 if letterhead else 1,
+                        letterhead=letterhead,
+                        pdf_generator=generator,
+                    )
+                    if pdf_bytes:
+                        return pdf_bytes
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    finally:
+        if prev_settings is None:
+            frappe.local.form_dict.pop("settings", None)
+        else:
+            frappe.local.form_dict["settings"] = prev_settings
+
+    frappe.log_error(
+        title="OpenWA: PDF render failed",
+        message=(
+            f"Failed to render {doctype} {name} as PDF "
+            f"(print_format={print_format}, letterhead={letterhead}, "
+            f"language={language}, settings={settings})"
+        ),
+    )
+    return None
 
 
 def render_doc_as_image(

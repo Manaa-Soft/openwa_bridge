@@ -248,43 +248,90 @@ Edit an already-sent message body.
 
 ### POST /messages/send-bulk
 
-Send a text message to multiple contacts.
+Send messages to multiple contacts (OpenWA v0.18: asynchronous batch).
+
+OpenWA v0.18 accepts up to **100 messages per request** as `messages[]`, then
+drains the batch in the background. The bridge chunks sends to ≤100 contacts and
+polls batch status.
 
 ```json
 {
-  "chatIds": ["967777715787@c.us", "967777711111@c.us"],
-  "text": "Hello everyone!"
+  "messages": [
+    { "chatId": "967777715787@c.us", "type": "text", "content": { "text": "Hello everyone!" } },
+    { "chatId": "967777711111@c.us", "type": "text", "content": { "text": "Hello everyone!" } }
+  ]
 }
 ```
 
 **DTO fields**:
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `chatIds` | string[] | Yes | Array of WhatsApp JIDs |
-| `text` | string | Yes | Message body |
+| `messages[].chatId` | string | Yes | Recipient WhatsApp JID |
+| `messages[].type` | string | Yes | `text` \| `image` \| `video` \| `audio` \| `document` |
+| `messages[].content` | object | Yes | `{ text }` for text; media DTO for others (max 100 items/request) |
+| `options` | object | No | `delay`, `randomizeDelay`, `stopOnError` |
 
----
-
-### POST /messages/forward
-
-Forward an existing message to another chat.
-
+**Response** (`202` — batch started, drained asynchronously):
 ```json
 {
-  "messageId": "true_967777715787@c.us_3EB0...",
-  "chatId": "967777711111@c.us"
+  "batchId": "b_...",
+  "status": "processing",
+  "totalMessages": 100,
+  "estimatedCompletionTime": "...",
+  "statusUrl": "/api/sessions/:sessionId/messages/batch/b_..."
+}
+```
+
+### GET /messages/batch/:batchId
+
+Poll the status/progress of a bulk-send batch.
+
+```
+GET /api/sessions/:sessionId/messages/batch/{batchId}
+```
+
+**Response**:
+```json
+{
+  "batchId": "b_...",
+  "status": "processing",
+  "progress": { "total": 100, "sent": 42, "failed": 0, "pending": 58, "cancelled": 0 },
+  "startedAt": "...",
+  "completedAt": null
 }
 ```
 
 ---
 
-### DELETE /messages/:messageId
+### POST /messages/forward
 
-Delete a message. Add `?revoke=true` to delete for everyone (revoke).
+Forward an existing message to another chat (OpenWA v0.18 DTO).
 
+```json
+{
+  "fromChatId": "967777715787@c.us",
+  "toChatId": "967777711111@c.us",
+  "messageId": "true_967777715787@c.us_3EB0..."
+}
 ```
-DELETE /api/sessions/:sessionId/messages/true_967777715787@c.us_3EB0...?revoke=true
+
+---
+
+### POST /messages/delete
+
+Delete a message (OpenWA v0.18 DTO — replaces `DELETE /messages/:id?revoke=`).
+
+```json
+{
+  "chatId": "967777715787@c.us",
+  "messageId": "true_967777715787@c.us_3EB0...",
+  "forEveryone": true
+}
 ```
+
+**Note**: a `503` response means the outcome is uncertain ("may or may not have
+been applied"); the bridge treats it as applied rather than an error so callers
+do not retry and duplicate the delete.
 
 ---
 
@@ -333,9 +380,12 @@ GET /api/sessions/:sessionId/contacts/check/967777715787
 **Response** (200):
 ```json
 {
-  "isRegistered": true
+  "exists": true,
+  "whatsappId": "967777715787@c.us"
 }
 ```
+
+> **v0.18**: the response field is now `exists` + `whatsappId` (was `isRegistered`).
 
 ---
 
@@ -423,12 +473,20 @@ GET /api/sessions/:sessionId/messages/{messageId}/reactions
 
 ## Batch Operations
 
-### DELETE /messages/batch/:batchId
+### GET /messages/batch/:batchId
+
+Poll the status of a pending bulk-send batch (see `POST /messages/send-bulk`).
+
+```
+GET /api/sessions/:sessionId/messages/batch/{batchId}
+```
+
+### POST /messages/batch/:batchId/cancel
 
 Cancel a pending batch send operation.
 
 ```
-DELETE /api/sessions/:sessionId/messages/batch/{batchId}
+POST /api/sessions/:sessionId/messages/batch/{batchId}/cancel
 ```
 
 ---
@@ -437,18 +495,26 @@ DELETE /api/sessions/:sessionId/messages/batch/{batchId}
 
 ### GET /stats/overview
 
-Get session overview statistics.
+Get cross-session aggregate statistics.
+
+> Requires an OpenWA **ADMIN** role with an **unscoped** API key. The bridge
+> only holds session-scoped keys, so this endpoint is NOT exposed as a
+> whitelisted method.
 
 ```
-GET /api/sessions/:sessionId/stats/overview
+GET /api/stats/overview
 ```
 
 ### GET /stats/messages
 
-Get message statistics for a time period.
+Get message statistics with a time series for a period.
+
+> Same AUTH requirement as `/stats/overview` — NOT exposed as a whitelisted
+> method. Per-session message statistics are covered by `get_session_stats`
+> below.
 
 ```
-GET /api/sessions/:sessionId/stats/messages?period=24h
+GET /api/stats/messages?period=24h
 ```
 
 **Query params**: `period` — `1h`, `24h`, `7d`, `30d`
@@ -646,12 +712,117 @@ One-click setup: create session in OpenWA, start it, fetch QR code.
 
 **Returns**:
 ```json
+{ "status": "qr_ready", "qr_code": "data:image/png;base64,...", "session_id": "uuid" }
+```
+
+When the session is already connected:
+```json
+{ "status": "ready", "session_id": "uuid", "phone": "967777700000", "push_name": "Name" }
+```
+
+On failure:
+```json
+{ "status": "error", "error": "...", "session_id": "uuid" }
+```
+
+---
+
+## Tier 2 Improvements (bridge-side)
+
+### Scheduled send
+
+OpenWA has no delayed send, so scheduling is implemented in the bridge:
+
+- Set `openwa_scheduled_at` (Datetime) on a **WhatsApp Message**.
+- `after_insert` propagates it to the **OpenWA Outbox** entry's `scheduled_at` and
+  does **not** enqueue it for immediate send.
+- The outbox processor (`_process_outbox_entry_inner`) skips Pending entries with
+  `scheduled_at > now` **without** bumping `attempts`.
+- The scheduler safety-net (`process_pending_outbox`) only picks up Pending entries
+  whose `scheduled_at` is null or `<= now`.
+
+### Base64 media outbound
+
+Image / video / audio / document sends now accept a base64 payload in addition to a URL link:
+
+```json
 {
-  "qr_code": "data:image/png;base64,...",
-  "status": "qr_ready",
-  "session_id": "uuid"
+  "image": {
+    "base64": "<base64-encoded bytes>",
+    "mimetype": "image/jpeg",
+    "filename": "photo.jpg"
+  }
 }
 ```
+
+- `link` → sent as `url` (existing behavior).
+- `base64` → sent as `base64` + `mimetype` (mirrors the sticker pattern).
+- `filename` optional (used by `send-document`).
+- Caption still sent for non-audio media.
+
+### Send-as-PDF
+
+Send the currently-open document as a PDF via OpenWA `send-document`.
+
+**Whitelisted method**: `openwa_bridge.whatsapp_message.send_document_pdf`
+
+**Args**: `{ to: string, reference_doctype: string, reference_name: string, print_format?: string, filename?: string, caption?: string }`
+
+- `to`: recipient phone number (any format — normalized to `<num>@c.us`).
+- `print_format`: Print Format name (default `Standard`).
+- `filename`: delivered filename (default `<reference_name>.pdf`).
+- `caption`: optional caption text (default empty).
+
+**Returns**: `string` — the created WhatsApp Message name.
+
+Called from the "Send To Whatsapp" dialog in the vendored `frappe_whatsapp` app when
+"Send as PDF" is checked. Creates a WhatsApp Message (`content_type="document"`,
+`openwa_send_pdf=1`) referencing the document; the outbox worker then renders the
+PDF at send time via `render_doc_as_pdf()` (Chrome, falling back to wkhtmltopdf),
+base64-encodes it, and POSTs `send-document` with `mimetype: application/pdf`.
+Rendering on every attempt keeps retries safe and the delivered PDF always current.
+
+> **Note**: draft documents require **Allow Print for Draft** in Print Settings.
+
+### Media reply workaround
+
+OpenWA `POST /messages/reply` is text-only. When a media message is sent with
+`is_reply` + `reply_to_message_id`:
+
+1. Media is sent unquoted via `send-{type}`.
+2. A **text** reply is sent quoting the returned media `messageId`.
+
+### Inbound event persistence (`OpenWA Event Log`)
+
+Non-message webhook events are now persisted instead of only logged:
+
+| event_type | Source webhook |
+|---|---|
+| `group.join` / `group.leave` / `group.update` | group webhooks |
+| `call.received` | incoming call |
+| `status.received` | contact status/story |
+| `message.reaction` | reaction on a message |
+| `webhook.delivery_failure` | DLQ check (`check_webhook_delivery_failures`) |
+
+Each row: `whatsapp_account`, `session_id`, `timestamp`, `summary`, `payload`
+(Code field), `related_group`, `related_contact`. Inserts are best-effort and never
+break webhook processing.
+
+### Reactions persistence
+
+`message.reaction` events are stored on the WhatsApp Message doc in the
+`openwa_reactions` JSON field as `[{emoji, sender, timestamp}]` (advance-only dedupe
+per emoji+sender).
+
+### Webhook DLQ replay
+
+`daily()` now calls `check_webhook_delivery_failures()` which:
+1. Reads `GET /api/webhooks/delivery-failures` (limit 50 per session).
+2. Writes `webhook.delivery_failure` rows to the Event Log (deduped by idempotency key).
+3. Replays the affected account via `replay_webhooks(account_name)` to backfill
+   missed inbound messages.
+
+403 from the DLQ endpoint (non-ADMIN key) is expected and skipped silently.
 
 Or on error:
 ```json
@@ -747,6 +918,8 @@ Check if a phone number is registered on WhatsApp.
 
 **Returns**: `{ exists: true, jid: "12345@c.us" }` or `{ exists: false }`
 
+**v0.18**: reads OpenWA's `exists`/`whatsappId` fields; `jid` is the resolved WhatsApp ID.
+
 ---
 
 ### block_contact
@@ -787,7 +960,7 @@ Send a typing indicator to a chat.
 
 ### send_bulk_openwa
 
-Send a text message to multiple contacts via OpenWA's send-bulk endpoint.
+Send a text message to multiple contacts via OpenWA's async send-bulk endpoint.
 
 **Method**: `openwa_bridge.whatsapp_account.send_bulk_openwa`
 
@@ -795,7 +968,9 @@ Send a text message to multiple contacts via OpenWA's send-bulk endpoint.
 
 - `contacts`: comma-separated phone numbers or JIDs
 
-**Returns**: `{ status: "ok", sent: 2, failed: 0 }`
+**Returns**: `{ status: "ok", batchId: "...", sent: 2, failed: 0, pending: 0, cancelled: 0, total: 2 }`
+
+**v0.18**: submits ≤100-message batches and polls `GET /messages/batch/:batchId` (≈60s budget). If the budget expires, `pending` still counts the unfinished messages.
 
 ---
 
@@ -807,7 +982,9 @@ Forward an existing message to another chat.
 
 **Args**: `{ account_name: string, message_id: string, chat_id: string }`
 
-**Returns**: `{ status: "ok", result: {...} }`
+**Returns**: `{ status: "ok", result: {...} }` or `{ status: "error", error: "..." }`
+
+**v0.18**: sends `fromChatId`/`toChatId`/`messageId`; the source chat is resolved from the stored WhatsApp Message doc via `_resolve_message_chat_id()`. Fails cleanly if the source chat cannot be resolved.
 
 ---
 
@@ -819,7 +996,9 @@ Delete a message. Set `revoke=1` to delete for everyone.
 
 **Args**: `{ account_name: string, message_id: string, revoke?: 0|1 }`
 
-**Returns**: `{ status: "deleted", message_id: "..." }`
+**Returns**: `{ status: "deleted", message_id: "..." }` (a `503` from OpenWA is treated as applied, adding `uncertain: true`)
+
+**v0.18**: uses `POST /messages/delete` with `{chatId, messageId, forEveryone}`.
 
 ---
 
@@ -921,13 +1100,17 @@ Reject an incoming voice/video call.
 
 ### mark_chat_read
 
-Mark all messages in a chat as read.
+Mark all messages in a chat (or specific messages) as read.
 
 **Method**: `openwa_bridge.whatsapp_account.mark_chat_read`
 
-**Args**: `{ account_name: string, chat_id: string }`
+**Args**: `{ account_name: string, chat_id: string, message_ids?: string }`
 
-**Returns**: `{ status: "ok", result: {...} }`
+- `message_ids`: optional comma-separated list of message IDs (max 100, Baileys) to mark as read individually. When omitted, the whole chat is marked as read.
+
+**Returns**: `{ status: "ok" }`
+
+**v0.18+**: `POST /chats/read` with `{chatId}` in the body; **v0.23**: also accepts `messageIds: string[]`.
 
 ---
 
@@ -939,7 +1122,9 @@ Mark a chat as unread.
 
 **Args**: `{ account_name: string, chat_id: string }`
 
-**Returns**: `{ status: "ok", result: {...} }`
+**Returns**: `{ status: "ok" }`
+
+**v0.18**: `POST /chats/unread` with `{chatId}` in the body.
 
 ---
 
@@ -952,6 +1137,8 @@ Retrieve message history for a specific chat.
 **Args**: `{ account_name: string, chat_id: string, limit?: number }`
 
 **Returns**: `{ messages: [...] }`
+
+**v0.18**: reads `GET /messages/:chatId/history`.
 
 ---
 
@@ -1003,6 +1190,8 @@ Add participants to a group.
 
 **Returns**: `{ status: "ok", result: {...} }`
 
+**v0.18**: `POST /groups/:groupId/participants`.
+
 ---
 
 ### remove_group_participants
@@ -1014,6 +1203,8 @@ Remove participants from a group.
 **Args**: `{ account_name: string, group_id: string, participants: string }`
 
 **Returns**: `{ status: "ok", result: {...} }`
+
+**v0.18**: `DELETE /groups/:groupId/participants`.
 
 ---
 
@@ -1159,6 +1350,8 @@ Get session-level statistics.
 
 **Returns**: `{ stats: {...} }`
 
+**v0.18**: reads `GET /api/sessions/stats/overview` via `_raw_openwa_call` (session-scoped key or ADMIN role).
+
 ---
 
 ### list_channels
@@ -1194,6 +1387,8 @@ Get all statuses (stories) for a specific contact.
 **Args**: `{ account_name: string, contact_id: string }`
 
 **Returns**: `{ statuses: [...] }`
+
+**v0.18**: unwraps the `{statuses: [...]}` envelope OpenWA returns from `GET /status/:contactId`.
 
 ---
 
@@ -1254,32 +1449,6 @@ Cancel a pending batch send operation.
 **Args**: `{ account_name: string, batch_id: string }`
 
 **Returns**: `{ status: "ok", result: {...} }`
-
----
-
-### get_overview_stats
-
-Get session overview statistics.
-
-**Method**: `openwa_bridge.whatsapp_account.get_overview_stats`
-
-**Args**: `{ account_name: string }`
-
-**Returns**: `{ stats: {...} }`
-
----
-
-### get_message_stats
-
-Get message statistics for a time period.
-
-**Method**: `openwa_bridge.whatsapp_account.get_message_stats`
-
-**Args**: `{ account_name: string, period?: string }`
-
-- `period`: `1h`, `24h` (default), `7d`, `30d`
-
-**Returns**: `{ stats: {...} }`
 
 ---
 
@@ -1417,13 +1586,17 @@ Resolve phone number from JID.
 
 ### list_profile_pictures
 
-List all profile pictures.
+Batch-resolve profile picture URLs for contacts.
 
 **Method**: `openwa_bridge.whatsapp_account.list_profile_pictures`
 
-**Args**: `{ account_name: string }`
+**Args**: `{ account_name: string, contacts?: string }`
 
-**Returns**: `{ profilePictures: [...] }`
+- `contacts`: comma-separated WhatsApp JIDs or phone numbers (OpenWA caps the lookup at the first 50 ids)
+
+**Returns**: `{ status: "ok", profile_pictures: [...] }`
+
+**v0.18**: calls `GET /contacts/profile-pictures?ids=...` and reads `{pictures: [...]}`.
 
 ---
 
@@ -1642,3 +1815,223 @@ Send a specific catalog product to a chat by product name (account-qualified).
   "result": { "messageId": "true_967777715787@c.us_3EB0..." }
 }
 ```
+
+---
+
+### send_catalog_message (deprecated)
+
+Send a catalog listing to a chat.
+
+**Method**: `openwa_bridge.whatsapp_account.send_catalog_message`
+
+**Args**: `{ account_name: string, chat_id: string, catalog_id: string }`
+
+**Returns**:
+```json
+{
+  "status": "error",
+  "error": "POST /messages/send-catalog was removed in OpenWA 0.19 ..."
+}
+```
+
+`POST /messages/send-catalog` was **removed in OpenWA 0.19** (answers 501 on every engine). The bridge method no longer calls OpenWA and always returns this error. Use `openwa_bridge.whatsapp_account.send_product_message` (product card, Baileys engine) or the catalog helpers (`send_product_to_chat`, `send_catalog_to_chat`) which render text+image / text-summary fallbacks.
+
+---
+
+## OpenWA v0.19-v0.23 whitelisted methods
+
+New `openwa_bridge.whatsapp_account` whitelisted methods added for the OpenWA 0.19–0.23 API surface.
+
+### vote_poll
+
+Cast a vote on a WhatsApp poll.
+
+**Method**: `openwa_bridge.whatsapp_account.vote_poll`
+
+**Args**: `{ account_name: string, chat_id: string, poll_message_id: string, options: string }`
+
+- `options`: comma-separated option strings (max 12).
+
+**Endpoint**: `POST /messages/vote-poll` with `{chatId, pollMessageId, options}`.
+
+### pin_message
+
+Pin a message in a chat.
+
+**Method**: `openwa_bridge.whatsapp_account.pin_message`
+
+**Args**: `{ account_name: string, chat_id: string, message_id: string, duration_seconds?: number }`
+
+- `duration_seconds`: 86400 (24h), 604800 (7d), or 2592000 (30d). Default 7d.
+
+**Endpoint**: `POST /messages/pin` with `{chatId, messageId, durationSeconds}`.
+
+### unpin_message
+
+Remove a message's pin.
+
+**Method**: `openwa_bridge.whatsapp_account.unpin_message`
+
+**Args**: `{ account_name: string, chat_id: string, message_id: string }`
+
+**Endpoint**: `POST /messages/unpin` with `{chatId, messageId}`.
+
+### star_message
+
+Star or unstar a message.
+
+**Method**: `openwa_bridge.whatsapp_account.star_message`
+
+**Args**: `{ account_name: string, chat_id: string, message_id: string, star?: 0 | 1 }`
+
+**Endpoint**: `POST /messages/star` with `{chatId, messageId, star: boolean}`.
+
+### get_chat_media
+
+Download stored media for a message.
+
+**Method**: `openwa_bridge.whatsapp_account.get_chat_media`
+
+**Args**: `{ account_name: string, chat_id: string, message_id: string }`
+
+**Returns**: `{ status: "ok", media: {...} }`
+
+**Endpoint**: `GET /messages/:chatId/:messageId/media`.
+
+### archive_chat
+
+Archive or unarchive a chat.
+
+**Method**: `openwa_bridge.whatsapp_account.archive_chat`
+
+**Args**: `{ account_name: string, chat_id: string, archive?: 0 | 1 }`
+
+**Endpoint**: `POST /chats/archive` with `{chatId, archive: boolean}`.
+
+### mute_chat
+
+Mute or unmute a chat.
+
+**Method**: `openwa_bridge.whatsapp_account.mute_chat`
+
+**Args**: `{ account_name: string, chat_id: string, mute_until?: number }`
+
+- `mute_until`: epoch-ms until which the chat is muted (0 = indefinite).
+
+**Endpoint**: `POST /chats/mute` with `{chatId, muteUntil}`.
+
+### pin_chat
+
+Pin or unpin a chat in the chat list.
+
+**Method**: `openwa_bridge.whatsapp_account.pin_chat`
+
+**Args**: `{ account_name: string, chat_id: string, pin?: 0 | 1 }`
+
+**Endpoint**: `POST /chats/pin` with `{chatId, pin: boolean}`.
+
+### clear_chat_messages
+
+Delete every message in a chat (clear history).
+
+**Method**: `openwa_bridge.whatsapp_account.clear_chat_messages`
+
+**Args**: `{ account_name: string, chat_id: string }`
+
+**Endpoint**: `DELETE /chats/:chatId/messages`.
+
+### get_session_proxy / set_session_proxy
+
+Read or update the per-session egress proxy configuration.
+
+**Methods**: `openwa_bridge.whatsapp_account.get_session_proxy`, `openwa_bridge.whatsapp_account.set_session_proxy`
+
+**Args (set)**: `{ account_name: string, proxy_url: string }` — set a proxy URL, or empty string to clear it.
+
+**Endpoints**: `GET /proxy` and `PATCH /proxy` (per-session route).
+
+### get_group_membership_requests
+
+List pending membership requests for a group.
+
+**Method**: `openwa_bridge.whatsapp_account.get_group_membership_requests`
+
+**Args**: `{ account_name: string, group_id: string }`
+
+**Endpoint**: `GET /groups/:groupId/membership-requests`.
+
+### approve_group_membership_requests
+
+Approve pending membership requests.
+
+**Method**: `openwa_bridge.whatsapp_account.approve_group_membership_requests`
+
+**Args**: `{ account_name: string, group_id: string, participants?: string }`
+
+- `participants`: comma-separated JIDs to approve; empty = approve all.
+
+**Endpoint**: `POST /groups/:groupId/membership-requests/approve`.
+
+### reject_group_membership_requests
+
+Reject pending membership requests.
+
+**Method**: `openwa_bridge.whatsapp_account.reject_group_membership_requests`
+
+**Args**: `{ account_name: string, group_id: string, participants?: string }`
+
+- `participants`: comma-separated JIDs to reject; empty = reject all.
+
+**Endpoint**: `POST /groups/:groupId/membership-requests/reject`.
+
+### post_status_voice
+
+Post an audio status as a WhatsApp voice note.
+
+**Method**: `openwa_bridge.whatsapp_account.post_status_voice`
+
+**Args**: `{ account_name: string, url?: string, base64?: string, caption?: string }`
+
+Provide either `url` or `base64` (not both).
+
+**Endpoint**: `POST /status/send-voice`.
+
+### create_channel
+
+Create a new WhatsApp channel.
+
+**Method**: `openwa_bridge.whatsapp_account.create_channel`
+
+**Args**: `{ account_name: string, name: string, description?: string }`
+
+**Endpoint**: `POST /channels`.
+
+### mute_channel
+
+Mute or unmute a channel.
+
+**Method**: `openwa_bridge.whatsapp_account.mute_channel`
+
+**Args**: `{ account_name: string, channel_id: string, mute?: 0 | 1 }`
+
+**Endpoint**: `POST /channels/:channelId/mute`.
+
+### demote_channel_admin
+
+Demote a channel admin.
+
+**Method**: `openwa_bridge.whatsapp_account.demote_channel_admin`
+
+**Args**: `{ account_name: string, channel_id: string, user_id: string }`
+
+**Endpoint**: `POST /channels/:channelId/admins/demote`.
+
+### transfer_channel_ownership
+
+Transfer channel ownership to another user.
+
+**Method**: `openwa_bridge.whatsapp_account.transfer_channel_ownership`
+
+**Args**: `{ account_name: string, channel_id: string, new_owner_id: string }`
+
+**Endpoint**: `POST /channels/:channelId/owner/transfer`.

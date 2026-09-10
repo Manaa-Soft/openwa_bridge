@@ -516,6 +516,53 @@ Comprehensive code review identified additional issues. Each fix is scoped to mi
 
 ---
 
+## OpenWA v0.18 Compatibility
+
+**Status**: Complete
+**Scope**: `whatsapp_account.py`, `tasks.py`, `tests/test_bulk_messaging.py`, `tests/test_contact_management.py`, `tests/test_account.py`
+
+All bridge endpoints updated to the OpenWA 0.18.0 API contract:
+
+- **Bulk send** — `send_bulk_openwa` / `send_bulk_with_progress` now POST `messages[]` (≤100/request) to `/messages/send-bulk`, receive `202 {batchId}`, and poll `GET /messages/batch/:batchId` (~60s budget) to report `sent`/`failed`/`pending`/`cancelled`/`total`.
+- **Forward/delete** — new `_resolve_message_chat_id()` helper resolves the source chat from the stored WhatsApp Message; `POST /messages/forward` (`fromChatId`/`toChatId`/`messageId`) and `POST /messages/delete` (`chatId`/`messageId`/`forEveryone`). A `503` on delete is treated as applied (`uncertain: true`).
+- **Read/unread** — `POST /chats/read` / `POST /chats/unread` with `{chatId}` body.
+- **History** — `GET /messages/:chatId/history`.
+- **Group participants** — `POST` / `DELETE /groups/:groupId/participants`.
+- **Contacts** — `check_whatsapp_number` reads `{exists, whatsappId}`; `list_profile_pictures(contacts)` uses `?ids=` (cap 50) and reads `{pictures}`.
+- **Session stats** — `get_session_stats` reads `/api/sessions/stats/overview` via `_raw_openwa_call`.
+- **Statuses** — `get_contact_statuses` unwraps the `{statuses: [...]}` envelope.
+- **Webhook replay** — `replay_webhooks` maps `createdAt`, `waMessageId`, lowercase `direction`, and normalises epoch-seconds vs millisecond timestamps.
+
+**Notes**:
+- Requires OpenWA **0.18.x**; pre-0.18 contracts are no longer exercised by the bridge.
+- Tests updated to the v0.18 DTOs (mocks assert `{number, exists, whatsappId}`, `/chats/read`, `/messages/send-bulk` with `messages[]`, batch polling).
+- Test suite requires a live Frappe bench (`manaa-soft` site) — not runnable in a bare checkout.
+
+---
+
+## OpenWA v0.19-v0.23 Compatibility
+
+**Status**: Complete
+**Scope**: `whatsapp_account.py`, `tests/test_account.py`
+
+Bridge follows the OpenWA `main` branch (verified against **0.23.4**). Only one hard break, otherwise additive:
+
+- **`send_catalog_message` deprecated** — `POST /messages/send-catalog` removed in v0.19 (501 on every engine). The method now returns a clear error instead of calling OpenWA; `send_product_message` (product card, Baileys) and the catalog fallbacks `send_product_to_chat` / `send_catalog_to_chat` (text+image / text-summary) remain the supported paths.
+- **`mark_chat_read` v0.23 `messageIds`** — optional `message_ids` argument (comma-separated, ≤100) forwarded as `messageIds` for per-message read receipts; omitted → whole chat marked read.
+- **19 new whitelisted methods** (74 → 93):
+  - Messages: `vote_poll`, `pin_message` (validated `durationSeconds`), `unpin_message`, `star_message`, `get_chat_media`.
+  - Chats/session: `archive_chat`, `mute_chat`, `pin_chat`, `clear_chat_messages`, `get_session_proxy`, `set_session_proxy`.
+  - Groups: `get_group_membership_requests`, `approve_group_membership_requests`, `reject_group_membership_requests` (empty participants = all).
+  - Status: `post_status_voice`.
+  - Channels: `create_channel`, `mute_channel`, `demote_channel_admin`, `transfer_channel_ownership`.
+
+**Notes**:
+- v0.19's uniform `{sessionId}` route change needs no bridge change — `openwa_api()` joins relative paths onto `/api/sessions/{session_id}`.
+- `test_account.py` now compiles: the 55 broken `MagicMock(get_password.return_value=...)` dotted-kwarg lines (SyntaxError since Python 3.8) were replaced with attribute assignments, so the whole suite is runnable (on a bench) for the first time.
+- New endpoint tests cover every added method (path, HTTP verb, and body assertions).
+
+---
+
 ## OpenWA v0.10.6/v0.10.9+ Feature Integration
 
 All OpenWA v0.10.6 through v0.10.10 features have been integrated into the bridge.
@@ -542,8 +589,6 @@ Total webhook events: **17** (up from 10)
 - [x] `unsubscribe_channel()` — unsubscribe from a channel
 - [x] `get_message_reactions()` — get reactions for a message
 - [x] `cancel_batch()` — cancel a pending batch send
-- [x] `get_overview_stats()` — session overview statistics
-- [x] `get_message_stats()` — message statistics for a time period
 - [x] `get_channel_messages()` — list channel messages
 
 ### Additional Whitelisted Methods (23 added)
@@ -566,13 +611,13 @@ Total webhook events: **17** (up from 10)
 - [x] `get_chat_labels()` — get labels for a chat
 - [x] `get_batch_status()` — get batch send status
 - [x] `test_webhook()` — test webhook delivery
-- [x] `get_catalog()` — get catalog (stub, returns 501)
-- [x] `get_catalog_products()` — get catalog products (stub, returns 501)
-- [x] `get_catalog_product()` — get catalog product (stub, returns 501)
-- [x] `send_product_message()` — send product message (stub, returns 501)
-- [x] `send_catalog_message()` — send catalog message (stub, returns 501)
+- [x] `get_catalog()` — get catalog (answers 501 on the whatsapp-web.js engine)
+- [x] `get_catalog_products()` — get catalog products (answers 501 on the whatsapp-web.js engine)
+- [x] `get_catalog_product()` — get catalog product (answers 501 on the whatsapp-web.js engine)
+- [x] `send_product_message()` — send product message (Baileys engine only)
+- [x] `send_catalog_message()` — deprecated (OpenWA 0.19+ removed the endpoint; method returns a clear error, use `send_product_message` / `send_product_to_chat` / `send_catalog_to_chat`)
 
-Total whitelisted methods: **67** (up from 44)
+Total whitelisted methods: **93** (was 74 at the v0.18 commit; +19 v0.19-v0.23 additions)
 
 ### Typing Indicator
 
@@ -647,3 +692,82 @@ All products are stored locally and sent as fallback text+image messages.
 | `FLOWS.md` | Flow 14: WhatsApp Catalog Product (simplified) |
 | `IMPROVEMENTS.md` | This section |
 | `test_catalog.py` | 5 test classes, no sync tests |
+
+---
+
+## Tier 2 Improvements
+
+**Branch**: `feature/improvements`
+**Status**: Complete
+
+### Inbound event persistence
+
+- [x] New `OpenWA Event Log` DocType (`openwa_event_log`) — persisted webhook events.
+- [x] Rewrote `_handle_group_membership`, `_handle_group_update`, `_handle_call_received`,
+      `_handle_status_received` to insert Event Log rows (best-effort, never breaks webhook).
+- [x] `_log_event()` helper resolves account from `openwa_session_id`.
+
+### Reactions persistence
+
+- [x] `message.reaction` events stored on WhatsApp Message in `openwa_reactions` JSON
+      field as `[{emoji, sender, timestamp}]`.
+- [x] Advance-only dedupe per (emoji, sender); sender normalized via `strip_jid_suffix`.
+- [x] Custom field `WhatsApp Message-openwa_reactions` (insert_after `product_catalog_json`).
+
+### Webhook DLQ replay
+
+- [x] `check_webhook_delivery_failures()` in `tasks.py` — reads delivery-failures
+      (limit 50/session), writes `webhook.delivery_failure` rows, replays via `replay_webhooks`.
+- [x] Dedupe by idempotency key (`_known_delivery_failure_keys`).
+- [x] Wired into `daily()`; 403 (non-ADMIN key) skipped silently.
+
+### Scheduled send
+
+- [x] `scheduled_at` (Datetime) on OpenWA Outbox — held in Pending until due.
+- [x] `openwa_scheduled_at` custom field on WhatsApp Message, propagated in `after_insert`.
+- [x] Processor gates: `_process_outbox_entry_inner` skips future-scheduled entries
+      without bumping attempts; `process_pending_outbox` only picks due entries.
+
+### Base64 media outbound
+
+- [x] image/video/audio/document sends accept `{base64, mimetype, filename}` in addition
+      to `{link}` (mirrors existing sticker pattern).
+- [x] Clear error when neither `link` nor `base64` is supplied.
+
+### Send-as-PDF
+
+- [x] `render_doc_as_pdf()` helper in `utils.py` — Chrome render, falls back to
+      wkhtmltopdf; returns bytes or `None`.
+- [x] Whitelisted `send_document_pdf()` — creates a WhatsApp Message
+      (`content_type="document"`, `openwa_send_pdf=1`, reference fields, optional
+      print format / filename / caption) from the "Send To Whatsapp" dialog.
+- [x] Send-time rendering in `_send_via_openwa()` — document + `openwa_send_pdf`
+      renders the reference doc, base64-encodes it, POSTs `send-document` with
+      `mimetype: application/pdf` and filename (default `<reference_name>.pdf`).
+- [x] PDF regenerated on every outbox attempt (nothing large stored on the doc).
+- [x] `openwa_send_pdf` / `openwa_print_format` / `openwa_pdf_filename` custom fields.
+- [x] Unit tests — PDF send path, render-failure retry, method defaults.
+- [x] **Reference preserved from CRM validate hook** — `OverrideWhatsAppMessage` captures
+      `reference_doctype`/`reference_name` in `before_validate()` and restores them in
+      `before_save()`, so the CRM app's number-based auto-link can't clobber an explicitly
+      set reference. Incoming messages (no reference) still auto-link. See `KNOWN_ISSUES.md`.
+- [x] **PDF message visible in CRM thread** — `send_document_pdf` stores the rendered
+      document in `openwa_render_doctype`/`openwa_render_name` and links the reference to
+      the CRM record matching the recipient number (via `crm.integrations.api.
+      get_contact_lead_or_deal_from_number`), so the PDF shows in the Deal/Lead/Contact
+      thread while still rendering the source document. No CRM match keeps the reference as
+      the passed document. Requires `bench migrate` for the two new custom fields.
+
+### Media reply workaround
+
+- [x] `POST /messages/reply` is text-only (OpenWA). Media replies now: send media
+      unquoted, then send a **text** reply quoting the returned media `messageId`.
+- [x] Reply branch narrowed to text content type; media+reply falls through to media send
+      then fires the follow-up quoted reply.
+
+### Docs updated
+
+- [x] `API_REFERENCE.md` — Tier 2 section.
+- [x] `KNOWN_ISSUES.md` — media-reply limitation + workaround, DLQ role note.
+- [x] `CUSTOM_FIELDS.md` — outbox `scheduled_at`, WhatsApp Message custom fields.
+- [x] `IMPROVEMENTS.md` — this section.
