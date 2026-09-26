@@ -229,6 +229,16 @@ def _handle_inbound_message(
 
     message_body: str = msg_data.get("body", "")
 
+    # Prompt-tap reply (0.23.6+): OpenWA types business-prompt button/list
+    # choices as "text" and carries the tapped button as ``button { id, text? }``.
+    # The body may be empty, so surface the chosen button text/id.
+    button_data = msg_data.get("button")
+    button_label = ""
+    if isinstance(button_data, dict):
+        button_label = button_data.get("text") or button_data.get("id") or ""
+    if content_type == "text" and not message_body and button_label:
+        message_body = button_label
+
     doc_data: dict = {
         "doctype": "WhatsApp Message",
         "type": "Incoming",

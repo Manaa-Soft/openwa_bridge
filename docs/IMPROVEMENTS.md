@@ -545,7 +545,7 @@ All bridge endpoints updated to the OpenWA 0.18.0 API contract:
 **Status**: Complete
 **Scope**: `whatsapp_account.py`, `tests/test_account.py`
 
-Bridge follows the OpenWA `main` branch (verified against **0.23.4**). Only one hard break, otherwise additive:
+Bridge follows the OpenWA `main` branch (verified against **0.23.7**). Only one hard break, otherwise additive:
 
 - **`send_catalog_message` deprecated** — `POST /messages/send-catalog` removed in v0.19 (501 on every engine). The method now returns a clear error instead of calling OpenWA; `send_product_message` (product card, Baileys) and the catalog fallbacks `send_product_to_chat` / `send_catalog_to_chat` (text+image / text-summary) remain the supported paths.
 - **`mark_chat_read` v0.23 `messageIds`** — optional `message_ids` argument (comma-separated, ≤100) forwarded as `messageIds` for per-message read receipts; omitted → whole chat marked read.
@@ -555,6 +555,9 @@ Bridge follows the OpenWA `main` branch (verified against **0.23.4**). Only one 
   - Groups: `get_group_membership_requests`, `approve_group_membership_requests`, `reject_group_membership_requests` (empty participants = all).
   - Status: `post_status_voice`.
   - Channels: `create_channel`, `mute_channel`, `demote_channel_admin`, `transfer_channel_ownership`.
+- **1 new whitelisted method (0.23.6)** (93 → 94): `click_button(account_name, chat_id, message_id, button_id, text=None)` — sends a structured prompt-reply against a stored business prompt (`POST /messages/click-button`, Baileys; wweb.js answers 501).
+- **Inbound commerce typing (0.23.5)** — `openwa_type_to_frappe` maps `order` and `product` to `content_type = "order"` (they previously fell through to `"text"`).
+- **Inbound prompt taps (0.23.6+)** — text-typed replies carrying a `button { id, text? }` field store the tapped button text (falling back to the id) as the message body when the body is empty.
 
 **Notes**:
 - v0.19's uniform `{sessionId}` route change needs no bridge change — `openwa_api()` joins relative paths onto `/api/sessions/{session_id}`.

@@ -800,7 +800,7 @@ User creates WhatsApp Catalog Product (linked to ERPNext Item)
 ```
 
 ### Key Points
-- **OpenWA does not support catalog** — neither engine implements WhatsApp Business catalog operations (create/read/update). Catalog endpoints always return 501.
+- **OpenWA catalog is read-only** — OpenWA exposes `GET /catalog`, `GET /catalog/products`, `GET /catalog/products/:id` and `POST /messages/send-product` (product card, Baileys), but no create/update of catalog products
 - **All products are sent as fallback** — richly formatted text+image messages with product name, description, price, availability, and image
 - **Item auto-fetch** — name, description, image, and valuation_rate are pulled from the linked Item
 - **All fields are editable** — WhatsApp-specific overrides don't affect the original Item
@@ -815,6 +815,9 @@ Whitelisted `openwa_bridge.whatsapp_account` methods for the newer OpenWA API su
 messages/
   vote_poll(account, chat_id, poll_message_id, options)
     └─ POST /messages/vote-poll { chatId, pollMessageId, options[] }
+  click_button(account, chat_id, message_id, button_id, text=None)
+    └─ POST /messages/click-button { chatId, messageId, buttonId, text? }
+       (structured prompt reply, Baileys; wweb.js → 501)
   pin_message(account, chat_id, message_id, duration_seconds=604800)
     └─ POST /messages/pin { chatId, messageId, durationSeconds }
   unpin_message(account, chat_id, message_id)

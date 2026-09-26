@@ -1248,6 +1248,63 @@ class TestVotePoll(IntegrationTestCase):
         self.assertEqual(body["options"], ["Yes", "No"])
 
 
+class TestClickButton(IntegrationTestCase):
+    """Test click_button whitelisted method."""
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_calls_click_button_endpoint(self, mock_frappe, mock_api):
+        from openwa_bridge.whatsapp_account import click_button
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+        )
+        mock_frappe.get_doc.return_value.get_password.return_value = "api-key"
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("POST", 200)
+
+        result = click_button(
+            account_name="test-account",
+            chat_id="1234567890@c.us",
+            message_id="prompt-001",
+            button_id="yes",
+            text="Yes, send it",
+        )
+
+        self.assertEqual(result["status"], "ok")
+        call_args = mock_api.call_args
+        self.assertEqual(call_args[0][1], "POST")
+        self.assertEqual(call_args[0][2], "/messages/click-button")
+        body = call_args.kwargs["json_data"]
+        self.assertEqual(body["chatId"], "1234567890@c.us")
+        self.assertEqual(body["messageId"], "prompt-001")
+        self.assertEqual(body["buttonId"], "yes")
+        self.assertEqual(body["text"], "Yes, send it")
+
+    @patch("openwa_bridge.whatsapp_account.openwa_api")
+    @patch("openwa_bridge.whatsapp_account.frappe")
+    def test_omits_text_when_none(self, mock_frappe, mock_api):
+        from openwa_bridge.whatsapp_account import click_button
+        mock_frappe.get_doc.return_value = MagicMock(
+            openwa_base_url="http://localhost:2785",
+            openwa_session_id="session-001",
+        )
+        mock_frappe.get_doc.return_value.get_password.return_value = "api-key"
+        mock_frappe.has_permission.return_value = True
+        mock_api.return_value = mock_openwa_api("POST", 200)
+
+        click_button(
+            account_name="test-account",
+            chat_id="1234567890@c.us",
+            message_id="prompt-001",
+            button_id="yes",
+        )
+
+        body = mock_api.call_args.kwargs["json_data"]
+        self.assertNotIn("text", body)
+        self.assertEqual(body["buttonId"], "yes")
+
+
 class TestPinMessage(IntegrationTestCase):
     """Test pin_message whitelisted method."""
 

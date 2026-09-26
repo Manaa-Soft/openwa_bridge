@@ -67,7 +67,8 @@ def openwa_type_to_frappe(openwa_type: str) -> str:
     Map OpenWA message type strings to frappe_whatsapp content_type values.
 
     OpenWA types: text, image, video, audio, voice, document, sticker,
-                  location, contact, poll, call, revoked, masked, unknown
+                  location, contact, poll, call, revoked, masked, unknown,
+                  order, product (commerce)
     frappe_whatsapp content_type: text, document, image, video, audio,
                   flow, reaction, location, contact, button, interactive, order
     """
@@ -84,6 +85,8 @@ def openwa_type_to_frappe(openwa_type: str) -> str:
         "poll": "text",
         "reaction": "reaction",
         "revoked": "text",
+        "order": "order",
+        "product": "order",
     }
     return type_map.get(openwa_type, "text")
 

@@ -503,7 +503,7 @@ The bridge supports the OpenWA **0.18.0** API contract. Upgrade OpenWA to **0.18
 
 ### OpenWA 0.19.x-0.23.x Behaviour (bridge support)
 
-The bridge tracks the OpenWA `main` branch (tested against **0.23.4**). The only hard-breaking change is the removal of catalog sends; everything else is additive and the bridge exposes it through new whitelisted methods.
+The bridge tracks the OpenWA `main` branch (tested against **0.23.7**). The only hard-breaking change is the removal of catalog sends; everything else is additive and the bridge exposes it through new whitelisted methods.
 
 | Feature | What changed | Bridge behaviour |
 |---|---|---|
@@ -513,6 +513,11 @@ The bridge tracks the OpenWA `main` branch (tested against **0.23.4**). The only
 | `POST /chats/read` (0.23) | Optional `messageIds` array for per-message read receipts (Baileys) | `mark_chat_read(..., message_ids="id1,id2")` forwards up to 100 IDs as `messageIds`; omitting it marks the whole chat read |
 | Chat list payload (0.23.4) | `GET /sessions/:sessionId/chats` now also returns `archived`/`pinned`/`muted`/`muteExpiration` | Read-only; no bridge change required |
 | Messages list (0.23.4) | `GET /sessions/:sessionId/messages` accepts `inlineMedia=false` and an `after` keyset cursor | Read-only; no bridge change required |
+| Inbound commerce types (0.23.5) | `order` / `product` arrive typed on `message.received` instead of bodyless `unknown` | `_handle_inbound_message` maps both to `content_type = "order"` |
+| Inbound prompt taps (0.23.6+) | Business-prompt button/list replies arrive as `type: "text"` with a `button { id, text? }` field | Empty-body taps store the button text/id as the message body |
+| `POST /messages/click-button` (0.23.6) | Structured prompt reply (Baileys; whatsapp-web.js answers `501`) | New whitelisted method: `click_button(account_name, chat_id, message_id, button_id, text=None)` |
+| Session name filter (0.23.5) | `GET /api/sessions?name=` returns the session with that exact name | Not used; bridge matches `name` from the full list |
+| Store/error refinements (0.23.5-0.23.7) | `404`/`403`/`429`/`501` answers tightened on many routes; `GET .../contacts` lists only saved contacts (Baileys); catalog product omits `price`/`currency` when unset | Transparent to `openwa_api()` — non-2xx surfaces as an error |
 | All session routes (0.19) | Session IDs unified to `{sessionId}` path segments | No bridge change — paths are relative and joined onto `/api/sessions/{session_id}` by `openwa_api()` |
 | New message ops (0.19-0.23) | `vote-poll`, `pin`, `unpin`, `star`, `GET /messages/:chatId/:messageId/media` | New whitelisted methods: `vote_poll`, `pin_message`, `unpin_message`, `star_message`, `get_chat_media` |
 | New chat ops (0.19-0.23) | `POST /chats/archive`, `POST /chats/mute`, `POST /chats/pin`, `DELETE /chats/:chatId/messages`, per-session `GET`/`PATCH /proxy` | New whitelisted methods: `archive_chat`, `mute_chat`, `pin_chat`, `clear_chat_messages`, `get_session_proxy`, `set_session_proxy` |

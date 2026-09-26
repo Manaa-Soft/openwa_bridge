@@ -633,3 +633,107 @@ class TestCreateCommunication(IntegrationTestCase):
         lead_doc.insert.assert_called_once_with(ignore_permissions=True)
         contact_doc.insert.assert_called_once_with(ignore_permissions=True)
         comm_doc.insert.assert_called_once_with(ignore_permissions=True)
+
+
+class TestHandleInboundMessage(IntegrationTestCase):
+    """Test _handle_inbound_message handler."""
+
+    def setUp(self):
+        super().setUp()
+        from openwa_bridge.inbound import _handle_inbound_message
+        self.handler = _handle_inbound_message
+
+    def _mock_account(self):
+        return MagicMock(name="account-001")
+
+    @patch("openwa_bridge.inbound.frappe", autospec=True)
+    def test_button_tap_captures_button_text(self, mock_frappe):
+        """A text-typed prompt tap with empty body should store button.text."""
+        mock_frappe.get_doc.return_value = MagicMock()
+        mock_frappe.db.get_single_value.return_value = None
+        mock_frappe.cache.return_value.get_value.return_value = None
+
+        self.handler(
+            {
+                "from": "1234567890@c.us",
+                "type": "text",
+                "body": "",
+                "id": "msg-001",
+                "fromMe": False,
+                "button": {"id": "yes", "text": "Yes, send it"},
+            },
+            self._mock_account(),
+            "session-001",
+        )
+
+        doc_args = mock_frappe.get_doc.call_args[0][0]
+        self.assertEqual(doc_args["content_type"], "text")
+        self.assertEqual(doc_args["message"], "Yes, send it")
+
+    @patch("openwa_bridge.inbound.frappe", autospec=True)
+    def test_button_tap_falls_back_to_button_id(self, mock_frappe):
+        """A button tap without text should fall back to the button id."""
+        mock_frappe.get_doc.return_value = MagicMock()
+        mock_frappe.db.get_single_value.return_value = None
+        mock_frappe.cache.return_value.get_value.return_value = None
+
+        self.handler(
+            {
+                "from": "1234567890@c.us",
+                "type": "text",
+                "body": "",
+                "id": "msg-002",
+                "fromMe": False,
+                "button": {"id": "no", "text": ""},
+            },
+            self._mock_account(),
+            "session-001",
+        )
+
+        doc_args = mock_frappe.get_doc.call_args[0][0]
+        self.assertEqual(doc_args["message"], "no")
+
+    @patch("openwa_bridge.inbound.frappe", autospec=True)
+    def test_order_message_maps_to_order_content_type(self, mock_frappe):
+        """Inbound commerce messages (0.23.5+) should map to content_type 'order'."""
+        mock_frappe.get_doc.return_value = MagicMock()
+        mock_frappe.db.get_single_value.return_value = None
+        mock_frappe.cache.return_value.get_value.return_value = None
+
+        self.handler(
+            {
+                "from": "1234567890@c.us",
+                "type": "order",
+                "body": "",
+                "id": "msg-003",
+                "fromMe": False,
+            },
+            self._mock_account(),
+            "session-001",
+        )
+
+        doc_args = mock_frappe.get_doc.call_args[0][0]
+        self.assertEqual(doc_args["content_type"], "order")
+
+    @patch("openwa_bridge.inbound.frappe", autospec=True)
+    def test_body_not_overwritten_when_present(self, mock_frappe):
+        """A text message with its own body must keep it regardless of button field."""
+        mock_frappe.get_doc.return_value = MagicMock()
+        mock_frappe.db.get_single_value.return_value = None
+        mock_frappe.cache.return_value.get_value.return_value = None
+
+        self.handler(
+            {
+                "from": "1234567890@c.us",
+                "type": "text",
+                "body": "Typed message",
+                "id": "msg-004",
+                "fromMe": False,
+                "button": {"id": "yes", "text": "Yes"},
+            },
+            self._mock_account(),
+            "session-001",
+        )
+
+        doc_args = mock_frappe.get_doc.call_args[0][0]
+        self.assertEqual(doc_args["message"], "Typed message")

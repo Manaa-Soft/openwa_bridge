@@ -3,10 +3,16 @@
 Provides whitelisted methods to manage catalog products and send them
 to WhatsApp chats as richly formatted text+image fallback messages.
 
-OpenWA does not implement any catalog endpoints (neither engine supports
-create/read/update of catalog products), so all product data lives in
-Frappe's ``WhatsApp Catalog Product`` DocType and is sent as fallback
-messages.
+OpenWA exposes read-only catalog endpoints (``GET /catalog``,
+``GET /catalog/products``, ``GET /catalog/products/:id``) plus
+``POST /messages/send-product`` (product card, Baileys); it does not
+implement create/update of catalog products.  Product data therefore
+lives in Frappe's ``WhatsApp Catalog Product`` DocType and is sent (a)
+raw through the OpenWA catalog/product-card endpoints (see
+``openwa_bridge.whatsapp_account.get_catalog`` /
+``get_catalog_products`` / ``get_catalog_product`` /
+``send_product_message``) or (b) as fallback text+image messages via this
+module when the product card is unavailable.
 """
 from __future__ import annotations
 

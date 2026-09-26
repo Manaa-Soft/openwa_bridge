@@ -2598,6 +2598,37 @@ def vote_poll(account_name: str, chat_id: str, poll_message_id: str, options: st
 
 
 @frappe.whitelist()
+def click_button(account_name: str, chat_id: str, message_id: str,
+                 button_id: str, text: str | None = None) -> dict:
+    """Send a structured button/list reply against a stored WhatsApp Business prompt.
+
+    OpenWA 0.23.6+ (Baileys only; whatsapp-web.js answers ``501``).  The prompt must
+    still exist in the engine's message store, so an evicted prompt returns ``404``.
+
+    Args:
+        chat_id: Chat where the prompt lives.
+        message_id: Message ID of the stored prompt.
+        button_id: Id of the button (or list-row) to tap.
+        text: Optional visible label; when omitted the engine resolves it from the prompt.
+    """
+    if not frappe.has_permission("WhatsApp Account", "write", account_name):
+        frappe.throw("Insufficient permissions.", frappe.PermissionError)
+    account = _get_account(account_name)
+    payload: dict = {
+        "chatId": chat_id,
+        "messageId": message_id,
+        "buttonId": button_id,
+    }
+    if text:
+        payload["text"] = text
+    try:
+        result = openwa_api(account, "POST", "/messages/click-button", json_data=payload)
+        return {"status": "ok", "result": result}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+@frappe.whitelist()
 def pin_message(account_name: str, chat_id: str, message_id: str,
                 duration_seconds: int = 604800) -> dict:
     """Pin a message in a chat.

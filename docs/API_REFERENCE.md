@@ -1854,6 +1854,20 @@ Cast a vote on a WhatsApp poll.
 
 **Endpoint**: `POST /messages/vote-poll` with `{chatId, pollMessageId, options}`.
 
+### click_button
+
+Send a structured button/list reply against a stored WhatsApp Business prompt (OpenWA 0.23.6+, Baileys only).
+
+**Method**: `openwa_bridge.whatsapp_account.click_button`
+
+**Args**: `{ account_name: string, chat_id: string, message_id: string, button_id: string, text?: string }`
+
+- `message_id`: Message ID of the stored prompt (an evicted prompt answers `404`).
+- `button_id`: Id of the button (or list-row) to tap.
+- `text`: optional visible label; when omitted the engine resolves it from the stored prompt.
+
+**Endpoint**: `POST /messages/click-button` with `{chatId, messageId, buttonId, text?}`. whatsapp-web.js answers `501`.
+
 ### pin_message
 
 Pin a message in a chat.

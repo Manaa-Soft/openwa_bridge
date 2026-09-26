@@ -48,6 +48,12 @@ class TestOpenwaTypeToFrappe(IntegrationTestCase):
     def test_unknown_defaults_to_text(self):
         self.assertEqual(openwa_type_to_frappe("unknown_type"), "text")
 
+    def test_order_maps_to_order(self):
+        self.assertEqual(openwa_type_to_frappe("order"), "order")
+
+    def test_product_maps_to_order(self):
+        self.assertEqual(openwa_type_to_frappe("product"), "order")
+
 
 class TestTemplateVarConversion(IntegrationTestCase):
     """Test bidirectional template variable conversion."""
