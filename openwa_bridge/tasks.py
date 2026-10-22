@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import frappe
 import requests
 
-from openwa_bridge.utils import get_cached_account, get_account_setting, get_api_key, _http_session
+from openwa_bridge.utils import get_cached_account, get_account_setting, get_api_key, _http_session, openwa_error_message
 
 
 def _get_openwa_accounts() -> list[dict]:
@@ -613,8 +613,8 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
     and ``openwa_print_format``.  Renders the reference doc as an image
     and sends it via OpenWA send-image endpoint with the text as caption.
 
-    Returns True if image was sent successfully (or delivered despite a
-    non-2xx response — verified via message_id), False otherwise.
+    Returns True only when a message ID confirms delivery, or False for a
+    definite failure. Unresolved sends raise so the outbox retries the same key.
     """
     if not msg.template:
         return False
@@ -644,7 +644,12 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
     if getattr(tmpl, "openwa_include_letterhead", False):
         letterhead = getattr(tmpl, "openwa_letterhead", None) or None
 
-    from openwa_bridge.utils import render_doc_as_image, get_api_key, _http_session
+    from openwa_bridge.utils import (
+        render_doc_as_image,
+        get_api_key,
+        _http_session,
+        build_idempotency_key,
+    )
     from frappe_whatsapp.utils import format_number
 
     image_bytes = render_doc_as_image(ref_doctype, ref_name, print_format, letterhead=letterhead)
@@ -671,11 +676,18 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
         payload["caption"] = caption
 
     img_timeout = get_account_setting(account, "openwa_image_timeout", 90)
+    # Distinct key from the subsequent text send so OpenWA's per-session
+    # idempotency store (UNIQUE(sessionId, idempotencyKey), route-agnostic)
+    # does not replay the header image when the caption/text is sent.
+    headers = {
+        "X-API-Key": api_key,
+        "Idempotency-Key": build_idempotency_key(f"{msg.name}-hdr"),
+    }
     try:
         img_resp = _http_session.post(
             url,
             json=payload,
-            headers={"X-API-Key": api_key},
+            headers=headers,
             timeout=img_timeout,
         )
     except Exception as e:
@@ -715,42 +727,34 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
 
     if msg_id:
         frappe.db.set_value("WhatsApp Message", msg.name, "message_id", msg_id)
-
-    # --- 2xx = success ---
-    if img_resp.status_code < 400:
-        if msg_id:
-            frappe.db.set_value("WhatsApp Message", msg.name, "status", "Sent")
+        frappe.db.set_value("WhatsApp Message", msg.name, "status", "Sent")
         return True
 
-    # --- Non-2xx but message may have been delivered anyway ---
-    # OpenWA engines (whatsapp-web.js/Baileys) deliver the message
-    # BEFORE the REST response is built.  A 500 after delivery is
-    # extremely common when the engine succeeds but post-send
-    # persistence (saveOutgoingMessage / persistSentState) fails
-    # on the OpenWA server side.
-    #
-    # We do NOT wait for the ack webhook here — it can take 10+
-    # seconds to arrive, which would cause a text fallback and
-    # duplicate delivery.  Instead, assume the image was delivered
-    # on any 500 and return True to prevent the text fallback.
-    # The ack webhook handler (_handle_status_update / _handle_message_sent)
-    # will reconcile the message_id when it arrives.
+    # A conflict (including IDEMPOTENCY_KEY_IN_PROGRESS or
+    # IDEMPOTENCY_OUTCOME_UNKNOWN) does not confirm delivery. Let the outbox
+    # retry with the same image key, or reconcile via an acknowledgement.
+    if img_resp.status_code == 409:
+        raise requests.HTTPError(
+            openwa_error_message(img_resp, context="POST /messages/send-image"),
+            response=img_resp,
+        )
+    if img_resp.status_code < 400:
+        raise requests.HTTPError(
+            "OpenWA image send returned no messageId; delivery is unresolved",
+            response=img_resp,
+        )
+
     frappe.log_error(
-        title="OpenWA: Dynamic header image returned error (assuming delivered)",
+        title="OpenWA: Dynamic header image failed",
         message=(
             f"Template {tmpl.name}, Doc {ref_doctype} {ref_name}\n"
             f"POST {url}\n"
             f"Status: {img_resp.status_code}\n"
             f"Image size: {len(image_bytes)} bytes ({mimetype})\n"
-            f"Response: {img_resp.text[:2000]}\n"
-            f"Returning True to prevent text fallback duplicate."
+            f"Response: {img_resp.text[:2000]}"
         ),
     )
-
-    if msg_id:
-        frappe.db.set_value("WhatsApp Message", msg.name, "status", "Sent")
-
-    return True
+    return False
 
 
 def _send_outbox_message(msg, account, outbox) -> None:  # noqa: C901
@@ -1274,7 +1278,11 @@ def replay_webhooks(account_name: str, since: str | None = None, chat_id: str | 
             headers={"X-API-Key": api_key},
             timeout=30,
         )
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            raise requests.HTTPError(
+                openwa_error_message(resp, context="GET /api/sessions/:id/messages"),
+                response=resp,
+            )
         messages = resp.json()
     except Exception as exc:
         frappe.throw(f"Failed to fetch messages from OpenWA: {exc}")

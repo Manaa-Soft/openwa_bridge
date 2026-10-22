@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
-from unittest.mock import patch, MagicMock, PropertyMock
+from unittest.mock import MagicMock, PropertyMock, patch
 
 import frappe
 from frappe.tests import IntegrationTestCase
@@ -1122,3 +1122,127 @@ class TestTemplateMessageRendering(IntegrationTestCase):
         self.assertNotIn("\u2066", instance.message)
         self.assertNotIn("\u2069", instance.message)
         self.assertIn("Dear Acme Corp", instance.message)
+
+
+class TestSendViaOpenwaIdempotency(IntegrationTestCase):
+    """Idempotency contract for outbound sends through _send_via_openwa."""
+
+    def setUp(self):
+        super().setUp()
+        from openwa_bridge.whatsapp_message import OverrideWhatsAppMessage
+
+        self.msg_class = OverrideWhatsAppMessage
+
+    def _account(self):
+        account = MagicMock()
+        account.get.side_effect = lambda key, default=None: {
+            "openwa_base_url": "http://localhost:2785",
+            "openwa_session_id": "session-001",
+        }.get(key, default)
+        account.get_password.return_value = "api-key-123"
+        return account
+
+    def _instance(self, **kwargs):
+        instance = self.msg_class.__new__(self.msg_class)
+        attrs = {
+            "name": "MSG-IDEM-001",
+            "to": "1234567890",
+            "content_type": "text",
+            "message": "hello",
+            "use_template": False,
+            "template": None,
+            "body_param": None,
+            "template_parameters": None,
+            "is_reply": False,
+            "reply_to_message_id": None,
+            "message_id": "",
+        }
+        attrs.update(kwargs)
+        for key, value in attrs.items():
+            setattr(instance, key, value)
+        return instance
+
+    @patch("openwa_bridge.whatsapp_message._http_session")
+    @patch("openwa_bridge.whatsapp_message._send_typing_indicator")
+    @patch("openwa_bridge.whatsapp_message.frappe")
+    def test_send_text_carries_stable_idempotency_key(self, mock_frappe, mock_typing, mock_session):
+        """A text send must carry the doc-derived Idempotency-Key header."""
+        instance = self._instance()
+        mock_session.post.return_value = mock_openwa_api("POST", 200, {"messageId": "msg-123"})
+
+        with patch.object(self.msg_class, "_ensure_session_ready"):
+            instance._send_via_openwa(self._account(), {})
+
+        sends = [c for c in mock_session.post.call_args_list if "send-text" in str(c.args[0])]
+        self.assertEqual(len(sends), 1)
+        self.assertEqual(sends[0].kwargs["headers"]["Idempotency-Key"], "frappe-MSG-IDEM-001")
+        self.assertEqual(sends[0].kwargs["json"], {"chatId": "1234567890@c.us", "text": "hello"})
+
+    @patch("openwa_bridge.whatsapp_message._http_session")
+    @patch("openwa_bridge.whatsapp_message._send_typing_indicator")
+    @patch("openwa_bridge.whatsapp_message.frappe")
+    def test_existing_message_id_skips_send(self, mock_frappe, mock_typing, mock_session):
+        """A message that already has a message_id must never be sent twice."""
+        instance = self._instance(message_id="existing-msg-id")
+
+        with patch.object(self.msg_class, "_ensure_session_ready") as mock_ready:
+            instance._send_via_openwa(self._account(), {})
+
+        mock_ready.assert_not_called()
+        mock_session.post.assert_not_called()
+        mock_typing.assert_not_called()
+        mock_frappe.logger.return_value.info.assert_called_once()
+        logged = mock_frappe.logger.return_value.info.call_args[0][0]
+        self.assertIn("skipping send", logged)
+        self.assertIn("existing-msg-id", logged)
+
+
+class TestDynamicHeaderIdempotency(IntegrationTestCase):
+    """The dynamic header image must use its own Idempotency-Key."""
+
+    @patch("openwa_bridge.tasks.get_account_setting", return_value=90)
+    @patch("openwa_bridge.utils.get_api_key", return_value="api-key-123")
+    @patch("openwa_bridge.utils.render_doc_as_image", return_value=b"\xff\xd8\xff\xe0fake-jpeg")
+    @patch("openwa_bridge.utils._http_session")
+    @patch("openwa_bridge.tasks.frappe")
+    def test_header_image_uses_distinct_key(
+        self, mock_frappe, mock_session, mock_render, mock_api_key, mock_setting
+    ):
+        tmpl = MagicMock()
+        tmpl.name = "TMPL-001"
+        tmpl.openwa_dynamic_header = 1
+        tmpl.openwa_print_format = "Standard"
+        tmpl.openwa_include_letterhead = 0
+
+        msg = MagicMock()
+        msg.name = "MSG-001"
+        msg.to = "1234567890"
+        msg.template = "TMPL-001"
+        msg.reference_doctype = "Sales Invoice"
+        msg.reference_name = "SINV-001"
+        msg.openwa_render_doctype = None
+        msg.openwa_render_name = None
+
+        def _get_doc(doctype, name=None):
+            return tmpl if doctype == "WhatsApp Templates" else MagicMock()
+
+        mock_frappe.get_doc.side_effect = _get_doc
+        mock_session.post.return_value = mock_openwa_api("POST", 200, {"messageId": "img-1"})
+
+        account = MagicMock()
+        account.get.side_effect = lambda key, default=None: {
+            "openwa_base_url": "http://localhost:2785",
+            "openwa_session_id": "session-001",
+        }.get(key, default)
+
+        from openwa_bridge.tasks import _send_dynamic_header_for_outbox
+
+        result = _send_dynamic_header_for_outbox(msg, account)
+
+        self.assertTrue(result)
+        mock_session.post.assert_called_once()
+        call = mock_session.post.call_args
+        self.assertIn("/messages/send-image", call.args[0])
+        self.assertEqual(call.kwargs["headers"]["Idempotency-Key"], "frappe-MSG-001-hdr")
+        self.assertEqual(call.kwargs["json"]["mimetype"], "image/jpeg")
+        self.assertEqual(call.kwargs["timeout"], 90)

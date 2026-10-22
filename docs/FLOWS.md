@@ -24,10 +24,12 @@ OverrideWhatsAppMessage.notify(data)
        │
        ▼
   POST /api/sessions/:id/messages/send-text
+  Headers: Idempotency-Key: frappe-<WhatsApp Message name> (optional, v0.25)
   { chatId, text }
        │
        ▼
   resp.json() → messageId → update WhatsApp Message status to "Sent"
+  ── Non-2xx? → openwa_error_message() parses JSON body → raises requests.HTTPError ──
 ```
 
 ## Flow 2: Outbound Template (Desk → WhatsApp)
@@ -55,6 +57,7 @@ _send_via_openwa(account, data)
   │    │    │
   │    │    ▼
   │    │  POST /messages/send-template
+  │    │  Headers: Idempotency-Key: frappe-<WhatsApp Message name> (optional, v0.25)
   │    │  { chatId, templateId, vars: { param1: "val1", ... } }
   │    │    │
   │    │    ▼
@@ -65,6 +68,7 @@ _send_via_openwa(account, data)
   │         ▼
   │       Fallback: _translate_template_payload() → manual substitution
   │       POST /messages/send-text
+  │       Headers: Idempotency-Key: frappe-<WhatsApp Message name> (optional, v0.25)
   │       { chatId, text: "Dear Faissal, your invoice..." }
   │
   ├─ self.template set but self.use_template NOT set?
@@ -288,8 +292,11 @@ receive_openwa_message()
          ├─ "call.received" → _handle_call_received()
          │    └─ Log incoming voice/video call event
          │
-         └─ "status.received" → _handle_status_received()
+         ├─ "status.received" → _handle_status_received()
               └─ Log contact status/story event
+         │
+         └─ "message.receipt" → _handle_message_receipt()
+              └─ Opt-in per-recipient delivery/read/played receipt (group + status broadcasts)
   │
   ▼
   Return {"status": "ok"} (200)
@@ -800,14 +807,14 @@ User creates WhatsApp Catalog Product (linked to ERPNext Item)
 ```
 
 ### Key Points
-- **OpenWA does not support catalog** — neither engine implements WhatsApp Business catalog operations (create/read/update). Catalog endpoints always return 501.
+- **OpenWA catalog is read-only** — OpenWA exposes `GET /catalog`, `GET /catalog/products`, `GET /catalog/products/:id` and `POST /messages/send-product` (product card, Baileys), but no create/update of catalog products
 - **All products are sent as fallback** — richly formatted text+image messages with product name, description, price, availability, and image
 - **Item auto-fetch** — name, description, image, and valuation_rate are pulled from the linked Item
 - **All fields are editable** — WhatsApp-specific overrides don't affect the original Item
 
 ---
 
-## Flow 15: OpenWA v0.19-v0.23 Whitelisted Methods
+## Flow 15: OpenWA v0.19-v0.25 Whitelisted Methods
 
 Whitelisted `openwa_bridge.whatsapp_account` methods for the newer OpenWA API surface. All follow the same pattern: permission check → `_get_account` → `openwa_api(account, METHOD, <relative path>, json_data)`. Relative paths are joined onto `/api/sessions/{session_id}` by `openwa_api()` (handles the uniform `{sessionId}` routing in v0.19+).
 
@@ -815,6 +822,9 @@ Whitelisted `openwa_bridge.whatsapp_account` methods for the newer OpenWA API su
 messages/
   vote_poll(account, chat_id, poll_message_id, options)
     └─ POST /messages/vote-poll { chatId, pollMessageId, options[] }
+  click_button(account, chat_id, message_id, button_id, text=None)
+    └─ POST /messages/click-button { chatId, messageId, buttonId, text? }
+       (structured prompt reply, Baileys; wweb.js → 501)
   pin_message(account, chat_id, message_id, duration_seconds=604800)
     └─ POST /messages/pin { chatId, messageId, durationSeconds }
   unpin_message(account, chat_id, message_id)

@@ -144,6 +144,8 @@ def receive_openwa_message() -> dict[str, str]:
             _handle_call_received(event_data, session_id)
         elif event_type == "status.received":
             _handle_status_received(event_data, session_id)
+        elif event_type == "message.receipt":
+            _handle_message_receipt(event_data, session_id)
     except Exception as e:
         frappe.log_error(
             title="OpenWA Inbound Handler Error",
@@ -228,6 +230,16 @@ def _handle_inbound_message(
     reply_to_message_id = quoted.get("id") if is_reply else None
 
     message_body: str = msg_data.get("body", "")
+
+    # Prompt-tap reply (0.23.6+): OpenWA types business-prompt button/list
+    # choices as "text" and carries the tapped button as ``button { id, text? }``.
+    # The body may be empty, so surface the chosen button text/id.
+    button_data = msg_data.get("button")
+    button_label = ""
+    if isinstance(button_data, dict):
+        button_label = button_data.get("text") or button_data.get("id") or ""
+    if content_type == "text" and not message_body and button_label:
+        message_body = button_label
 
     doc_data: dict = {
         "doctype": "WhatsApp Message",
@@ -378,47 +390,8 @@ def _handle_message_sent(event_data: dict) -> None:
     if existing:
         return
 
-    # The sent event has ``to`` as a JID like "12345@c.us".  Extract phone.
     to_jid: str = event_data.get("to") or event_data.get("chatId") or ""
-    phone = strip_jid_suffix(to_jid)
-    if not phone:
-        return
-
-    # Primary: find the most recent outgoing message to this EXACT phone
-    # that still has no message_id.  Use an exact match on the last segment
-    # of the `to` field (which stores the formatted phone) instead of LIKE.
-    name = frappe.db.get_value(
-        "WhatsApp Message",
-        filters={
-            "type": "Outgoing",
-            "message_id": ("is", "not set"),
-        },
-        order_by="creation desc",
-        limit_page_length=1,
-        pluck="name",
-    )
-
-    # Verify the matched message is actually going to this phone.
-    # The `to` field may contain the full JID or just the phone.
-    if name:
-        to_field = frappe.db.get_value("WhatsApp Message", name, "to") or ""
-        to_phone = strip_jid_suffix(to_field)
-        if to_phone != phone:
-            name = None
-
-    if not name:
-        # Fallback: try LIKE but with exact phone boundary to reduce false matches
-        name = frappe.db.get_value(
-            "WhatsApp Message",
-            filters={
-                "to": ("like", f"%{phone}"),
-                "type": "Outgoing",
-                "message_id": ("is", "not set"),
-            },
-            order_by="creation desc",
-            limit_page_length=1,
-            pluck="name",
-        )
+    name = _find_pending_outgoing_message(to_jid)
     if not name:
         return
 
@@ -439,11 +412,14 @@ def _handle_status_update(event_data: dict) -> None:
     """
     message_id: str = event_data.get("messageId") or event_data.get("id", "")
     status: str = event_data.get("status", "")
+    # OpenWA >= 0.25.0 includes `chatId` on ack/failed events; used as a
+    # last-resort fallback when the message id cannot be resolved directly.
+    chat_id: str = event_data.get("chatId", "")
 
     if not message_id or not status:
         return
 
-    name = _find_whatsapp_message(message_id)
+    name = _find_whatsapp_message(message_id, chat_id=chat_id)
 
     if not name:
         return
@@ -488,12 +464,39 @@ def _handle_status_update(event_data: dict) -> None:
         _reconcile_outbox_on_ack(name, message_id)
 
 
-def _find_whatsapp_message(wa_msg_id: str) -> str | None:
+def _find_pending_outgoing_message(chat_id: str) -> str | None:
+    """Find the latest unassigned outgoing message to the complete recipient."""
+    recipient = strip_jid_suffix(chat_id)
+    if not recipient:
+        return None
+
+    # Compare complete values; suffix/LIKE matching can select another phone.
+    # Group IDs may contain a hyphen and must retain their group identity.
+    suffixes = ("@g.us",) if chat_id.endswith("@g.us") or "-" in recipient else (
+        "@c.us", "@s.whatsapp.net", "@lid",
+    )
+    return frappe.db.get_value(
+        "WhatsApp Message",
+        filters={
+            "to": ("in", [recipient, *(recipient + suffix for suffix in suffixes)]),
+            "type": "Outgoing",
+            "message_id": ("is", "not set"),
+        },
+        order_by="creation desc",
+        limit_page_length=1,
+        pluck="name",
+    )
+
+
+def _find_whatsapp_message(wa_msg_id: str, chat_id: str = "") -> str | None:
     """
     Finds the Frappe document name associated with an OpenWA message ID.
     
     Parameters:
         wa_msg_id (str): The OpenWA message identifier.
+        chat_id (str): Optional OpenWA chat JID (e.g. ``1234@c.us``) used as
+            a fallback recipient when the message id itself does not encode one.
+            Supports individual phones and full or normalized group JIDs.
     
     Returns:
         str | None: The matching WhatsApp Message document name, or None when no
@@ -508,30 +511,23 @@ def _find_whatsapp_message(wa_msg_id: str) -> str | None:
     if name:
         return name
 
-    # Fallback: extract phone from JID-style message ID
-    phone = strip_jid_suffix(wa_msg_id.split("_")[1]) if "_" in wa_msg_id else ""
-    if not phone or not phone.isdigit():
+    # Prefer the event's explicit chat; legacy JID-style IDs encode it in
+    # the second segment, while opaque IDs may also contain underscores.
+    recipient_jid = chat_id or (wa_msg_id.split("_")[1] if "_" in wa_msg_id else "")
+    recipient = strip_jid_suffix(recipient_jid)
+    is_group = recipient_jid.endswith("@g.us") or (
+        "-" in recipient and all(part.isdigit() for part in recipient.split("-"))
+    )
+    if not recipient or (not is_group and not recipient.isdigit()):
         return None
 
-    # Try exact match first: most recent outgoing with no message_id
-    # whose `to` field ends with this phone
-    name = frappe.db.get_value(
-        "WhatsApp Message",
-        filters={
-            "to": ("like", f"%{phone}"),
-            "type": "Outgoing",
-            "message_id": ("is", "not set"),
-        },
-        order_by="creation desc",
-        limit_page_length=1,
-        pluck="name",
-    )
+    name = _find_pending_outgoing_message(recipient_jid)
     if name:
         # Store the message_id now so future lookups are instant
         frappe.db.set_value("WhatsApp Message", name, "message_id", wa_msg_id)
         frappe.logger().info(
             f"OpenWA: resolved message_id '{wa_msg_id}' → WhatsApp Message {name} "
-            f"(fallback by phone {phone})"
+            f"(fallback by recipient {recipient})"
         )
     return name
 
@@ -842,6 +838,32 @@ def _handle_status_received(event_data: dict, session_id: str) -> None:
         f"status.received: {contact} ({status_type or 'unknown'})",
         event_data,
         contact=contact,
+    )
+
+
+def _handle_message_receipt(event_data: dict, session_id: str) -> None:
+    """
+    Persist a per-recipient message receipt (Baileys only) to the OpenWA Event Log.
+
+    Reported for group and status-broadcast sends, one event per recipient per
+    status transition (`delivered`, `read`, `played`). Receipts from the
+    account's own linked devices are dropped upstream, so `participant` is
+    always another user. The event is opt-in at the OpenWA subscription level
+    and is not delivered to wildcard (`*`) subscriptions.
+    """
+    message_id: str = event_data.get("messageId", "") or event_data.get("id", "")
+    participant: str = event_data.get("participant", "")
+    status: str = event_data.get("status", "")
+
+    if not message_id or not participant:
+        return
+
+    _log_event(
+        "message.receipt",
+        session_id,
+        f"message.receipt: {participant} ({status or 'unknown'})",
+        event_data,
+        contact=participant,
     )
 
 

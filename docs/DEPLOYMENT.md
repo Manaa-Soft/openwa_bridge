@@ -260,7 +260,8 @@ Get the API key from the OpenWA dashboard (localhost:2886).
 
 Via dashboard or API:
 - URL: `https://your-site.local/api/method/openwa_bridge.inbound.receive_openwa_message`
-- Events: message.received, message.sent, message.ack, message.failed, message.revoked, message.reaction, message.edited, session.status, session.qr, session.authenticated, session.disconnected, session.reconnect_loop, group.join, group.leave, group.update, call.received, status.received
+- Events: message.received, message.sent, message.ack, message.failed, message.revoked, message.reaction, message.receipt, message.edited, session.status, session.qr, session.authenticated, session.disconnected, session.reconnect_loop, group.join, group.leave, group.update, call.received, status.received
+- Note: `message.receipt` is opt-in and **not** delivered to the `*` wildcard — it must be listed explicitly.
 
 ### 7. Configure Frappe
 
@@ -501,9 +502,9 @@ The bridge supports the OpenWA **0.18.0** API contract. Upgrade OpenWA to **0.18
 
 **0.17.x and earlier:** the pre-0.18 contracts (`chatIds`+`text` bulk, `DELETE /messages/:id`, `/chats/:chatId/read`, `/participants/add`) are no longer exercised by the bridge.
 
-### OpenWA 0.19.x-0.23.x Behaviour (bridge support)
+### OpenWA 0.19.x-0.25.x Behaviour (bridge support)
 
-The bridge tracks the OpenWA `main` branch (tested against **0.23.4**). The only hard-breaking change is the removal of catalog sends; everything else is additive and the bridge exposes it through new whitelisted methods.
+The bridge tracks the OpenWA `main` branch (tested against **0.25.0**). The only hard-breaking change is the removal of catalog sends; everything else is additive and the bridge exposes it through new whitelisted methods.
 
 | Feature | What changed | Bridge behaviour |
 |---|---|---|
@@ -513,12 +514,21 @@ The bridge tracks the OpenWA `main` branch (tested against **0.23.4**). The only
 | `POST /chats/read` (0.23) | Optional `messageIds` array for per-message read receipts (Baileys) | `mark_chat_read(..., message_ids="id1,id2")` forwards up to 100 IDs as `messageIds`; omitting it marks the whole chat read |
 | Chat list payload (0.23.4) | `GET /sessions/:sessionId/chats` now also returns `archived`/`pinned`/`muted`/`muteExpiration` | Read-only; no bridge change required |
 | Messages list (0.23.4) | `GET /sessions/:sessionId/messages` accepts `inlineMedia=false` and an `after` keyset cursor | Read-only; no bridge change required |
+| Inbound commerce types (0.23.5) | `order` / `product` arrive typed on `message.received` instead of bodyless `unknown` | `_handle_inbound_message` maps both to `content_type = "order"` |
+| Inbound prompt taps (0.23.6+) | Business-prompt button/list replies arrive as `type: "text"` with a `button { id, text? }` field | Empty-body taps store the button text/id as the message body |
+| `POST /messages/click-button` (0.23.6) | Structured prompt reply (Baileys; whatsapp-web.js answers `501`) | New whitelisted method: `click_button(account_name, chat_id, message_id, button_id, text=None)` |
+| Session name filter (0.23.5) | `GET /api/sessions?name=` returns the session with that exact name | Not used; bridge matches `name` from the full list |
+| Store/error refinements (0.23.5-0.23.7) | `404`/`403`/`429`/`501` answers tightened on many routes; `GET .../contacts` lists only saved contacts (Baileys); catalog product omits `price`/`currency` when unset | Transparent to `openwa_api()` — non-2xx surfaces as an error |
 | All session routes (0.19) | Session IDs unified to `{sessionId}` path segments | No bridge change — paths are relative and joined onto `/api/sessions/{session_id}` by `openwa_api()` |
 | New message ops (0.19-0.23) | `vote-poll`, `pin`, `unpin`, `star`, `GET /messages/:chatId/:messageId/media` | New whitelisted methods: `vote_poll`, `pin_message`, `unpin_message`, `star_message`, `get_chat_media` |
 | New chat ops (0.19-0.23) | `POST /chats/archive`, `POST /chats/mute`, `POST /chats/pin`, `DELETE /chats/:chatId/messages`, per-session `GET`/`PATCH /proxy` | New whitelisted methods: `archive_chat`, `mute_chat`, `pin_chat`, `clear_chat_messages`, `get_session_proxy`, `set_session_proxy` |
 | Group membership requests (0.21+) | `GET /groups/:groupId/membership-requests`, `POST .../membership-requests/approve`, `POST .../membership-requests/reject` | New whitelisted methods: `get_group_membership_requests`, `approve_group_membership_requests`, `reject_group_membership_requests` |
 | Status voice notes (0.21+) | `POST /status/send-voice` | New whitelisted method: `post_status_voice` |
 | Channel management (0.21+) | `POST /channels`, `POST /channels/:channelId/mute`, `POST /channels/:channelId/admins/demote`, `POST /channels/:channelId/owner/transfer` | New whitelisted methods: `create_channel`, `mute_channel`, `demote_channel_admin`, `transfer_channel_ownership` |
+| Outbound idempotency keys (0.25) | Optional `Idempotency-Key` header (1-255 visible ASCII, unique per session) on twelve single-recipient send routes; the stored response is replayed within 24 h (`Idempotent-Replayed: true`). In-flight retry answers `409 IDEMPOTENCY_KEY_IN_PROGRESS`, possible-send failure `409 IDEMPOTENCY_OUTCOME_UNKNOWN`, reused key `422 IDEMPOTENCY_KEY_REUSED` | `build_idempotency_key()` derives the key from the `WhatsApp Message` doc name and threads it through `openwa_api()` and both direct-HTTP send paths; header images use a distinct `-hdr`-suffixed key so image + caption dedupe independently |
+| `message.receipt` (0.25) | New **opt-in** per-recipient receipt event (`delivered`/`read`/`played`) for group + status-broadcast sends (Baileys). **Not** delivered to the `*` wildcard — it must be named explicitly | `_handle_message_receipt` persists it via `_log_event` with `contact = participant`; added to the Settings webhook event list and the `OpenWA Event Log` event-type Select |
+| `message.ack` / `message.failed` `chatId` (0.25) | Payloads now carry `chatId`, making the originating chat available even when the stored `to` is blank | `_handle_status_update` reads `chatId`; `_find_whatsapp_message()` uses it as a fallback when the stored `to` cannot resolve the message |
+| Baileys send errors (0.25) | Unregistered phone answers `400` (one LID lookup is attempted first); phone lookup failure answers `503`; `vote-poll` on whatsapp-web.js answers `400 POLL_OPTION_NOT_FOUND` | `openwa_error_message()` parses the JSON error body (`message`/`error`/`code`) into the raised `requests.HTTPError`, so the real reason surfaces instead of a bare status code |
 
 If you were on 0.18 and only use the previously documented endpoints, upgrading to any 0.19+ version is safe; catalog sends were already failing (501) on 0.19+, so switch to the fallback methods.
 

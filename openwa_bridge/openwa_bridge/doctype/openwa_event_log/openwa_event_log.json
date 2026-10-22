@@ -25,7 +25,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Event Type",
-   "options": "group.join\ngroup.leave\ngroup.update\ncall.received\nstatus.received\nwebhook.delivery_failure\nmessage.reaction",
+   "options": "group.join\ngroup.leave\ngroup.update\ncall.received\nstatus.received\nwebhook.delivery_failure\nmessage.reaction\nmessage.receipt",
    "reqd": 1
   },
   {

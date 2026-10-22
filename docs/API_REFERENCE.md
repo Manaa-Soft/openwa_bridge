@@ -8,6 +8,47 @@ Authentication: `X-API-Key: <api_key>` header on all requests.
 > and Baileys engines return **501 Not Implemented**. The bridge handles this with a
 > fallback that sends richly formatted text+image messages instead.
 
+> **Note**: Send endpoints accept an optional `Idempotency-Key` header (OpenWA 0.25+).
+> The bridge sends it on every supported send — see [Outbound Idempotency](#outbound-idempotency).
+
+---
+
+## Outbound Idempotency
+
+OpenWA 0.25+ accepts an optional `Idempotency-Key` header on send endpoints. Within 24 hours, a
+retry with the same key **and body** replays the first response instead of sending again.
+
+**Header**: `Idempotency-Key: <key>`
+
+**Key format** (bridge-generated, derived from the WhatsApp Message document name):
+
+| Send | Key |
+|---|---|
+| Main send (text, media, template, poll, reply, forward) | `frappe-<WhatsApp Message name>` |
+| Dynamic header image | `frappe-<WhatsApp Message name>-hdr` |
+
+The dynamic header image needs its own key: OpenWA keys idempotency on `(sessionId, key)`
+regardless of route, so reusing the main send's key would collide with it.
+
+- Keys must be 1–255 visible ASCII characters. The bridge replaces any other character with `-`
+  and truncates to 255 (`build_idempotency_key()` in `utils.py`).
+- The key is unique **per session** — the same key on a different session is a different key.
+
+**Behaviour**:
+
+- A replay inside the 24-hour window returns the original result with the `Idempotent-Replayed: true`
+  response header.
+- `409 IDEMPOTENCY_KEY_IN_PROGRESS` — a request with the same key is still running.
+- `409 IDEMPOTENCY_OUTCOME_UNKNOWN` — the send may have happened but the outcome is unknown; the key
+  stays taken.
+- `422 IDEMPOTENCY_KEY_REUSED` — the key was already used with a different route or body.
+- A `4xx` or `501` refusal **before** the engine call frees the key, so a corrected retry may reuse it.
+- An error from an engine send keeps the key taken, regardless of HTTP status (including `409`).
+
+**Endpoints that accept the header** (OpenWA `@IdempotentSend()` routes): `send-text`,
+`send-template`, `send-image`, `send-video`, `send-audio`, `send-document`, `send-location`,
+`send-contact`, `send-sticker`, `send-poll`, `reply`, `forward`.
+
 ---
 
 ## Messages
@@ -598,6 +639,7 @@ OpenWA sends webhooks to Frappe for incoming messages and status changes.
 | `message.received` | Incoming message from a contact | `_handle_inbound_message()` — creates WhatsApp Message, Communication, Lead |
 | `message.sent` | Outgoing message acknowledged by server | `_handle_message_sent()` — updates message status |
 | `message.ack` | Delivery/read receipt | `_handle_status_update()` — updates message status (ack downgrade protection) |
+| `message.receipt` | Per-recipient delivery/read receipt (opt-in, Baileys only) | `_handle_message_receipt()` — logs receipt event with `contact=participant` |
 | `message.failed` | Send failure | `_handle_status_update()` — marks message as Failed |
 | `message.revoked` | Message deleted by sender | `_handle_message_revoked()` — marks message as Revoked |
 | `message.reaction` | Reaction to a message | `_handle_message_reaction()` — logs reaction |
@@ -614,6 +656,11 @@ OpenWA sends webhooks to Frappe for incoming messages and status changes.
 | `status.received` | Contact posted a status/story | `_handle_status_received()` — logs status event |
 
 > **Note**: `test_webhook()` whitelisted method (`openwa_bridge.whatsapp_account.test_webhook`) sends a test webhook delivery — callable from the WhatsApp Account form to verify webhook configuration.
+
+> **Note**: `message.receipt` is **opt-in** at the OpenWA subscription level and is **excluded from the
+> `*` wildcard subscription** — a session subscribed to `*` alone never receives it. It is also
+> **Baileys-only**; the whatsapp-web.js engine does not emit it. See
+> [Message Receipt Payload](#message-receipt-payload).
 
 ### Webhook Payload Structure
 
@@ -645,6 +692,48 @@ OpenWA sends webhooks to Frappe for incoming messages and status changes.
 | `status` | Status/story message |
 | `broadcast` | Broadcast list message |
 | `unknown` | Unrecognized origin |
+
+### Message Receipt Payload
+
+Emitted by OpenWA (Baileys engine only) when a group or status-broadcast message reaches a given
+recipient. One event is delivered per recipient per status transition.
+
+```json
+{
+  "event": "message.receipt",
+  "data": {
+    "id": "true_967777715787@c.us_3EB0...",
+    "messageId": "true_967777715787@c.us_3EB0...",
+    "chatId": "967777715787@c.us",
+    "participant": "967777713637@c.us",
+    "status": "delivered",
+    "timestamp": 1719312000
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | string | Event identifier; also accepted as a fallback for `messageId` |
+| `messageId` | string | ID of the message the receipt refers to |
+| `chatId` | string | Chat the message was sent in |
+| `participant` | string | JID of the recipient the receipt is for |
+| `status` | string | `delivered`, `read`, or `played` |
+| `timestamp` | number | Unix timestamp of the receipt |
+
+**Status values**: `delivered`, `read`, `played` (status broadcasts only).
+
+**Handler behaviour** — `_handle_message_receipt(event_data, session_id)`:
+
+- Requires both a message identifier (`messageId`, falling back to `id`) and a `participant`;
+  if either is missing the event is dropped without logging.
+- Logs an `OpenWA Event Log` entry of type `message.receipt` with `contact=participant`, so the
+  recipient is filterable in the Event Log.
+- Receipts from the account's own linked devices are dropped upstream by OpenWA, so `participant`
+  is always another user.
+
+**Enabling it**: `message.receipt` must be listed explicitly in the account's webhook event
+subscription. A `*` subscription does not include it.
 
 ### HMAC Verification
 
@@ -687,6 +776,46 @@ Common causes:
 
 - Template UUID doesn't exist in OpenWA DB
 - Session doesn't exist
+
+### Structured Error Responses
+
+OpenWA returns machine-readable error bodies. The bridge surfaces the server's own reason instead of
+a bare `Client Error`:
+
+```json
+{ "message": "Poll option not found", "code": "POLL_OPTION_NOT_FOUND" }
+```
+
+```json
+{ "error": { "message": "Session not active", "code": "SESSION_INACTIVE" } }
+```
+
+**Parsing rules** — `openwa_error_message(resp, context="")` in `utils.py`:
+
+| Order | Source | Example |
+|---|---|---|
+| 1 | `error.message` (nested object) | `Session not active` |
+| 2 | `error.code` (nested object) | `SESSION_INACTIVE` |
+| 3 | `message` (top level) | `Poll option not found` |
+| 4 | `error` (top-level string) | `Bad Request` |
+| 5 | `code` (top level) | `POLL_OPTION_NOT_FOUND` |
+| 6 | Raw response text | `<html>...</html>` |
+| 7 | `"(no body)"` when the body is empty | — |
+
+The message is trimmed and truncated to 1000 characters, then formatted as
+`"<context>: OpenWA HTTP <status> — <body>"`. The `context` argument is optional and prefixes the
+string (for example `"vote-poll"`).
+
+**Upstream response preserved**: the raised exception is still
+`requests.exceptions.HTTPError` with the original `response=resp` attached, so callers can read
+`err.response.status_code`, `err.response.json()`, or `err.response.headers` — including the
+`Idempotent-Replayed` header. The enriched text is added to the exception message rather than
+replacing the exception type.
+
+**Where it applies**: `openwa_api()`, outbound sends (`_send_via_openwa`), account API calls
+(`_raw_openwa_call`), message fetching (`_fetch_messages`), and `vote_poll` — for example a
+`400 POLL_OPTION_NOT_FOUND` now surfaces as
+`vote-poll: OpenWA HTTP 400 — Poll option not found` instead of `Client Error: 400`.
 
 ### SSRF Blocked
 
@@ -1838,9 +1967,9 @@ Send a catalog listing to a chat.
 
 ---
 
-## OpenWA v0.19-v0.23 whitelisted methods
+## OpenWA v0.19-v0.25 whitelisted methods
 
-New `openwa_bridge.whatsapp_account` whitelisted methods added for the OpenWA 0.19–0.23 API surface.
+New `openwa_bridge.whatsapp_account` whitelisted methods added for the OpenWA 0.19–0.25 API surface.
 
 ### vote_poll
 
@@ -1853,6 +1982,20 @@ Cast a vote on a WhatsApp poll.
 - `options`: comma-separated option strings (max 12).
 
 **Endpoint**: `POST /messages/vote-poll` with `{chatId, pollMessageId, options}`.
+
+### click_button
+
+Send a structured button/list reply against a stored WhatsApp Business prompt (OpenWA 0.23.6+, Baileys only).
+
+**Method**: `openwa_bridge.whatsapp_account.click_button`
+
+**Args**: `{ account_name: string, chat_id: string, message_id: string, button_id: string, text?: string }`
+
+- `message_id`: Message ID of the stored prompt (an evicted prompt answers `404`).
+- `button_id`: Id of the button (or list-row) to tap.
+- `text`: optional visible label; when omitted the engine resolves it from the stored prompt.
+
+**Endpoint**: `POST /messages/click-button` with `{chatId, messageId, buttonId, text?}`. whatsapp-web.js answers `501`.
 
 ### pin_message
 

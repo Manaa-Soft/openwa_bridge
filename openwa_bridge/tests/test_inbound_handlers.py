@@ -2,18 +2,18 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import frappe
 from frappe.tests import IntegrationTestCase
 
 from openwa_bridge.tests.conftest import (
     make_message_data,
-    make_status_data,
     make_session_status_data,
+    make_status_data,
     make_webhook_payload,
-    sign_payload,
     mock_openwa_api,
+    sign_payload,
 )
 
 
@@ -488,6 +488,79 @@ class TestHandleGroupUpdate(IntegrationTestCase):
         mock_frappe.logger.return_value.info.assert_not_called()
 
 
+class TestHandleMessageReceipt(IntegrationTestCase):
+    """Test _handle_message_receipt handler."""
+
+    def setUp(self):
+        super().setUp()
+        from openwa_bridge.inbound import _handle_message_receipt
+        self.handler = _handle_message_receipt
+
+    @patch("openwa_bridge.inbound._log_event")
+    def test_logs_receipt_with_participant(self, mock_log_event):
+        """A full receipt payload should be persisted with the participant as contact."""
+        event_data = {
+            "id": "msg-001",
+            "messageId": "msg-001",
+            "chatId": "120363000000000000@g.us",
+            "participant": "1234567890@c.us",
+            "status": "read",
+            "timestamp": 1700000000,
+        }
+
+        self.handler(event_data, "session-001")
+
+        mock_log_event.assert_called_once()
+        args = mock_log_event.call_args.args
+        self.assertEqual(args[0], "message.receipt")
+        self.assertEqual(args[1], "session-001")
+        self.assertEqual(args[2], "message.receipt: 1234567890@c.us (read)")
+        self.assertEqual(args[3], event_data)
+        self.assertEqual(
+            mock_log_event.call_args.kwargs.get("contact"), "1234567890@c.us"
+        )
+
+    @patch("openwa_bridge.inbound._log_event")
+    def test_unknown_status_falls_back(self, mock_log_event):
+        """A receipt without a status should log '(unknown)' rather than crash."""
+        event_data = {"messageId": "msg-001", "participant": "1234567890@c.us"}
+
+        self.handler(event_data, "session-001")
+
+        mock_log_event.assert_called_once()
+        self.assertEqual(
+            mock_log_event.call_args.args[2],
+            "message.receipt: 1234567890@c.us (unknown)",
+        )
+
+    @patch("openwa_bridge.inbound._log_event")
+    def test_id_fallback_when_message_id_missing(self, mock_log_event):
+        """OpenWA may send only `id`; the receipt should still be logged."""
+        event_data = {"id": "msg-002", "participant": "1234567890@c.us", "status": "delivered"}
+
+        self.handler(event_data, "session-001")
+
+        mock_log_event.assert_called_once()
+        self.assertEqual(
+            mock_log_event.call_args.args[2],
+            "message.receipt: 1234567890@c.us (delivered)",
+        )
+
+    @patch("openwa_bridge.inbound._log_event")
+    def test_missing_message_id_noop(self, mock_log_event):
+        """Without messageId or id there is nothing to attach the receipt to."""
+        self.handler({"participant": "1234567890@c.us", "status": "read"}, "session-001")
+
+        mock_log_event.assert_not_called()
+
+    @patch("openwa_bridge.inbound._log_event")
+    def test_missing_participant_noop(self, mock_log_event):
+        """Receipts always carry a participant; drop the event when it is absent."""
+        self.handler({"messageId": "msg-001", "status": "read"}, "session-001")
+
+        mock_log_event.assert_not_called()
+
+
 class TestHandleCallReceived(IntegrationTestCase):
     """Test _handle_call_received handler."""
 
@@ -633,3 +706,107 @@ class TestCreateCommunication(IntegrationTestCase):
         lead_doc.insert.assert_called_once_with(ignore_permissions=True)
         contact_doc.insert.assert_called_once_with(ignore_permissions=True)
         comm_doc.insert.assert_called_once_with(ignore_permissions=True)
+
+
+class TestHandleInboundMessage(IntegrationTestCase):
+    """Test _handle_inbound_message handler."""
+
+    def setUp(self):
+        super().setUp()
+        from openwa_bridge.inbound import _handle_inbound_message
+        self.handler = _handle_inbound_message
+
+    def _mock_account(self):
+        return MagicMock(name="account-001")
+
+    @patch("openwa_bridge.inbound.frappe", autospec=True)
+    def test_button_tap_captures_button_text(self, mock_frappe):
+        """A text-typed prompt tap with empty body should store button.text."""
+        mock_frappe.get_doc.return_value = MagicMock()
+        mock_frappe.db.get_single_value.return_value = None
+        mock_frappe.cache.return_value.get_value.return_value = None
+
+        self.handler(
+            {
+                "from": "1234567890@c.us",
+                "type": "text",
+                "body": "",
+                "id": "msg-001",
+                "fromMe": False,
+                "button": {"id": "yes", "text": "Yes, send it"},
+            },
+            self._mock_account(),
+            "session-001",
+        )
+
+        doc_args = mock_frappe.get_doc.call_args[0][0]
+        self.assertEqual(doc_args["content_type"], "text")
+        self.assertEqual(doc_args["message"], "Yes, send it")
+
+    @patch("openwa_bridge.inbound.frappe", autospec=True)
+    def test_button_tap_falls_back_to_button_id(self, mock_frappe):
+        """A button tap without text should fall back to the button id."""
+        mock_frappe.get_doc.return_value = MagicMock()
+        mock_frappe.db.get_single_value.return_value = None
+        mock_frappe.cache.return_value.get_value.return_value = None
+
+        self.handler(
+            {
+                "from": "1234567890@c.us",
+                "type": "text",
+                "body": "",
+                "id": "msg-002",
+                "fromMe": False,
+                "button": {"id": "no", "text": ""},
+            },
+            self._mock_account(),
+            "session-001",
+        )
+
+        doc_args = mock_frappe.get_doc.call_args[0][0]
+        self.assertEqual(doc_args["message"], "no")
+
+    @patch("openwa_bridge.inbound.frappe", autospec=True)
+    def test_order_message_maps_to_order_content_type(self, mock_frappe):
+        """Inbound commerce messages (0.23.5+) should map to content_type 'order'."""
+        mock_frappe.get_doc.return_value = MagicMock()
+        mock_frappe.db.get_single_value.return_value = None
+        mock_frappe.cache.return_value.get_value.return_value = None
+
+        self.handler(
+            {
+                "from": "1234567890@c.us",
+                "type": "order",
+                "body": "",
+                "id": "msg-003",
+                "fromMe": False,
+            },
+            self._mock_account(),
+            "session-001",
+        )
+
+        doc_args = mock_frappe.get_doc.call_args[0][0]
+        self.assertEqual(doc_args["content_type"], "order")
+
+    @patch("openwa_bridge.inbound.frappe", autospec=True)
+    def test_body_not_overwritten_when_present(self, mock_frappe):
+        """A text message with its own body must keep it regardless of button field."""
+        mock_frappe.get_doc.return_value = MagicMock()
+        mock_frappe.db.get_single_value.return_value = None
+        mock_frappe.cache.return_value.get_value.return_value = None
+
+        self.handler(
+            {
+                "from": "1234567890@c.us",
+                "type": "text",
+                "body": "Typed message",
+                "id": "msg-004",
+                "fromMe": False,
+                "button": {"id": "yes", "text": "Yes"},
+            },
+            self._mock_account(),
+            "session-001",
+        )
+
+        doc_args = mock_frappe.get_doc.call_args[0][0]
+        self.assertEqual(doc_args["message"], "Typed message")

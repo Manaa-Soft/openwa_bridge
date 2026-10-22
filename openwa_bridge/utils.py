@@ -67,7 +67,8 @@ def openwa_type_to_frappe(openwa_type: str) -> str:
     Map OpenWA message type strings to frappe_whatsapp content_type values.
 
     OpenWA types: text, image, video, audio, voice, document, sticker,
-                  location, contact, poll, call, revoked, masked, unknown
+                  location, contact, poll, call, revoked, masked, unknown,
+                  order, product (commerce)
     frappe_whatsapp content_type: text, document, image, video, audio,
                   flow, reaction, location, contact, button, interactive, order
     """
@@ -84,6 +85,8 @@ def openwa_type_to_frappe(openwa_type: str) -> str:
         "poll": "text",
         "reaction": "reaction",
         "revoked": "text",
+        "order": "order",
+        "product": "order",
     }
     return type_map.get(openwa_type, "text")
 
@@ -207,7 +210,63 @@ def validate_openwa_url(url: str) -> str:
 # ------------------------------------------------------------------
 
 
-def openwa_api(account, method: str, path: str, json_data=None, timeout: int = 30) -> dict:
+def build_idempotency_key(seed: str) -> str:
+    """Build a stable, OpenWA-safe idempotency key from a message identifier.
+
+    OpenWA accepts 1-255 visible ASCII characters (no spaces). The key must be
+    stable per logical message so retries collapse onto the first send, and
+    distinct per route (e.g. dynamic-header image vs. the main text send), since
+    OpenWA keys idempotency on (sessionId, key) regardless of route.
+    """
+    key = f"frappe-{seed or 'unknown'}"
+    key = re.sub(r"[^\x21-\x7e]", "-", key)
+    return key[:255]
+
+
+def openwa_error_message(resp, context: str = "") -> str:
+    """Build an actionable error string from an OpenWA HTTP error response.
+
+    OpenWA returns JSON bodies such as ``{"message": ..., "code": ...}`` or
+    ``{"error": {"message": ..., "code": ...}}``. A bare ``raise_for_status()``
+    throws these away, leaving callers (e.g. vote-poll's 400
+    ``POLL_OPTION_NOT_FOUND``, Baileys' 400 unregistered-phone / 503 lookup
+    failure) with an opaque ``Client Error``. This surfaces the server's own
+    reason so the failure is diagnosable from the exception text.
+    """
+    body = ""
+    try:
+        data = resp.json()
+    except Exception:
+        data = None
+
+    if isinstance(data, dict):
+        err = data.get("error")
+        if isinstance(err, dict):
+            body = err.get("message") or err.get("code") or ""
+        if not body:
+            body = data.get("message") or data.get("error") or data.get("code") or ""
+    if not body:
+        try:
+            body = resp.text or ""
+        except Exception:
+            body = ""
+    if not isinstance(body, str):
+        body = json.dumps(body, ensure_ascii=False)
+    body = (body.strip() or "(no body)")[:1000]
+
+    status = getattr(resp, "status_code", "?")
+    prefix = f"{context}: " if context else ""
+    return f"{prefix}OpenWA HTTP {status} — {body}"
+
+
+def openwa_api(
+    account,
+    method: str,
+    path: str,
+    json_data=None,
+    timeout: int = 30,
+    idempotency_key: str | None = None,
+) -> dict:
     """Call the OpenWA REST API with proper auth headers.
 
     Parameters
@@ -217,6 +276,8 @@ def openwa_api(account, method: str, path: str, json_data=None, timeout: int = 3
     path    : Path after /api/sessions/:sessionId  (e.g. "/messages/send-text").
     json_data : Optional JSON body.
     timeout : Request timeout in seconds.
+    idempotency_key : Optional ``Idempotency-Key`` header. When set, OpenWA
+        replays the first response for a retried send instead of sending twice.
     """
     base_url = account.get("openwa_base_url").strip("/")
     session_id = account.get("openwa_session_id")
@@ -226,10 +287,16 @@ def openwa_api(account, method: str, path: str, json_data=None, timeout: int = 3
         "Content-Type": "application/json",
         "X-API-Key": api_key,
     }
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
 
     url = f"{base_url}/api/sessions/{session_id}{path}"
     resp = _http_session.request(method, url, json=json_data, headers=headers, timeout=timeout)
-    resp.raise_for_status()
+    if resp.status_code >= 400:
+        raise requests.HTTPError(
+            openwa_error_message(resp, context=f"{method} {path}"),
+            response=resp,
+        )
     return resp.json()
 
 
