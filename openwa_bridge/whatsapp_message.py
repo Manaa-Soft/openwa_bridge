@@ -568,8 +568,8 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
         }
         # Stable idempotency key derived from this message's doc name. OpenWA
         # replays the first response on a retried send rather than double-sending.
-        # Routes are keyed by (sessionId, key) only, so every send here shares
-        # this one key — safe because each logical message sends on one route.
+        # OpenWA keys by (sessionId, key) across routes; the media-reply
+        # follow-up below uses a separate key for its quoted-text send.
         headers["Idempotency-Key"] = build_idempotency_key(self.name)
 
         # Send typing indicator before non-bulk, non-template, non-reaction sends
@@ -746,7 +746,10 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                             "quotedMessageId": media_id,
                             "text": self.message,
                         },
-                        headers=headers,
+                        headers={
+                            **headers,
+                            "Idempotency-Key": build_idempotency_key(f"reply-{self.name}"),
+                        },
                         timeout=30,
                     )
                     if reply_resp.status_code >= 400:

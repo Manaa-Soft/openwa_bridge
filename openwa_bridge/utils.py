@@ -250,7 +250,9 @@ def openwa_error_message(resp, context: str = "") -> str:
             body = resp.text or ""
         except Exception:
             body = ""
-    body = (body or "(no body)").strip()[:1000]
+    if not isinstance(body, str):
+        body = json.dumps(body, ensure_ascii=False)
+    body = (body.strip() or "(no body)")[:1000]
 
     status = getattr(resp, "status_code", "?")
     prefix = f"{context}: " if context else ""

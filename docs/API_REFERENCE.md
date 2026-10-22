@@ -8,14 +8,14 @@ Authentication: `X-API-Key: <api_key>` header on all requests.
 > and Baileys engines return **501 Not Implemented**. The bridge handles this with a
 > fallback that sends richly formatted text+image messages instead.
 
-> **Note**: Send endpoints accept an optional `Idempotency-Key` header (OpenWA 0.24+).
+> **Note**: Send endpoints accept an optional `Idempotency-Key` header (OpenWA 0.25+).
 > The bridge sends it on every supported send — see [Outbound Idempotency](#outbound-idempotency).
 
 ---
 
 ## Outbound Idempotency
 
-OpenWA 0.24+ accepts an optional `Idempotency-Key` header on send endpoints. Within 24 hours, a
+OpenWA 0.25+ accepts an optional `Idempotency-Key` header on send endpoints. Within 24 hours, a
 retry with the same key **and body** replays the first response instead of sending again.
 
 **Header**: `Idempotency-Key: <key>`
@@ -660,7 +660,7 @@ OpenWA sends webhooks to Frappe for incoming messages and status changes.
 > **Note**: `message.receipt` is **opt-in** at the OpenWA subscription level and is **excluded from the
 > `*` wildcard subscription** — a session subscribed to `*` alone never receives it. It is also
 > **Baileys-only**; the whatsapp-web.js engine does not emit it. See
-> [message.receipt Payload](#message-receipt-payload).
+> [Message Receipt Payload](#message-receipt-payload).
 
 ### Webhook Payload Structure
 
@@ -693,7 +693,7 @@ OpenWA sends webhooks to Frappe for incoming messages and status changes.
 | `broadcast` | Broadcast list message |
 | `unknown` | Unrecognized origin |
 
-### message.receipt Payload
+### Message Receipt Payload
 
 Emitted by OpenWA (Baileys engine only) when a group or status-broadcast message reaches a given
 recipient. One event is delivered per recipient per status transition.
