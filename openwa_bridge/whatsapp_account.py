@@ -7,7 +7,7 @@ import time
 import frappe
 import requests
 
-from openwa_bridge.utils import openwa_api, get_api_key, validate_openwa_url, _http_session, get_account_setting
+from openwa_bridge.utils import openwa_api, get_api_key, validate_openwa_url, _http_session, get_account_setting, openwa_error_message
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +47,11 @@ def _raw_openwa_call(account: dict, method: str, url_path: str,
     url = f"{base_url}{url_path}"
     resp = _http_session.request(method, url, json=json_data, headers=headers,
                             timeout=timeout)
-    resp.raise_for_status()
+    if resp.status_code >= 400:
+        raise requests.HTTPError(
+            openwa_error_message(resp, context=f"{method} {url_path}"),
+            response=resp,
+        )
     if resp.status_code == 204:
         return {}
     return resp.json()

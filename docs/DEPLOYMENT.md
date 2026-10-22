@@ -260,7 +260,8 @@ Get the API key from the OpenWA dashboard (localhost:2886).
 
 Via dashboard or API:
 - URL: `https://your-site.local/api/method/openwa_bridge.inbound.receive_openwa_message`
-- Events: message.received, message.sent, message.ack, message.failed, message.revoked, message.reaction, message.edited, session.status, session.qr, session.authenticated, session.disconnected, session.reconnect_loop, group.join, group.leave, group.update, call.received, status.received
+- Events: message.received, message.sent, message.ack, message.failed, message.revoked, message.reaction, message.receipt, message.edited, session.status, session.qr, session.authenticated, session.disconnected, session.reconnect_loop, group.join, group.leave, group.update, call.received, status.received
+- Note: `message.receipt` is opt-in and **not** delivered to the `*` wildcard — it must be listed explicitly.
 
 ### 7. Configure Frappe
 
@@ -501,9 +502,9 @@ The bridge supports the OpenWA **0.18.0** API contract. Upgrade OpenWA to **0.18
 
 **0.17.x and earlier:** the pre-0.18 contracts (`chatIds`+`text` bulk, `DELETE /messages/:id`, `/chats/:chatId/read`, `/participants/add`) are no longer exercised by the bridge.
 
-### OpenWA 0.19.x-0.23.x Behaviour (bridge support)
+### OpenWA 0.19.x-0.25.x Behaviour (bridge support)
 
-The bridge tracks the OpenWA `main` branch (tested against **0.23.7**). The only hard-breaking change is the removal of catalog sends; everything else is additive and the bridge exposes it through new whitelisted methods.
+The bridge tracks the OpenWA `main` branch (tested against **0.25.0**). The only hard-breaking change is the removal of catalog sends; everything else is additive and the bridge exposes it through new whitelisted methods.
 
 | Feature | What changed | Bridge behaviour |
 |---|---|---|
@@ -524,6 +525,10 @@ The bridge tracks the OpenWA `main` branch (tested against **0.23.7**). The only
 | Group membership requests (0.21+) | `GET /groups/:groupId/membership-requests`, `POST .../membership-requests/approve`, `POST .../membership-requests/reject` | New whitelisted methods: `get_group_membership_requests`, `approve_group_membership_requests`, `reject_group_membership_requests` |
 | Status voice notes (0.21+) | `POST /status/send-voice` | New whitelisted method: `post_status_voice` |
 | Channel management (0.21+) | `POST /channels`, `POST /channels/:channelId/mute`, `POST /channels/:channelId/admins/demote`, `POST /channels/:channelId/owner/transfer` | New whitelisted methods: `create_channel`, `mute_channel`, `demote_channel_admin`, `transfer_channel_ownership` |
+| Outbound idempotency keys (0.25) | Optional `Idempotency-Key` header (1-255 visible ASCII, unique per session) on twelve single-recipient send routes; the stored response is replayed within 24 h (`Idempotent-Replayed: true`). In-flight retry answers `409 IDEMPOTENCY_KEY_IN_PROGRESS`, possible-send failure `409 IDEMPOTENCY_OUTCOME_UNKNOWN`, reused key `422 IDEMPOTENCY_KEY_REUSED` | `build_idempotency_key()` derives the key from the `WhatsApp Message` doc name and threads it through `openwa_api()` and both direct-HTTP send paths; header images use a distinct `-hdr`-suffixed key so image + caption dedupe independently |
+| `message.receipt` (0.25) | New **opt-in** per-recipient receipt event (`delivered`/`read`/`played`) for group + status-broadcast sends (Baileys). **Not** delivered to the `*` wildcard — it must be named explicitly | `_handle_message_receipt` persists it via `_log_event` with `contact = participant`; added to the Settings webhook event list and the `OpenWA Event Log` event-type Select |
+| `message.ack` / `message.failed` `chatId` (0.25) | Payloads now carry `chatId`, making the originating chat available even when the stored `to` is blank | `_handle_status_update` reads `chatId`; `_find_whatsapp_message()` uses it as a fallback when the stored `to` cannot resolve the message |
+| Baileys send errors (0.25) | Unregistered phone answers `400` (one LID lookup is attempted first); phone lookup failure answers `503`; `vote-poll` on whatsapp-web.js answers `400 POLL_OPTION_NOT_FOUND` | `openwa_error_message()` parses the JSON error body (`message`/`error`/`code`) into the raised `requests.HTTPError`, so the real reason surfaces instead of a bare status code |
 
 If you were on 0.18 and only use the previously documented endpoints, upgrading to any 0.19+ version is safe; catalog sends were already failing (501) on 0.19+, so switch to the fallback methods.
 

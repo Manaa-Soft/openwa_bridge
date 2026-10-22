@@ -24,10 +24,12 @@ OverrideWhatsAppMessage.notify(data)
        │
        ▼
   POST /api/sessions/:id/messages/send-text
+  Headers: Idempotency-Key: frappe-<WhatsApp Message name> (optional, v0.25)
   { chatId, text }
        │
        ▼
   resp.json() → messageId → update WhatsApp Message status to "Sent"
+  ── Non-2xx? → openwa_error_message() parses JSON body → raises requests.HTTPError ──
 ```
 
 ## Flow 2: Outbound Template (Desk → WhatsApp)
@@ -55,6 +57,7 @@ _send_via_openwa(account, data)
   │    │    │
   │    │    ▼
   │    │  POST /messages/send-template
+  │    │  Headers: Idempotency-Key: frappe-<WhatsApp Message name> (optional, v0.25)
   │    │  { chatId, templateId, vars: { param1: "val1", ... } }
   │    │    │
   │    │    ▼
@@ -65,6 +68,7 @@ _send_via_openwa(account, data)
   │         ▼
   │       Fallback: _translate_template_payload() → manual substitution
   │       POST /messages/send-text
+  │       Headers: Idempotency-Key: frappe-<WhatsApp Message name> (optional, v0.25)
   │       { chatId, text: "Dear Faissal, your invoice..." }
   │
   ├─ self.template set but self.use_template NOT set?
@@ -288,8 +292,11 @@ receive_openwa_message()
          ├─ "call.received" → _handle_call_received()
          │    └─ Log incoming voice/video call event
          │
-         └─ "status.received" → _handle_status_received()
+         ├─ "status.received" → _handle_status_received()
               └─ Log contact status/story event
+         │
+         └─ "message.receipt" → _handle_message_receipt()
+              └─ Opt-in per-recipient delivery/read/played receipt (group + status broadcasts)
   │
   ▼
   Return {"status": "ok"} (200)
@@ -807,7 +814,7 @@ User creates WhatsApp Catalog Product (linked to ERPNext Item)
 
 ---
 
-## Flow 15: OpenWA v0.19-v0.23 Whitelisted Methods
+## Flow 15: OpenWA v0.19-v0.25 Whitelisted Methods
 
 Whitelisted `openwa_bridge.whatsapp_account` methods for the newer OpenWA API surface. All follow the same pattern: permission check → `_get_account` → `openwa_api(account, METHOD, <relative path>, json_data)`. Relative paths are joined onto `/api/sessions/{session_id}` by `openwa_api()` (handles the uniform `{sessionId}` routing in v0.19+).
 

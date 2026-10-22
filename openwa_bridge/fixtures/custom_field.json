@@ -77,7 +77,7 @@
         "insert_after":  "openwa_webhook_secret",
         "label":  "Webhook Events",
         "depends_on":  "eval:doc.openwa_enabled",
-        "default":  "[\"message.received\",\"message.sent\",\"message.ack\",\"message.failed\",\"message.revoked\",\"message.reaction\",\"session.status\",\"session.qr\",\"session.authenticated\",\"session.disconnected\"]",
+        "default":  "[\"message.received\",\"message.sent\",\"message.ack\",\"message.failed\",\"message.revoked\",\"message.reaction\",\"message.receipt\",\"session.status\",\"session.qr\",\"session.authenticated\",\"session.disconnected\"]",
         "description":  "JSON array of events to subscribe to. Click 'Manage Events' button below to select events visually."
     },
     {

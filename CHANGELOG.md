@@ -48,6 +48,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **Outbox dashboard API** — system health, success rates, queue depth, circuit breaker status
 - **Architecture Decision Records** — 5 ADRs documenting key design decisions
 - **Uninstall cleanup** — `before_uninstall()` deletes OpenWA sessions and webhooks
+- **Outbound send idempotency** — single-recipient sends now carry an `Idempotency-Key` header (derived from the WhatsApp Message doc name by `build_idempotency_key()`); header images use a distinct `-hdr`-suffixed key so the image and its caption are deduplicated independently. Key threaded through `openwa_api()` and both direct-HTTP send paths (`whatsapp_message._send_via_openwa`, `tasks._send_dynamic_header_for_outbox`).
+- **`message.receipt` webhook event** — opt-in per-recipient delivery/read/played receipts for group and status-broadcast sends (`_handle_message_receipt`, persisted via `_log_event` with `contact=participant`); subscribed explicitly in OpenWA (not delivered to the `*` wildcard). Added to the webhook event list in Settings and the `OpenWA Event Log` event-type Select.
+- **Actionable OpenWA HTTP errors** — `openwa_error_message()` parses the JSON error body (`message`/`error`/`code`) instead of a bare `raise_for_status()`, so engine 400/503 and `vote-poll` 400 `POLL_OPTION_NOT_FOUND` surface the real reason; still raises `requests.HTTPError` so existing `except` blocks keep working.
 
 ### Fixed
 - **PDF messages invisible in CRM thread** — a PDF sent from a Sales Invoice (or any non-CRM doctype) was linked only to that document, so it never appeared in the CRM Deal/Lead/Contact thread. `send_document_pdf` now links the message to the CRM record matching the recipient number (via `crm.integrations.api.get_contact_lead_or_deal_from_number`) while keeping the rendered document in new `openwa_render_doctype`/`openwa_render_name` fields; `_send_via_openwa()` renders the PDF from those (falling back to the reference for existing messages).
@@ -129,7 +132,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **WhatsApp Account custom fields** — reduced from 16 to 9 fields (7 moved to global settings)
 - **WhatsApp Templates custom fields** — expanded from 6 to 8 fields
 - **Global settings** — HMAC strict, API timeout, session start timeout, rate limit, CB threshold, CB cooldown, max outbox attempts moved to OpenWA Bridge Settings
-- **OpenWA v0.19-v0.23 API contract support** — bridge follows the current OpenWA `main` (v0.23.7):
+- **OpenWA v0.19-v0.23 API contract support** — bridge follows the OpenWA `v0.23.7` API surface:
   - `send_catalog_message` deprecated — `POST /messages/send-catalog` was **removed in v0.19** and answers 501 on every engine; the method now returns a clear error pointing to `send_product_message` (product card, Baileys) / `send_product_to_chat` / `send_catalog_to_chat` (text+image / text-summary fallbacks) instead of calling the dead endpoint.
   - `mark_chat_read` accepts an optional `message_ids` argument — comma-separated list forwarded as the v0.23 `messageIds` array (max 100, Baileys) for per-message read receipts; omitted → the whole chat is marked read as before.
   - New message endpoints: `vote_poll` (`POST /messages/vote-poll`), `pin_message` (`POST /messages/pin`, validated `durationSeconds` 86400/604800/2592000), `unpin_message` (`POST /messages/unpin`), `star_message` (`POST /messages/star`), `get_chat_media` (`GET /messages/:chatId/:messageId/media`).
@@ -144,6 +147,11 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   - New `click_button` method (0.23.6) — `POST /messages/click-button` sends a structured reply against a stored prompt (Baileys; whatsapp-web.js answers 501).
   - `catalog.py` docstring corrected — OpenWA implements read-only catalog endpoints + `send-product`, not a full CRUD; the module's fallback role now stated accurately.
   - Docs updated — DEPLOYMENT/IMPROVEMENTS/CHANGELOG now claim verification against v0.23.7 with the 0.23.5-0.23.7 behaviour table.
+- **OpenWA v0.24-v0.25 API contract support** — bridge tracks the current OpenWA `main` (v0.25.0):
+  - Outbound single-recipient sends carry an `Idempotency-Key` header (v0.25) — see Added. OpenWA replays the stored response within 24 h instead of sending twice and returns `Idempotent-Replayed: true` on replay.
+  - `message.ack` / `message.failed` payloads carry `chatId` (v0.25) — `_handle_status_update` reads it and `_find_whatsapp_message()` uses it as a fallback for messages whose stored `to` is blank.
+  - New opt-in `message.receipt` webhook event (v0.25) — see Added.
+  - Webhook receivers must deduplicate on `X-OpenWA-Idempotency-Key` (v0.25 upgrade note) — the inbound endpoint already reads it.
 
 ### Fixed
 - **Unit test file did not compile** — every `MagicMock(get_password.return_value=...)` used Python 3.8-removed dotted-name keyword args (SyntaxError), so `test_account.py` never parsed and no `pytest` run could include it. Replaced with `mock.get_password.return_value = "..."` assignments across all 55 test mocks; the suite now compiles and lint/typecheck can analyze it.

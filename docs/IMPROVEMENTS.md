@@ -540,12 +540,12 @@ All bridge endpoints updated to the OpenWA 0.18.0 API contract:
 
 ---
 
-## OpenWA v0.19-v0.23 Compatibility
+## OpenWA v0.19-v0.25 Compatibility
 
 **Status**: Complete
 **Scope**: `whatsapp_account.py`, `tests/test_account.py`
 
-Bridge follows the OpenWA `main` branch (verified against **0.23.7**). Only one hard break, otherwise additive:
+Bridge follows the OpenWA `main` branch (verified against **0.25.0**). Only one hard break, otherwise additive:
 
 - **`send_catalog_message` deprecated** — `POST /messages/send-catalog` removed in v0.19 (501 on every engine). The method now returns a clear error instead of calling OpenWA; `send_product_message` (product card, Baileys) and the catalog fallbacks `send_product_to_chat` / `send_catalog_to_chat` (text+image / text-summary) remain the supported paths.
 - **`mark_chat_read` v0.23 `messageIds`** — optional `message_ids` argument (comma-separated, ≤100) forwarded as `messageIds` for per-message read receipts; omitted → whole chat marked read.

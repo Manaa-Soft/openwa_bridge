@@ -4,6 +4,7 @@ from __future__ import annotations
 import frappe
 import json
 import re
+import requests
 import time
 from datetime import datetime
 
@@ -12,7 +13,15 @@ from frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message i
 )
 from frappe_whatsapp.utils import format_number
 from frappe.exceptions import ValidationError
-from openwa_bridge.utils import openwa_api, frappe_to_openwa_vars, get_api_key, _http_session, render_doc_as_pdf
+from openwa_bridge.utils import (
+    openwa_api,
+    frappe_to_openwa_vars,
+    get_api_key,
+    _http_session,
+    render_doc_as_pdf,
+    build_idempotency_key,
+    openwa_error_message,
+)
 
 _PLACEHOLDER_RE = re.compile(r"\{\{\s*\d+\s*\}\}")
 _JINJA_MARKER_RE = re.compile(
@@ -536,9 +545,9 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
         # Idempotency guard: if the message already has a message_id, it was
         # already sent (possibly by a previous attempt or webhook reconciliation).
         # Do NOT send again — just return.
-        if self.message_id:
+        if getattr(self, "message_id", None):
             frappe.logger().info(
-                f"OpenWA: skipping send for {self.name} — "
+                f"OpenWA: skipping send for {getattr(self, 'name', '?')} — "
                 f"message_id '{self.message_id}' already set"
             )
             return
@@ -557,6 +566,11 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
             "Content-Type": "application/json",
             "X-API-Key": api_key,
         }
+        # Stable idempotency key derived from this message's doc name. OpenWA
+        # replays the first response on a retried send rather than double-sending.
+        # Routes are keyed by (sessionId, key) only, so every send here shares
+        # this one key — safe because each logical message sends on one route.
+        headers["Idempotency-Key"] = build_idempotency_key(self.name)
 
         # Send typing indicator before non-bulk, non-template, non-reaction sends
         if self.content_type in ("text", "image", "video", "audio", "document", "location", "contact", "sticker"):
@@ -886,7 +900,10 @@ class OverrideWhatsAppMessage(WhatsAppMessage):
                     f"Response: {err_body}"
                 ),
             )
-            resp.raise_for_status()
+            raise requests.HTTPError(
+                openwa_error_message(resp, context="POST _send_via_openwa"),
+                response=resp,
+            )
 
         res_data = resp.json()
 

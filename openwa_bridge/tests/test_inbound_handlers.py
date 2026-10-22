@@ -2,18 +2,18 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import frappe
 from frappe.tests import IntegrationTestCase
 
 from openwa_bridge.tests.conftest import (
     make_message_data,
-    make_status_data,
     make_session_status_data,
+    make_status_data,
     make_webhook_payload,
-    sign_payload,
     mock_openwa_api,
+    sign_payload,
 )
 
 
@@ -486,6 +486,79 @@ class TestHandleGroupUpdate(IntegrationTestCase):
         """Missing groupId should not crash."""
         self.handler({"changes": {"subject": "New Name"}}, "session-001")
         mock_frappe.logger.return_value.info.assert_not_called()
+
+
+class TestHandleMessageReceipt(IntegrationTestCase):
+    """Test _handle_message_receipt handler."""
+
+    def setUp(self):
+        super().setUp()
+        from openwa_bridge.inbound import _handle_message_receipt
+        self.handler = _handle_message_receipt
+
+    @patch("openwa_bridge.inbound._log_event")
+    def test_logs_receipt_with_participant(self, mock_log_event):
+        """A full receipt payload should be persisted with the participant as contact."""
+        event_data = {
+            "id": "msg-001",
+            "messageId": "msg-001",
+            "chatId": "120363000000000000@g.us",
+            "participant": "1234567890@c.us",
+            "status": "read",
+            "timestamp": 1700000000,
+        }
+
+        self.handler(event_data, "session-001")
+
+        mock_log_event.assert_called_once()
+        args = mock_log_event.call_args.args
+        self.assertEqual(args[0], "message.receipt")
+        self.assertEqual(args[1], "session-001")
+        self.assertEqual(args[2], "message.receipt: 1234567890@c.us (read)")
+        self.assertEqual(args[3], event_data)
+        self.assertEqual(
+            mock_log_event.call_args.kwargs.get("contact"), "1234567890@c.us"
+        )
+
+    @patch("openwa_bridge.inbound._log_event")
+    def test_unknown_status_falls_back(self, mock_log_event):
+        """A receipt without a status should log '(unknown)' rather than crash."""
+        event_data = {"messageId": "msg-001", "participant": "1234567890@c.us"}
+
+        self.handler(event_data, "session-001")
+
+        mock_log_event.assert_called_once()
+        self.assertEqual(
+            mock_log_event.call_args.args[2],
+            "message.receipt: 1234567890@c.us (unknown)",
+        )
+
+    @patch("openwa_bridge.inbound._log_event")
+    def test_id_fallback_when_message_id_missing(self, mock_log_event):
+        """OpenWA may send only `id`; the receipt should still be logged."""
+        event_data = {"id": "msg-002", "participant": "1234567890@c.us", "status": "delivered"}
+
+        self.handler(event_data, "session-001")
+
+        mock_log_event.assert_called_once()
+        self.assertEqual(
+            mock_log_event.call_args.args[2],
+            "message.receipt: 1234567890@c.us (delivered)",
+        )
+
+    @patch("openwa_bridge.inbound._log_event")
+    def test_missing_message_id_noop(self, mock_log_event):
+        """Without messageId or id there is nothing to attach the receipt to."""
+        self.handler({"participant": "1234567890@c.us", "status": "read"}, "session-001")
+
+        mock_log_event.assert_not_called()
+
+    @patch("openwa_bridge.inbound._log_event")
+    def test_missing_participant_noop(self, mock_log_event):
+        """Receipts always carry a participant; drop the event when it is absent."""
+        self.handler({"messageId": "msg-001", "status": "read"}, "session-001")
+
+        mock_log_event.assert_not_called()
 
 
 class TestHandleCallReceived(IntegrationTestCase):

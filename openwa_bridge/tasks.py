@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import frappe
 import requests
 
-from openwa_bridge.utils import get_cached_account, get_account_setting, get_api_key, _http_session
+from openwa_bridge.utils import get_cached_account, get_account_setting, get_api_key, _http_session, openwa_error_message
 
 
 def _get_openwa_accounts() -> list[dict]:
@@ -644,7 +644,12 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
     if getattr(tmpl, "openwa_include_letterhead", False):
         letterhead = getattr(tmpl, "openwa_letterhead", None) or None
 
-    from openwa_bridge.utils import render_doc_as_image, get_api_key, _http_session
+    from openwa_bridge.utils import (
+        render_doc_as_image,
+        get_api_key,
+        _http_session,
+        build_idempotency_key,
+    )
     from frappe_whatsapp.utils import format_number
 
     image_bytes = render_doc_as_image(ref_doctype, ref_name, print_format, letterhead=letterhead)
@@ -671,11 +676,18 @@ def _send_dynamic_header_for_outbox(msg, account, caption=None) -> bool:
         payload["caption"] = caption
 
     img_timeout = get_account_setting(account, "openwa_image_timeout", 90)
+    # Distinct key from the subsequent text send so OpenWA's per-session
+    # idempotency store (UNIQUE(sessionId, idempotencyKey), route-agnostic)
+    # does not replay the header image when the caption/text is sent.
+    headers = {
+        "X-API-Key": api_key,
+        "Idempotency-Key": build_idempotency_key(f"{msg.name}-hdr"),
+    }
     try:
         img_resp = _http_session.post(
             url,
             json=payload,
-            headers={"X-API-Key": api_key},
+            headers=headers,
             timeout=img_timeout,
         )
     except Exception as e:
@@ -1274,7 +1286,11 @@ def replay_webhooks(account_name: str, since: str | None = None, chat_id: str | 
             headers={"X-API-Key": api_key},
             timeout=30,
         )
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            raise requests.HTTPError(
+                openwa_error_message(resp, context="GET /api/sessions/:id/messages"),
+                response=resp,
+            )
         messages = resp.json()
     except Exception as exc:
         frappe.throw(f"Failed to fetch messages from OpenWA: {exc}")

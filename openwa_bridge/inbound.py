@@ -144,6 +144,8 @@ def receive_openwa_message() -> dict[str, str]:
             _handle_call_received(event_data, session_id)
         elif event_type == "status.received":
             _handle_status_received(event_data, session_id)
+        elif event_type == "message.receipt":
+            _handle_message_receipt(event_data, session_id)
     except Exception as e:
         frappe.log_error(
             title="OpenWA Inbound Handler Error",
@@ -449,11 +451,14 @@ def _handle_status_update(event_data: dict) -> None:
     """
     message_id: str = event_data.get("messageId") or event_data.get("id", "")
     status: str = event_data.get("status", "")
+    # OpenWA >= 0.25.0 includes `chatId` on ack/failed events; used as a
+    # last-resort fallback when the message id cannot be resolved directly.
+    chat_id: str = event_data.get("chatId", "")
 
     if not message_id or not status:
         return
 
-    name = _find_whatsapp_message(message_id)
+    name = _find_whatsapp_message(message_id, chat_id=chat_id)
 
     if not name:
         return
@@ -498,12 +503,15 @@ def _handle_status_update(event_data: dict) -> None:
         _reconcile_outbox_on_ack(name, message_id)
 
 
-def _find_whatsapp_message(wa_msg_id: str) -> str | None:
+def _find_whatsapp_message(wa_msg_id: str, chat_id: str = "") -> str | None:
     """
     Finds the Frappe document name associated with an OpenWA message ID.
     
     Parameters:
         wa_msg_id (str): The OpenWA message identifier.
+        chat_id (str): Optional OpenWA chat JID (e.g. ``1234@c.us``) used as
+            a fallback source for the phone number when the message id itself
+            does not encode one.
     
     Returns:
         str | None: The matching WhatsApp Message document name, or None when no
@@ -520,6 +528,9 @@ def _find_whatsapp_message(wa_msg_id: str) -> str | None:
 
     # Fallback: extract phone from JID-style message ID
     phone = strip_jid_suffix(wa_msg_id.split("_")[1]) if "_" in wa_msg_id else ""
+    # Fallback: OpenWA >= 0.25.0 ack/failed events carry `chatId`
+    if not phone and chat_id:
+        phone = strip_jid_suffix(chat_id)
     if not phone or not phone.isdigit():
         return None
 
@@ -852,6 +863,32 @@ def _handle_status_received(event_data: dict, session_id: str) -> None:
         f"status.received: {contact} ({status_type or 'unknown'})",
         event_data,
         contact=contact,
+    )
+
+
+def _handle_message_receipt(event_data: dict, session_id: str) -> None:
+    """
+    Persist a per-recipient message receipt (Baileys only) to the OpenWA Event Log.
+
+    Reported for group and status-broadcast sends, one event per recipient per
+    status transition (`delivered`, `read`, `played`). Receipts from the
+    account's own linked devices are dropped upstream, so `participant` is
+    always another user. The event is opt-in at the OpenWA subscription level
+    and is not delivered to wildcard (`*`) subscriptions.
+    """
+    message_id: str = event_data.get("messageId", "") or event_data.get("id", "")
+    participant: str = event_data.get("participant", "")
+    status: str = event_data.get("status", "")
+
+    if not message_id or not participant:
+        return
+
+    _log_event(
+        "message.receipt",
+        session_id,
+        f"message.receipt: {participant} ({status or 'unknown'})",
+        event_data,
+        contact=participant,
     )
 
 
